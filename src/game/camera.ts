@@ -19,6 +19,7 @@ export class ChaseCamera {
   private pos = new THREE.Vector3()
   private look = new THREE.Vector3()
   private yaw = 0
+  private aspect: number = C.refAspect
   private fov: number = C.fovRest
   private roll = 0
   private driftYaw = 0
@@ -92,6 +93,9 @@ export class ChaseCamera {
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(C.fovRest, aspect, 0.35, 4000)
+    this.aspect = aspect
+    this.camera.fov = this.framedFov(C.fovRest)
+    this.camera.updateProjectionMatrix()
   }
 
   /** Snap directly behind the racer with no easing. Used on race start. */
@@ -612,8 +616,12 @@ export class ChaseCamera {
     // frame over frame, and so the ratio returns to exactly 1 as the impulse
     // decays.
     if (this.dolly > 0) {
+      // Against the FRAMED fields, not the authored ones: on-screen size is a
+      // function of what is actually rendered, so off refAspect the authored
+      // pair would compensate for a widening that never happened.
       const half = (a: number): number => Math.tan(a * 0.5 * Math.PI / 180)
-      const keepSize = half(this.fovBase) / Math.max(1e-4, half(this.fov))
+      const keepSize = half(this.framedFov(this.fovBase))
+        / Math.max(1e-4, half(this.framedFov(this.fov)))
       cam.position.sub(this._anchor)
         .multiplyScalar(1 + (keepSize - 1) * C.dollyPull)
         .add(this._anchor)
@@ -641,14 +649,42 @@ export class ChaseCamera {
     cam.up.copy(this._up)
     cam.lookAt(this.look)
     if (!reduceMotion) cam.rotateZ(this.roll)
-    if (Math.abs(cam.fov - this.fov) > 0.01) {
-      cam.fov = this.fov
+    const wantFov = this.framedFov(this.fov)
+    if (Math.abs(cam.fov - wantFov) > 0.01) {
+      cam.fov = wantFov
       cam.updateProjectionMatrix()
     }
   }
 
   resize(aspect: number): void {
     this.camera.aspect = aspect
+    this.aspect = aspect
+    // The framed vertical FOV depends on the aspect, so a resize has to
+    // re-derive it rather than wait for the next frame that happens to move
+    // the FOV past the 0.01-degree threshold in apply().
+    this.camera.fov = this.framedFov(this.fov)
     this.camera.updateProjectionMatrix()
+  }
+
+  /**
+   * Convert an AUTHORED vertical FOV into the one to actually render with at
+   * this aspect. See TUNING.camera.refAspect for why.
+   *
+   * Holds the horizontal field at its value on a `refAspect` screen:
+   *   hRef = 2 atan(tan(v/2) * refAspect)
+   *   v'   = 2 atan(tan(hRef/2) / aspect)
+   * which is the identity when aspect === refAspect, so the signed-off desktop
+   * frame is untouched. Clamped so a very wide screen cannot squeeze the
+   * vertical away entirely, and never widened past the authored value -- a
+   * narrow or portrait screen keeps the authored vertical and simply sees less
+   * to the sides, which is the ordinary and correct behaviour there.
+   */
+  private framedFov(authored: number): number {
+    const a = this.aspect
+    if (!(a > 0) || Math.abs(a - C.refAspect) < 1e-6) return authored
+    const halfV = authored * 0.5 * Math.PI / 180
+    const halfH = Math.atan(Math.tan(halfV) * C.refAspect)
+    const framed = 2 * Math.atan(Math.tan(halfH) / a) * 180 / Math.PI
+    return clamp(framed, authored * C.minVerticalScale, authored)
   }
 }

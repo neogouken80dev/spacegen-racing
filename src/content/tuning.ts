@@ -819,6 +819,32 @@ export const TUNING = {
     // Tuned against a 4.7m-long chassis. At 5.2m the camera sat inside the
     // rear bumper and the car filled the lower third of the frame.
     distance: 9.0, height: 3.6, lookAhead: 13.0,
+    /**
+     * FRAMING ON A SCREEN THAT IS NOT 16:9.
+     *
+     * fovRest/fovBoost are VERTICAL fields of view, and a PerspectiveCamera
+     * holds the vertical fixed and widens horizontally as the aspect grows. On
+     * a desktop 16:9 that means a 94-degree horizontal at rest. On a phone held
+     * in landscape -- 2.25:1 on the designer's handset -- the same 62 degrees
+     * vertical opens to 107 horizontal, and mid-boost (86 + a 30-degree dolly)
+     * it reaches 129. That is geometrically correct and visually a fisheye:
+     * everything toward the edges stretches, and the picture reads as skewed.
+     *
+     * So the horizontal field is anchored to the aspect the game was authored
+     * and signed off at, and the vertical is derived from it. At exactly
+     * `refAspect` nothing changes -- desktop renders the identical frame it
+     * always did -- and on anything wider the extra width is spent on seeing
+     * more road rather than on distorting the road you can already see.
+     */
+    refAspect: 16 / 9,
+    /**
+     * How far the vertical field may be squeezed to hold the horizontal, as a
+     * fraction of the authored value. Real phone landscape (2.16-2.25:1) lands
+     * around 0.82, so this floor only bites on genuinely extreme aspects, where
+     * the alternative -- losing most of the road ahead -- is worse than a
+     * little extra width.
+     */
+    minVerticalScale: 0.75,
     fovRest: 62, fovBoost: 86,
     posHalfLife: 0.12, yawHalfLife: 0.20, fovHalfLife: 0.18,
     /**

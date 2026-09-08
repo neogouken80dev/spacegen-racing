@@ -255,14 +255,68 @@ const CSS = `
   box-shadow:0 0 26px rgb(var(--cy) / .5)}
 .sgtc-zone.live .sgtc-base,.sgtc-zone.live .sgtc-knob{opacity:1}
 
-.sgtc-hint{position:absolute;left:var(--pl);bottom:calc(var(--pb) + 92px);
-  display:none;align-items:center;max-width:46vw;min-height:52px;
-  padding:12px 18px;border-radius:16px;pointer-events:auto;touch-action:none;
+/* --- bottom-left teaching stack ---------------------------------------------
+   The steering zone is the lower LEFT of the screen, so the thing that explains
+   it belongs in that corner rather than floating over the racing line. Two
+   pieces, stacked, bottom-aligned:
+
+     .sgtc-pad   a watermark of the thumb zone. It is deliberately drawn as an
+                 unfilled outline at low opacity and is pointer-events:none, so
+                 it reads as a diagram of where the thumb goes rather than as a
+                 button to press -- and, more importantly, so a thumb landing on
+                 it goes straight through to the live steering zone underneath.
+
+     .sgtc-hint  the tilt notice, which IS a button (it is the user gesture iOS
+                 needs before it will hand over the orientation sensor).
+
+   WHAT THE WATERMARK SAYS. The left zone is a floating stick that reads its
+   HORIZONTAL travel only (see bindStick: dx steers, dy moves the knob and
+   nothing else). There is no throttle or brake on this axis in any of the three
+   schemes. So the graphic is a left/right axis and nothing else, and the
+   sub-label names where forward actually comes from: automatic throttle, or the
+   GAS / BRAKE pads on the opposite edge when the player has turned auto off. */
+.sgtc-lh{position:absolute;left:var(--pl);bottom:var(--pb);display:none;
+  flex-direction:column;align-items:flex-start;gap:8px;pointer-events:none;
+  max-width:min(52vw,300px)}
+.sgtc[data-scheme="stick"] .sgtc-lh,
+.sgtc[data-scheme="tilt"][data-tilt="off"] .sgtc-lh{display:flex}
+
+/* CONTRAST WITHOUT A PANEL. A flat opacity on the whole block reads beautifully
+   on Rustfall's night road and disappears completely on Cryostatic's lit snow
+   or a blown-out white frame -- and a CSS drop-shadow filter cannot save it,
+   because the shadow is derived from the source alpha and fades with it. So the
+   dimming is per-stroke, at full alpha, over a soft radial scrim that has no
+   edge and no border: on a dark surface it is invisible, on a bright one it is
+   the only reason the diagram survives. It stays a watermark either way. */
+.sgtc-pad{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  color:rgb(var(--cy))}
+.sgtc-pad__svg{display:block;width:var(--padsz,86px);height:var(--padsz,86px);
+  background:radial-gradient(closest-side,rgba(4,9,18,.46),rgba(4,9,18,0) 84%)}
+.sgtc-pad__ring{fill:none;stroke:currentColor;stroke-width:2.5;opacity:.36;
+  stroke-dasharray:7 9;stroke-linecap:round}
+.sgtc-pad__axis{fill:none;stroke:currentColor;stroke-width:2.5;opacity:.32;
+  stroke-linecap:round}
+.sgtc-pad__arrow{fill:none;stroke:currentColor;stroke-width:5;opacity:.62;
+  stroke-linecap:round;stroke-linejoin:round}
+.sgtc-pad__knob{fill:rgba(6,14,28,.5);stroke:currentColor;stroke-width:2.5;
+  opacity:.55}
+.sgtc-pad__lbl{font-size:9px;font-weight:800;letter-spacing:.20em;
+  color:rgb(var(--cy) / .72);
+  text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 9px rgba(0,0,0,.9)}
+.sgtc-pad__sub{font-size:8px;font-weight:700;letter-spacing:.14em;
+  color:rgb(var(--cy) / .56);display:none;white-space:nowrap;
+  text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 9px rgba(0,0,0,.9)}
+.sgtc[data-accel="auto"] .sgtc-pad__auto{display:block}
+.sgtc[data-accel="manual"] .sgtc-pad__man{display:block}
+
+.sgtc-hint{display:flex;align-items:center;min-height:44px;
+  padding:9px 14px;border-radius:14px;pointer-events:auto;touch-action:none;
   border:2px solid rgb(var(--am) / .5);background:rgba(8,16,32,.5);
-  color:rgb(var(--am));font-size:12px;font-weight:800;letter-spacing:.08em;
+  color:rgb(var(--am));font-size:11px;font-weight:800;letter-spacing:.08em;
+  line-height:1.25;
   text-shadow:0 0 10px rgb(var(--am) / .7);box-shadow:0 0 22px rgb(var(--am) / .22);
   -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
-.sgtc[data-scheme="tilt"][data-tilt="off"] .sgtc-hint{display:flex}
+.sgtc[data-scheme="stick"] .sgtc-hint{display:none}
 
 .sgtc-tiltbar{position:absolute;left:50%;bottom:calc(var(--pb) + 4px);
   transform:translateX(-50%);width:184px;height:6px;border-radius:3px;display:none;
@@ -279,7 +333,10 @@ const CSS = `
 .sgtc.oh.ohl .sgtc-right{right:auto;left:var(--pl);align-items:flex-start}
 .sgtc.oh.ohl .sgtc-row{flex-direction:row}
 .sgtc.oh.ohl .sgtc-cal{left:auto;right:var(--pr)}
-.sgtc.oh.ohl .sgtc-hint{left:auto;right:var(--pl)}
+/* One-handed LEFT puts the action cluster in this corner, so the whole
+   teaching stack moves out of its way -- same swap the notice alone used to
+   make, now applied to the block that contains it. */
+.sgtc.oh.ohl .sgtc-lh{left:auto;right:var(--pl);align-items:flex-end}
 
 @media (max-height:430px){
   .sgtc-drift{width:74px;height:74px}
@@ -291,7 +348,25 @@ const CSS = `
   .sgtc-right{gap:10px}
   .sgtc-row{gap:10px}
   .sgtc.oh .sgtc-left{bottom:calc(var(--pb) + 232px)}
+  /* A landscape phone is ~390-430px tall and the teaching stack is the tallest
+     thing in the corner. Shrink the diagram, not the notice. */
+  .sgtc-lh{gap:5px;max-width:min(40vw,244px)}
+  .sgtc-pad{--padsz:62px;gap:0}
+  .sgtc-pad__lbl{font-size:8px;letter-spacing:.16em}
+  .sgtc-hint{min-height:0;padding:7px 12px;font-size:10px}
 }
+/* Portrait: the action cluster is a tall stack up the right edge and the HUD's
+   instrument strip has to lift clear of it, so the teaching block cannot also
+   be a tall column in the opposite corner. Lay it out as a row instead -- same
+   two pieces, half the height. */
+@media (orientation:portrait){
+  .sgtc-lh{flex-direction:row;align-items:flex-end;gap:10px;
+    max-width:min(64vw,320px)}
+  .sgtc-pad{--padsz:62px}
+  .sgtc-pad__lbl{font-size:8px;letter-spacing:.14em}
+  .sgtc-hint{min-height:0;padding:8px 12px;font-size:10px}
+}
+
 @media (prefers-reduced-motion:reduce){
   .sgtc-btn{transition:none}
   .sgtc-base,.sgtc-knob{transition:none}
@@ -410,7 +485,18 @@ class TouchControlsImpl implements TouchControls {
 
     // Tilt affordances.
     this.mkBtn(doc, 'sgtc-cal', 'RE-CENTRE', root, K_CAL)
-    const hint = mk(doc, 'div', 'sgtc-hint', root)
+
+    // Bottom-left teaching stack: thumb-zone watermark over the tilt notice.
+    // Built once, never touched again -- everything that varies (which scheme,
+    // auto or manual throttle) is already a data-attribute on the root, so CSS
+    // does the switching and no code runs per frame.
+    const lh = mk(doc, 'div', 'sgtc-lh', root)
+    const pad = mk(doc, 'div', 'sgtc-pad', lh)
+    mkSvg(doc, PAD_SVG, pad)
+    mk(doc, 'div', 'sgtc-pad__lbl', pad).textContent = 'SLIDE TO STEER'
+    mk(doc, 'div', 'sgtc-pad__sub sgtc-pad__auto', pad).textContent = 'THROTTLE: AUTO'
+    mk(doc, 'div', 'sgtc-pad__sub sgtc-pad__man', pad).textContent = 'GAS / BRAKE ▶'
+    const hint = mk(doc, 'div', 'sgtc-hint', lh)
     hint.textContent = 'TAP TO ENABLE TILT STEERING'
     hint.setAttribute('role', 'button')
     this.bindMomentary(hint, K_HINT)
@@ -882,6 +968,31 @@ class TouchControlsImpl implements TouchControls {
     this.onTouchActivity = null
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root)
   }
+}
+
+/**
+ * The thumb-zone watermark.
+ *
+ * A dashed stick base, a knob, and ONE axis: left/right. That is the whole of
+ * what the left zone does -- `bindStick` steers on `dx` and throws `dy` away --
+ * so the diagram has no vertical arm to imply otherwise.
+ */
+const PAD_SVG =
+  '<svg class="sgtc-pad__svg" viewBox="0 0 120 120" aria-hidden="true" focusable="false">' +
+  '<circle class="sgtc-pad__ring" cx="60" cy="60" r="46"/>' +
+  '<line class="sgtc-pad__axis" x1="30" y1="60" x2="90" y2="60"/>' +
+  '<path class="sgtc-pad__arrow" d="M33 47 L21 60 L33 73"/>' +
+  '<path class="sgtc-pad__arrow" d="M87 47 L99 60 L87 73"/>' +
+  '<circle class="sgtc-pad__knob" cx="60" cy="60" r="14"/>' +
+  '</svg>'
+
+/** Construction-time only: parse authored markup into a live SVG element. */
+function mkSvg(doc: Document, markup: string, parent: HTMLElement): SVGSVGElement {
+  const host = doc.createElement('div')
+  host.innerHTML = markup
+  const el = host.firstElementChild as SVGSVGElement
+  parent.appendChild(el)
+  return el
 }
 
 function mk(doc: Document, tag: string, cls: string, parent: HTMLElement | null): HTMLElement {

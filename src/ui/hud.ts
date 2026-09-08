@@ -10,6 +10,13 @@
  * problem: position top-left, minimap top-right, item bottom-left, drift ring
  * bottom-right, charge bottom-centre, threats on the screen rim, transient
  * messages dead centre.
+ *
+ * On a compact / touch layout the two bottom instruments become one thing. A
+ * landscape phone is 390-430 CSS px tall and the ring alone is a quarter of
+ * that, so the ring flattens into a bar and joins the charge pill in a single
+ * horizontal strip at bottom centre, between the two reserved thumb zones. Both
+ * presentations are built here and CSS picks one; see .sg-hud__band in
+ * styles.css. update() feeds both and never asks which is on screen.
  */
 import './styles.css'
 import type { ItemId, RaceState, RacerState } from '../sim/types'
@@ -348,6 +355,9 @@ class HudImpl implements Hud {
   private readonly spdFill: SVGCircleElement
   private readonly spdText: HTMLElement
   private readonly tierText: HTMLElement
+  /** Compact-layout restatement of the drift ring. Same numbers, flat. */
+  private readonly barFill: HTMLElement
+  private readonly barTier: HTMLElement
 
   // charge
   private readonly chargeWrap: HTMLElement
@@ -499,8 +509,16 @@ class HudImpl implements Hud {
     this.slots.push(this.buildSlot(items, true))
     this.slots[1].root.hidden = true
 
+    // --- BOTTOM INSTRUMENTS ------------------------------------------------
+    // The gauge and the charge pill share one wrapper so the compact layout can
+    // lay them out as a single horizontal strip. On desktop the wrapper is
+    // `display: contents`, which means it contributes no box at all and both
+    // children stay exactly what they were: direct grid items of the HUD, in
+    // areas br and bc. Nothing about the desktop layout moves.
+    const band = div('sg-hud__band', root)
+
     // --- BOTTOM RIGHT: speed arc + drift ring -----------------------------
-    this.gauge = div('sg-hud__gauge', root)
+    this.gauge = div('sg-hud__gauge', band)
     const gsvg = svgNode('svg', 'sg-gauge__svg', this.gauge)
     attr(gsvg, { viewBox: '0 0 120 120', 'aria-hidden': 'true' })
     this.ring(gsvg, 'sg-gauge__ringTrack', RING_R, -90, 0)
@@ -526,8 +544,24 @@ class HudImpl implements Hud {
     div('sg-gauge__unit', readout).textContent = 'KM/H'
     this.tierText = div('sg-gauge__tier', readout)
 
+    // The drift ladder, said again horizontally, for compact / touch layouts.
+    // A 214px ring is a quarter of a landscape phone's height; this is the same
+    // fraction, the same tier boundaries and the same tier colour in about 20px
+    // of it. Built here, displayed by CSS: exactly one of the two is ever on
+    // screen, and update() feeds both without knowing which.
+    const bar = div('sg-gauge__bar', this.gauge)
+    this.barTier = div('sg-gauge__barTier', bar)
+    const barTrack = div('sg-gauge__barTrack', bar)
+    this.barFill = div('sg-gauge__barFill', barTrack)
+    // Same table the ring's ticks come from. The last entry IS the end of the
+    // bar, so it needs no mark of its own.
+    for (let i = 0; i < times.length - 1; i++) {
+      div('sg-gauge__barTick', barTrack).style.left =
+        ((times[i] / DRIFT_MAX) * 100).toFixed(2) + '%'
+    }
+
     // --- BOTTOM CENTRE: charge pickups ------------------------------------
-    this.chargeWrap = div('sg-hud__charge', root)
+    this.chargeWrap = div('sg-hud__charge', band)
     const bolt = svgFrom(
       '<svg class="sg-charge__icon" viewBox="0 0 48 48" aria-hidden="true">' + BOLT_BODY + '</svg>',
     )
@@ -1072,6 +1106,10 @@ class HudImpl implements Hud {
       this.lastRingOff = off
       this.ringFill.style.strokeDashoffset = String(off)
       this.ringSnap.style.strokeDashoffset = String(off)
+      // Same change detector, so the flat bar costs one extra style write on
+      // the frames the ring was already being written to and nothing on the
+      // frames it was not. scaleX rather than width: no layout, no reflow.
+      this.barFill.style.transform = 'scaleX(' + f.toFixed(4) + ')'
     }
 
     const tier = r.driftTier
@@ -1083,7 +1121,9 @@ class HudImpl implements Hud {
         this.lastRingColor = color
         this.gauge.style.setProperty('--ring', color)
       }
-      setText(this.tierText, tier >= 0 ? TIER_NAME[tier > 3 ? 3 : tier] : '')
+      const name = tier >= 0 ? TIER_NAME[tier > 3 ? 3 : tier] : ''
+      setText(this.tierText, name)
+      setText(this.barTier, name)
     }
 
     if (this.snapT > 0) {

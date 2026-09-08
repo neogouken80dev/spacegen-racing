@@ -13,6 +13,14 @@
  *
  *   node tools/probe-shots.mjs --track=cryostatic --at=1550,1600,1650 [--mobile]
  *
+ * PHONES ARE TWO DIFFERENT LAYOUT PROBLEMS. `--mobile` is a 412x915 PORTRAIT
+ * frame; `--landscape` is the same phone turned over, 915x412, which is how the
+ * game is actually played and where the vertical budget for the bottom HUD band
+ * collapses to almost nothing. `--landscape` implies `--mobile`. Both emulate a
+ * real coarse pointer (hasTouch/isMobile), so the on-screen touch controls and
+ * the compact HUD are in the photograph rather than the desktop layout wearing
+ * a phone-sized window.
+ *
  * TIMED HAZARDS NEED A THIRD AXIS. Aetherion's causeway looks completely
  * different at four points of one 3.2 s beat -- both halves solid, one half
  * flashing, one half gone, back to solid -- and "teleport there and wait 1.2 s"
@@ -41,7 +49,12 @@ const cycles = process.argv.some((a) => a.startsWith('--u='))
   ? arg('u', '0').split(',').map(Number)
   : [null]
 const LAT = Number(arg('lat', '0'))
-const MOBILE = process.argv.includes('--mobile')
+const LANDSCAPE = process.argv.includes('--landscape')
+const MOBILE = LANDSCAPE || process.argv.includes('--mobile')
+const VIEWPORT = LANDSCAPE
+  ? { width: 915, height: 412 }
+  : MOBILE ? { width: 412, height: 915 } : { width: 1440, height: 810 }
+const KIND = LANDSCAPE ? 'mobilels' : MOBILE ? 'mobile' : 'desktop'
 const OUT = join('shots', 'sections')
 if (!existsSync(OUT)) mkdirSync(OUT, { recursive: true })
 
@@ -60,7 +73,36 @@ const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 })
-const page = await browser.newPage({ viewport: MOBILE ? { width: 412, height: 915 } : { width: 1440, height: 810 } })
+// A context rather than a bare page: `hasTouch` is what makes the game's own
+// coarse-pointer detection fire, and without it a phone-sized window still gets
+// the keyboard layout with no touch controls in the shot.
+const ctx = await browser.newContext({
+  viewport: VIEWPORT,
+  hasTouch: MOBILE,
+  isMobile: MOBILE,
+  deviceScaleFactor: 1,
+})
+const page = await ctx.newPage()
+
+/**
+ * `--tiltprompt` reproduces the iOS pre-permission state.
+ *
+ * Headless Chromium exposes DeviceOrientationEvent but never fires one, so the
+ * real code path here is: arm the sensor -> nothing arrives in 1.5 s -> fall
+ * back to the floating stick. That is a legitimate state, but it is NOT the one
+ * the tilt hint lives in. On iOS the sensor is behind
+ * DeviceOrientationEvent.requestPermission(), which must be called from inside a
+ * user gesture, so the game stays on the tilt scheme with tilt inactive and the
+ * hint up until the player taps it. Stubbing requestPermission to reject the way
+ * Safari does outside a gesture puts the build in exactly that state, through
+ * the shipping code path, rather than by poking dataset attributes.
+ */
+if (process.argv.includes('--tiltprompt')) {
+  await page.addInitScript(() => {
+    const D = window.DeviceOrientationEvent
+    if (D) D.requestPermission = () => Promise.reject(new Error('requires a user gesture'))
+  })
+}
 const errors = []
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
 page.on('pageerror', (e) => errors.push(String(e)))
@@ -213,7 +255,7 @@ for (const s of positions) {
   })
   const tag = (u === null ? '' : `-u${String(Math.round(u * 100)).padStart(2, '0')}`)
     + (LAT === 0 ? '' : `-lat${LAT > 0 ? 'p' : 'm'}${String(Math.abs(Math.round(LAT))).padStart(2, '0')}`)
-  const name = `${MOBILE ? 'mobile' : 'desktop'}-${trackId}-s${String(Math.round(s)).padStart(4, '0')}${tag}.png`
+  const name = `${KIND}-${trackId}-s${String(Math.round(s)).padStart(4, '0')}${tag}.png`
   await page.screenshot({ path: join(OUT, name) })
   report.push({ s, u, ...info, ...after, shot: name })
   await page.evaluate(() => { window.__GAME__.maxSubSteps = 400 })

@@ -626,6 +626,27 @@
   min-height: 1em;
 }
 
+/* --------------------------------------------------------------------------
+   The bottom instrument band.
+
+   `display: contents` means this wrapper produces no box: the gauge and the
+   charge pill remain direct grid items of .sg-hud, in areas br and bc, and the
+   desktop layout is byte-for-byte what it was before the wrapper existed. It
+   only becomes a real element in the compact block far below, where the two
+   instruments have to be one horizontal strip.
+   -------------------------------------------------------------------------- */
+
+.sg-hud__band {
+  display: contents;
+}
+
+/* The flat drift meter. Desktop reads the ring; this is the same fraction and
+   the same tier boundaries laid out along a line, and it is off until the
+   compact layout asks for it. */
+.sg-gauge__bar {
+  display: none;
+}
+
 /* ==========================================================================
    BOTTOM CENTRE — charge pickups
    ========================================================================== */
@@ -911,15 +932,70 @@
     gap: 6px;
   }
 
-  /* charge moves up out of the thumb band */
+  /* --- ONE HORIZONTAL INSTRUMENT STRIP, BOTTOM CENTRE -------------------
+     A landscape phone is 390-430 CSS px tall. The desktop ring is a 214px
+     circle whose useful content is three digits in the middle of it, and the
+     charge pill used to be exiled to the top centre where the glare and pause
+     buttons sit directly on top of it -- so the boost count was, in practice,
+     invisible on a phone. Both problems have the same answer: flatten the ring
+     into a line, and put speed, drift ladder and charges in one band about
+     40px tall in the gap between the two thumb clusters.
+
+     Reading order is the priority order. The speed number is what a driver
+     reads at a glance, so it is first and it is the only large type here. The
+     drift ladder is next, because when to release is a timing decision and the
+     ticks say how close the next rung is. The boost count is last: it is a
+     number you check between corners, not during one. */
+  .sg-hud__band {
+    display: flex;
+    grid-area: bc;
+    justify-self: center;
+    align-self: end;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 5px 12px 6px;
+    border-radius: 999px;
+    background: var(--sg-panel);
+    border: 2px solid var(--sg-line);
+    box-shadow: var(--sg-shadow-sm);
+  }
+
+  /* Inside the strip the charge pill loses its own shell -- one border around
+     the band, not three. The segment bar comes BACK: it is the boost meter and
+     the whole reason the widget exists, and it costs 40px of the width the
+     circle used to spend on empty middle. */
   .sg-hud__charge {
-    grid-area: tc;
-    align-self: start;
-    padding: 4px 10px;
-    gap: 7px;
+    grid-area: auto;
+    align-self: center;
+    justify-self: auto;
+    padding: 0;
+    gap: 5px;
+    border: 0;
+    background: none;
+    box-shadow: none;
   }
   .sg-charge__bar {
-    display: none;
+    display: flex;
+    gap: 2px;
+  }
+  .sg-charge__seg {
+    width: 3px;
+    height: clamp(10px, 2.6vmin, 14px);
+    border-radius: 1px;
+  }
+  .sg-charge__icon {
+    width: clamp(13px, 3.4vmin, 17px);
+    height: clamp(13px, 3.4vmin, 17px);
+  }
+  .sg-charge__num {
+    font-size: clamp(15px, 4vmin, 20px);
+  }
+  .sg-hud__charge.is-drop {
+    border: 0;
+  }
+  .sg-hud__charge.is-drop .sg-charge__num {
+    color: var(--sg-red);
   }
 
   /* items tuck under the position block, still top-left */
@@ -942,14 +1018,95 @@
     display: none;
   }
 
-  /* the drift ring is the one widget that must stay large: bottom CENTRE,
-     between the two reserved thumb zones */
+  /* The gauge stops being a circle and becomes the left half of the strip:
+     the number, then the flat drift ladder. */
   .sg-hud__gauge {
-    grid-area: bc;
-    justify-self: center;
-    align-self: end;
-    width: clamp(104px, 26vmin, 150px);
-    height: clamp(104px, 26vmin, 150px);
+    grid-area: auto;
+    justify-self: auto;
+    align-self: center;
+    width: auto;
+    height: auto;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .sg-gauge__svg {
+    display: none;
+  }
+  .sg-gauge__readout {
+    position: static;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 3px;
+  }
+  /* Fixed width on the number so a 99 -> 100 does not shove the drift bar and
+     the charges sideways at 300 km/h. Tabular figures are already on. */
+  .sg-gauge__spd {
+    font-size: clamp(21px, 5.4vmin, 30px);
+    min-width: 2.9ch;
+    text-align: right;
+  }
+  .sg-gauge__unit {
+    margin-top: 0;
+    font-size: 8px;
+    letter-spacing: 0.16em;
+  }
+  /* The bar carries its own tier label; the ring's one would be a second copy
+     in the same 40px of screen. */
+  .sg-gauge__tier {
+    display: none;
+  }
+  /* Boost is a colour on the number here, the way it is a colour on the arc
+     on desktop. */
+  .sg-hud__gauge.is-boost .sg-gauge__spd {
+    color: var(--sg-gold);
+    text-shadow: 0 0 16px rgba(255, 210, 63, 0.7);
+  }
+
+  .sg-gauge__bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    width: clamp(74px, 19vw, 128px);
+  }
+  /* Empty most of the lap, so it holds its line box open rather than letting
+     the strip grow a row the first time a drift charges. */
+  .sg-gauge__barTier {
+    font-family: var(--sg-display);
+    font-size: 8px;
+    line-height: 1;
+    letter-spacing: 0.16em;
+    text-align: center;
+    color: var(--ring);
+    text-shadow: 0 0 10px var(--ring);
+    min-height: 8px;
+  }
+  .sg-gauge__barTrack {
+    position: relative;
+    height: clamp(8px, 2.2vmin, 11px);
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(12, 22, 42, 0.85);
+    box-shadow: inset 0 0 0 1px rgba(122, 190, 255, 0.18);
+  }
+  .sg-gauge__barFill {
+    position: absolute;
+    inset: 0;
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    background: var(--ring);
+    box-shadow: 0 0 8px var(--ring);
+    transition: background-color 90ms linear;
+  }
+  /* Tier boundaries, from the same tuning table the ring's ticks come from. */
+  .sg-gauge__barTick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: rgba(5, 9, 18, 0.85);
   }
 
   .sg-map__canvas {
@@ -986,9 +1143,14 @@
 
 /* Very short landscape phones: keep the bottom row shallow. */
 @media (max-height: 420px) {
-  .sg-hud__gauge {
-    width: clamp(88px, 24vmin, 118px);
-    height: clamp(88px, 24vmin, 118px);
+  /* The instrument strip is already flat; on a 390px frame it just gets a
+     little tighter so it never reaches the thumb clusters either side. */
+  .sg-hud__band {
+    gap: 8px;
+    padding: 4px 10px 5px;
+  }
+  .sg-gauge__bar {
+    width: clamp(66px, 15vw, 104px);
   }
   .sg-pos__num {
     font-size: clamp(40px, 13vmin, 64px);
@@ -1006,6 +1168,56 @@
     padding: 1px 7px 2px 6px;
     column-gap: 0.5em;
     line-height: 1.25;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   PORTRAIT PHONES.
+
+   The game is written to be held in landscape -- all three touch schemes say
+   so -- but portrait has to be usable rather than broken. It is a different
+   layout problem, not a narrower one: the action cluster is a TALL stack up the
+   right edge instead of a short row, so it eats the bottom-right corner all the
+   way up to roughly a third of the frame, and the very bottom centre (where the
+   strip would like to sit) is inside the Drift pad.
+
+   So in portrait the strip lifts clear of the bottom row of pads and narrows.
+   The lift is one pad plus the touch layer's own bottom inset, which is the
+   only part of that cluster's height that does not depend on which options the
+   player has on.
+   -------------------------------------------------------------------------- */
+@media (max-width: 860px) and (orientation: portrait) {
+  .sg-hud__band {
+    margin-bottom: 116px;
+    gap: 7px;
+    padding: 4px 9px 5px;
+  }
+  .sg-hud__gauge {
+    gap: 7px;
+  }
+  .sg-gauge__bar {
+    width: clamp(46px, 13vw, 58px);
+  }
+  /* SINGULARITY is eleven characters over a 54px bar. Tighten it here rather
+     than let the longest tier name push into the charge icon. */
+  .sg-gauge__barTier {
+    font-size: 7px;
+    letter-spacing: 0.05em;
+  }
+  .sg-gauge__spd {
+    font-size: clamp(19px, 5.4vw, 24px);
+  }
+  /* Two characters of unit for 30px of a 412px-wide frame, next to a number
+     that is already the only large thing on the strip. */
+  .sg-gauge__unit {
+    display: none;
+  }
+  .sg-charge__seg {
+    width: 2px;
+    height: 10px;
+  }
+  .sg-charge__bar {
+    gap: 1px;
   }
 }
 
@@ -2463,7 +2675,10 @@
    counter and the skip control go low.
    ========================================================================== */
 
-/* Everything that describes a car the player is no longer driving. */
+/* Everything that describes a car the player is no longer driving. The band
+   goes too: on a compact layout it is a real element with a border, and hiding
+   only its contents would leave an empty pill on the finish shot. */
+.sg-hud.is-ceremony .sg-hud__band,
 .sg-hud.is-ceremony .sg-hud__gauge,
 .sg-hud.is-ceremony .sg-hud__items,
 .sg-hud.is-ceremony .sg-hud__charge,
@@ -2644,7 +2859,8 @@
   .sg-btn,
   .sg-card,
   .sg-stat__fill,
-  .sg-gauge__ringFill {
+  .sg-gauge__ringFill,
+  .sg-gauge__barFill {
     transition: none !important;
   }
   .sg-hud__charge {
