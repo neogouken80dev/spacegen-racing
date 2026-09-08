@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#0a0d14" />
+<meta name="description" content="SpaceGen Racing — an 8-player arcade combat racer in your browser." />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="icon" href="./favicon.png" sizes="64x64" type="image/png" />
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<title>SpaceGen Racing</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #05070c; overflow: hidden;
+    overscroll-behavior: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  #app { position: fixed; inset: 0; overflow: hidden; }
+  #sg-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #sg-boot { position: fixed; inset: 0; display: grid; place-items: center; z-index: 999;
+    background: #05070c; color: #cfe6ff; font: 600 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .18em; text-transform: uppercase; transition: opacity .4s ease; }
+  #sg-boot.gone { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="sg-boot">Loading SpaceGen&nbsp;Racing</div>
+  <script type="module">
+    window.addEventListener('error', (e) => {
+      const b = document.getElementById('sg-boot')
+      if (b) { b.classList.remove('gone'); b.textContent = 'Error: ' + (e.message || 'failed to start') }
+    })
+  </script>
+  <script type="module" src="/src/main.ts"></script>
+  <script type="module">
+    const hide = () => { const b = document.getElementById('sg-boot'); if (b) b.classList.add('gone') }
+    setTimeout(hide, 1200)
+  </script>
+</body>
+</html>

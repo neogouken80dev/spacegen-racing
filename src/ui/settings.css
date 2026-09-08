@@ -1,0 +1,1162 @@
+/* ==========================================================================
+   SpaceGen Racing — Settings + Controls overlay
+   Companion sheet to styles.css. Every colour, radius, shadow and font here
+   comes from the --sg- tokens defined there; this file introduces no new
+   palette, no @import, no external asset.
+
+   Prefix: .sgset- so it cannot collide with .sg-hud / .sg-fe / .sgtc.
+   ========================================================================== */
+
+.sgset,
+.sgset *,
+.sgset *::before,
+.sgset *::after {
+  box-sizing: border-box;
+}
+
+/* Must beat any display we set on the element's own class. */
+.sgset [hidden] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Shell
+   -------------------------------------------------------------------------- */
+
+.sgset {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  font-family: var(--sg-ui);
+  font-size: clamp(12px, 1.05vw, 15px);
+  line-height: 1.35;
+  color: var(--sg-ink);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.sgset.is-open {
+  display: grid;
+  place-items: center;
+  padding: calc(clamp(8px, 1.6vmin, 26px) + var(--sg-sat))
+    calc(clamp(8px, 1.6vmin, 26px) + var(--sg-sar))
+    calc(clamp(8px, 1.6vmin, 26px) + var(--sg-sab))
+    calc(clamp(8px, 1.6vmin, 26px) + var(--sg-sal));
+}
+
+.sgset__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 6, 14, 0.74);
+  backdrop-filter: blur(9px);
+  -webkit-backdrop-filter: blur(9px);
+}
+
+.sgset__dialog {
+  position: relative;
+  width: min(1160px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--sg-r-lg);
+  border: 2px solid var(--sg-line);
+  background:
+    radial-gradient(
+      120% 90% at 50% -20%,
+      rgba(34, 211, 255, 0.14) 0%,
+      rgba(0, 0, 0, 0) 58%
+    ),
+    linear-gradient(180deg, #0b1224 0%, var(--sg-void) 100%);
+  box-shadow: var(--sg-shadow), inset 0 1px 0 rgba(180, 225, 255, 0.14);
+  overflow: hidden;
+  /* Resting state is VISIBLE. The entry animation is an enhancement layered on
+     top, never the thing that makes the panel appear: with `both` fill-mode the
+     dialog sat at opacity 0 whenever the animation did not run, which left the
+     scrim up and the panel invisible. */
+  opacity: 1;
+  transform: none;
+}
+
+.sgset.is-open .sgset__dialog {
+  animation: sgsetIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes sgsetIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Header + tabs
+   -------------------------------------------------------------------------- */
+
+.sgset__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.4vmin, 18px);
+  flex-wrap: wrap;
+  padding: clamp(8px, 1.4vmin, 16px) clamp(10px, 1.8vmin, 22px);
+  border-bottom: 2px solid var(--sg-line);
+  background: rgba(9, 15, 30, 0.72);
+}
+
+.sgset__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(15px, 2.3vmin, 28px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.sgset__title span {
+  color: var(--sg-cyan);
+}
+
+.sgset__tabs {
+  display: flex;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 2px solid var(--sg-line);
+  background: rgba(10, 17, 32, 0.8);
+  flex: none;
+}
+
+.sgset__tab {
+  font-family: var(--sg-display);
+  font-size: clamp(10px, 1.4vmin, 14px);
+  letter-spacing: 0.12em;
+  padding: 0.45em 1.15em;
+  border: 0;
+  background: transparent;
+  color: var(--sg-dim);
+  cursor: pointer;
+  text-transform: uppercase;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.sgset__tab[aria-selected='true'] {
+  background: var(--sg-cyan);
+  color: #06101c;
+}
+
+.sgset__close {
+  flex: none;
+  width: clamp(30px, 4.4vmin, 40px);
+  height: clamp(30px, 4.4vmin, 40px);
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--sg-line);
+  background: rgba(16, 26, 46, 0.85);
+  color: var(--sg-dim);
+  font-size: clamp(14px, 2vmin, 20px);
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 110ms ease, border-color 110ms ease, background 110ms ease;
+}
+
+.sgset__close:hover {
+  color: var(--sg-ink);
+  border-color: var(--sg-line-hot);
+  background: rgba(28, 44, 76, 0.9);
+}
+
+/* --------------------------------------------------------------------------
+   Body — the ONLY thing that scrolls
+   -------------------------------------------------------------------------- */
+
+.sgset__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: clamp(10px, 1.8vmin, 22px);
+  scrollbar-width: thin;
+}
+
+.sgset__panel {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.6vmin, 18px);
+}
+
+/* --------------------------------------------------------------------------
+   Focus rings — one rule, everything interactive
+   -------------------------------------------------------------------------- */
+
+.sgset__dialog:focus,
+.sgset__dialog:focus-visible {
+  outline: none;
+}
+
+.sgset button:focus-visible,
+.sgset [tabindex]:not(.sgset__dialog):focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+  border-radius: var(--sg-r-sm);
+}
+
+.sgset__tab:focus-visible,
+.sgset-seg__btn:focus-visible {
+  outline-offset: -3px;
+  border-radius: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Sections + rows
+   -------------------------------------------------------------------------- */
+
+.sgset__grid {
+  column-width: 300px;
+  column-gap: clamp(10px, 1.6vmin, 18px);
+}
+
+.sgset__grid > .sgset-sec {
+  break-inside: avoid;
+  margin-bottom: clamp(10px, 1.6vmin, 18px);
+}
+
+.sgset-sec {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--sg-r-md);
+  background: rgba(10, 17, 32, 0.78);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.1);
+  padding: clamp(8px, 1.4vmin, 15px) clamp(10px, 1.6vmin, 18px)
+    clamp(9px, 1.5vmin, 16px);
+}
+
+.sgset-sec__title {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.3vmin, 12px);
+  letter-spacing: 0.28em;
+  color: var(--sg-mute);
+  text-transform: uppercase;
+  padding-bottom: 6px;
+}
+
+.sgset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: clamp(6px, 1vmin, 10px) 0;
+  border-top: 1px solid rgba(122, 190, 255, 0.14);
+  min-height: 34px;
+}
+
+.sgset-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.sgset-row__txt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sgset-row__k {
+  font-size: clamp(11px, 1.05vw, 14px);
+  color: var(--sg-ink);
+  letter-spacing: 0.01em;
+}
+
+.sgset-row__sub {
+  font-size: clamp(10px, 0.85vw, 12px);
+  color: var(--sg-dim);
+  line-height: 1.3;
+}
+
+.sgset-row__sub--pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sgset-row.is-off .sgset-row__k,
+.sgset-row.is-off .sgset-row__sub {
+  color: var(--sg-mute);
+}
+
+.sgset-note {
+  font-size: clamp(10px, 0.85vw, 12px);
+  color: var(--sg-dim);
+  line-height: 1.4;
+  border-left: 3px solid var(--sg-line);
+  padding: 2px 0 2px 9px;
+  margin-top: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Segmented control — matches .sg-seg in styles.css
+   -------------------------------------------------------------------------- */
+
+.sgset-seg {
+  display: flex;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 2px solid var(--sg-line);
+  background: rgba(10, 17, 32, 0.8);
+  flex: none;
+  max-width: 100%;
+}
+
+.sgset-seg__btn {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.25vmin, 13px);
+  letter-spacing: 0.12em;
+  padding: 0.42em 0.95em;
+  border: 0;
+  background: transparent;
+  color: var(--sg-dim);
+  cursor: pointer;
+  text-transform: uppercase;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: background 110ms ease, color 110ms ease;
+}
+
+/* A stacked row gives its segment the full width of the card: four named
+   steps plus a label do not fit on one line in a 300px column, and a
+   full-width strip turns four cramped targets into four fat ones on a phone.
+   min-height, not more padding, so the strip does not grow with the font. */
+.sgset-row--stack .sgset-seg {
+  width: 100%;
+}
+
+.sgset-row--stack .sgset-seg__btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0.42em 0.35em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sgset-seg__btn:hover {
+  color: var(--sg-ink);
+}
+
+.sgset-seg__btn[aria-checked='true'] {
+  background: var(--sg-cyan);
+  color: #06101c;
+}
+
+.sgset-seg__btn[aria-disabled='true'] {
+  color: var(--sg-mute);
+  cursor: default;
+}
+
+.sgset-row.is-off .sgset-seg {
+  border-color: rgba(122, 190, 255, 0.16);
+}
+
+.sgset-row.is-off .sgset-seg__btn[aria-checked='true'] {
+  background: rgba(34, 211, 255, 0.16);
+  color: var(--sg-dim);
+}
+
+/* Status pill — gamepad connected / not */
+.sgset-pill {
+  flex: none;
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.1vmin, 10px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--sg-line);
+  color: var(--sg-mute);
+  white-space: nowrap;
+}
+
+.sgset-pill.is-on {
+  color: var(--sg-green);
+  border-color: rgba(47, 227, 107, 0.55);
+}
+
+/* --------------------------------------------------------------------------
+   Switch
+   -------------------------------------------------------------------------- */
+
+.sgset-sw {
+  flex: none;
+  position: relative;
+  width: 50px;
+  height: 27px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid var(--sg-line);
+  background: rgba(8, 14, 28, 0.9);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.sgset-sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--sg-mute);
+  transition: transform 130ms cubic-bezier(0.2, 0.9, 0.25, 1),
+    background 130ms ease, box-shadow 130ms ease;
+}
+
+.sgset-sw[aria-checked='true'] {
+  background: rgba(34, 211, 255, 0.2);
+  border-color: var(--sg-cyan);
+}
+
+.sgset-sw[aria-checked='true']::after {
+  transform: translateX(23px);
+  background: var(--sg-cyan);
+  box-shadow: 0 0 12px rgba(34, 211, 255, 0.85);
+}
+
+/* --------------------------------------------------------------------------
+   Small ghost button (Calibrate / Reset)
+   -------------------------------------------------------------------------- */
+
+.sgset-mini {
+  flex: none;
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.25vmin, 12px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.5em 1.1em;
+  border-radius: 999px;
+  border: 2px solid var(--sg-line);
+  background: rgba(16, 26, 46, 0.85);
+  color: var(--sg-ink);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 90ms ease, box-shadow 90ms ease, border-color 110ms ease;
+}
+
+.sgset-mini:hover {
+  border-color: var(--sg-line-hot);
+}
+
+.sgset-mini:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* --------------------------------------------------------------------------
+   Key bindings
+   -------------------------------------------------------------------------- */
+
+.sgset-binds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 0 clamp(10px, 2vmin, 26px);
+}
+
+.sgset-bind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(122, 190, 255, 0.14);
+  min-height: 32px;
+}
+
+.sgset-bind__k {
+  font-size: clamp(10px, 0.92vw, 13px);
+  color: var(--sg-dim);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sgset-bind__slots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.sgset-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4em;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(24, 38, 66, 0.9);
+  border: 1px solid var(--sg-line);
+  border-bottom-width: 3px;
+  font-family: var(--sg-num);
+  font-size: clamp(9px, 0.8vw, 12px);
+  line-height: 1.15;
+  color: var(--sg-ink);
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: border-color 110ms ease, background 110ms ease, color 110ms ease;
+}
+
+.sgset-cap:hover {
+  border-color: var(--sg-line-hot);
+  background: rgba(34, 52, 88, 0.95);
+}
+
+.sgset-cap.is-empty {
+  color: var(--sg-mute);
+}
+
+.sgset-cap.is-capturing {
+  border-color: var(--sg-gold);
+  background: rgba(255, 210, 63, 0.16);
+  color: var(--sg-gold);
+  min-width: 7.4em;
+}
+
+.sgset-cap--static {
+  cursor: default;
+  color: var(--sg-mute);
+  border-bottom-width: 1px;
+}
+
+/* --------------------------------------------------------------------------
+   Controls tab — toolbar
+   -------------------------------------------------------------------------- */
+
+.sgset-bar {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.4vmin, 14px);
+  flex-wrap: wrap;
+}
+
+.sgset-bar__k {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.3vmin, 12px);
+  letter-spacing: 0.24em;
+  color: var(--sg-mute);
+  text-transform: uppercase;
+}
+
+.sgset-bar__auto {
+  font-size: clamp(10px, 0.85vw, 12px);
+  color: var(--sg-dim);
+}
+
+.sgset-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(10px, 1.6vmin, 18px);
+  align-items: start;
+}
+
+@media (min-width: 1000px) {
+  .sgset-split--kb {
+    grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 820px) {
+  .sgset-split--touch {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Keyboard diagram
+   -------------------------------------------------------------------------- */
+
+.sgset-kb {
+  --kg: clamp(3px, 0.35vw, 6px);
+  --kh: clamp(21px, 2.5vw, 38px);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--kg);
+  padding: clamp(8px, 1.2vmin, 14px);
+  border-radius: var(--sg-r-md);
+  background: rgba(6, 11, 22, 0.75);
+  border: 2px solid var(--sg-line);
+  box-shadow: inset 0 1px 0 rgba(180, 225, 255, 0.1);
+}
+
+.sgset-kb__main {
+  flex: 15 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kg);
+}
+
+.sgset-kb__arrows {
+  flex: 3 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--kg);
+}
+
+/* Rows carry no gap: every slot pads itself by half a gap, so a row is
+   exactly 15 units wide however many keys it holds — which is what makes the
+   Esc row, the number row and the arrow cluster line up. */
+.sgset-kb__row {
+  display: flex;
+  margin: 0 calc(var(--kg) / -2);
+}
+
+.sgset-key {
+  flex: var(--u, 1) 1 0;
+  min-width: 0;
+  display: flex;
+  padding: 0 calc(var(--kg) / 2);
+}
+
+.sgset-key--void {
+  visibility: hidden;
+}
+
+.sgset-key__c {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--kh);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: rgba(20, 32, 56, 0.85);
+  border: 1px solid rgba(122, 190, 255, 0.2);
+  border-bottom: 3px solid rgba(122, 190, 255, 0.14);
+  color: var(--sg-mute);
+  font-family: var(--sg-num);
+  font-size: clamp(7px, 0.7vw, 11px);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sgset-key__c.is-hot {
+  background: var(--hot, var(--sg-cyan));
+  border-color: var(--hot, var(--sg-cyan));
+  border-bottom-color: rgba(0, 0, 0, 0.45);
+  color: #06101c;
+  font-weight: 800;
+  box-shadow: 0 0 14px -2px var(--hot, var(--sg-cyan));
+}
+
+/* --------------------------------------------------------------------------
+   Legend
+   -------------------------------------------------------------------------- */
+
+.sgset-leg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px clamp(10px, 1.4vmin, 16px);
+  margin-top: 8px;
+}
+
+.sgset-leg__i {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: clamp(10px, 0.82vw, 12px);
+  color: var(--sg-dim);
+  white-space: nowrap;
+}
+
+.sgset-leg__sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--c, var(--sg-cyan));
+  box-shadow: 0 0 8px -1px var(--c, var(--sg-cyan));
+  flex: none;
+}
+
+.sgset-leg__n {
+  color: var(--sg-ink);
+}
+
+/* --------------------------------------------------------------------------
+   Phone / touch diagram — zone geometry mirrors touchControls.ts exactly
+   (86/76/74/64/52/82/60 px pads, 12px rows, 16px side + 18px bottom insets,
+   measured against an 844x390 landscape phone).
+   -------------------------------------------------------------------------- */
+
+.sgset-phone {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 844 / 390;
+  margin: 0 auto;
+  border-radius: clamp(16px, 2.4vw, 30px);
+  border: 3px solid rgba(122, 190, 255, 0.34);
+  background: #05070f;
+  padding: clamp(4px, 0.7vw, 9px);
+  box-shadow: var(--sg-shadow-sm);
+  /* insets, as a share of the phone box */
+  --pb: 4.6%;
+  --pr: 1.9%;
+  --pl: 1.9%;
+  --r1: 4.6%;
+  --r2: 29.8%;
+  --r3: 52.4%;
+}
+
+.sgset-phone__screen {
+  position: absolute;
+  inset: clamp(4px, 0.7vw, 9px);
+  border-radius: clamp(12px, 1.8vw, 22px);
+  overflow: hidden;
+  background:
+    radial-gradient(
+      110% 80% at 50% 0%,
+      rgba(34, 211, 255, 0.12) 0%,
+      rgba(0, 0, 0, 0) 60%
+    ),
+    linear-gradient(180deg, #0a1424 0%, #060a14 100%);
+}
+
+.sgset-phone__cam {
+  position: absolute;
+  left: 1.1%;
+  top: 50%;
+  width: 0.7%;
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: rgba(122, 190, 255, 0.35);
+}
+
+.sgset-z {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  border: 2px solid var(--z, var(--sg-cyan));
+  color: var(--z, var(--sg-cyan));
+  background: radial-gradient(
+    circle at 50% 32%,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(6, 12, 26, 0.55) 70%
+  );
+  box-shadow: 0 0 16px -4px var(--z, var(--sg-cyan)),
+    inset 0 0 18px -6px var(--z, var(--sg-cyan));
+  font-family: var(--sg-display);
+  font-size: clamp(6px, 0.62vw, 10px);
+  letter-spacing: 0.06em;
+  line-height: 1;
+  overflow: hidden;
+}
+
+.sgset-z--drift  { height: 22.1%; bottom: var(--r1); right: var(--pr); --z: var(--sg-pink); }
+.sgset-z--gas    { height: 19.0%; bottom: var(--r1); right: 13.5%; --z: var(--sg-green); }
+.sgset-z--item   { height: 19.5%; bottom: var(--r2); right: var(--pr); --z: var(--sg-gold); }
+.sgset-z--brake  { height: 16.4%; bottom: var(--r2); right: 12.3%; --z: var(--sg-red); }
+.sgset-z--back   { height: 13.3%; bottom: var(--r3); right: var(--pr); --z: var(--sg-orange); }
+.sgset-z--look   { height: 13.3%; bottom: var(--r3); right: 9.5%; --z: var(--sg-violet); }
+.sgset-z--lift   { height: 13.3%; bottom: var(--r3); right: 17.1%; --z: var(--sg-blue);
+                   border-style: dashed; }
+.sgset-z--arrowL { height: 21.0%; bottom: var(--r1); left: var(--pl); --z: var(--sg-cyan);
+                   font-size: clamp(9px, 1.1vw, 18px); }
+.sgset-z--arrowR { height: 21.0%; bottom: var(--r1); left: 13.3%; --z: var(--sg-cyan);
+                   font-size: clamp(9px, 1.1vw, 18px); }
+.sgset-z--cal    { height: 15.4%; bottom: var(--r1); left: var(--pl); --z: var(--sg-gold);
+                   font-size: clamp(4px, 0.42vw, 7px); letter-spacing: 0.02em; }
+
+/* the three small pads carry four-letter words in a 52px circle */
+.sgset-z--back,
+.sgset-z--look,
+.sgset-z--lift { font-size: clamp(5px, 0.5vw, 8px); }
+
+/* floating-stick surface */
+.sgset-phone__stick {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 52%;
+  height: 64%;
+  border-radius: 0 var(--sg-r-md) 0 clamp(10px, 1.6vw, 20px);
+  border: 2px dashed rgba(34, 211, 255, 0.4);
+  border-left: 0;
+  border-bottom: 0;
+  background: rgba(34, 211, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5%;
+  padding: 0 4% 6%;
+}
+
+.sgset-phone__stickTxt {
+  font-family: var(--sg-display);
+  font-size: clamp(6px, 0.6vw, 10px);
+  letter-spacing: 0.08em;
+  color: var(--sg-cyan);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.sgset-phone__knob {
+  position: relative;
+  height: 38%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid rgba(34, 211, 255, 0.34);
+  background: radial-gradient(
+    circle,
+    rgba(10, 26, 48, 0.5),
+    rgba(10, 26, 48, 0.04) 72%
+  );
+  display: grid;
+  place-items: center;
+}
+
+.sgset-phone__knob::after {
+  content: '';
+  width: 45%;
+  height: 45%;
+  border-radius: 50%;
+  border: 2px solid rgba(34, 211, 255, 0.85);
+  background: radial-gradient(
+    circle at 50% 34%,
+    rgba(126, 240, 255, 0.55),
+    rgba(10, 26, 48, 0.55)
+  );
+  box-shadow: 0 0 18px -4px rgba(34, 211, 255, 0.9);
+}
+
+.sgset-phone__tiltbar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--pb) + 1%);
+  transform: translateX(-50%);
+  width: 21.8%;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(8, 16, 32, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 255, 0.32);
+}
+
+.sgset-phone__tiltbar::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-radius: 50%;
+  background: rgba(34, 211, 255, 0.85);
+  box-shadow: 0 0 14px rgba(34, 211, 255, 0.8);
+}
+
+/* "tilt the device" callout */
+.sgset-phone__tilt {
+  position: absolute;
+  left: 4%;
+  top: 8%;
+  width: 46%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--sg-cyan);
+}
+
+.sgset-phone__tiltIcon {
+  flex: none;
+  width: clamp(20px, 2.6vw, 36px);
+  height: auto;
+  color: var(--sg-cyan);
+}
+
+.sgset-phone__tiltTxt {
+  font-family: var(--sg-display);
+  font-size: clamp(7px, 0.72vw, 11px);
+  letter-spacing: 0.1em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+/* scheme-driven visibility — mirrors the rules in touchControls.ts */
+.sgset-phone .sgset-z--gas,
+.sgset-phone .sgset-z--brake,
+.sgset-phone .sgset-z--arrowL,
+.sgset-phone .sgset-z--arrowR,
+.sgset-phone .sgset-z--cal,
+.sgset-phone .sgset-phone__stick,
+.sgset-phone .sgset-phone__tiltbar,
+.sgset-phone .sgset-phone__tilt {
+  display: none;
+}
+
+.sgset-phone[data-accel='manual'] .sgset-z--gas,
+.sgset-phone[data-accel='manual'] .sgset-z--brake,
+.sgset-phone[data-scheme='buttons'] .sgset-z--gas,
+.sgset-phone[data-scheme='buttons'] .sgset-z--brake,
+.sgset-phone[data-scheme='buttons'] .sgset-z--arrowL,
+.sgset-phone[data-scheme='buttons'] .sgset-z--arrowR,
+.sgset-phone[data-scheme='tilt'] .sgset-z--cal {
+  display: flex;
+}
+
+.sgset-phone[data-scheme='stick'] .sgset-phone__stick,
+.sgset-phone[data-scheme='tilt'] .sgset-phone__tilt {
+  display: flex;
+}
+
+.sgset-phone[data-scheme='tilt'] .sgset-phone__tiltbar {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   Actions table
+   -------------------------------------------------------------------------- */
+
+.sgset-sec--acts {
+  container-type: inline-size;
+}
+
+.sgset-acts {
+  display: flex;
+  flex-direction: column;
+}
+
+.sgset-act {
+  display: grid;
+  grid-template-columns: 10px minmax(64px, 0.85fr) minmax(78px, 0.95fr) minmax(0, 2.3fr);
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: clamp(5px, 0.9vmin, 9px) 0;
+  border-top: 1px solid rgba(122, 190, 255, 0.14);
+}
+
+.sgset-act--head {
+  border-top: 0;
+  padding-bottom: 4px;
+}
+
+.sgset-act__sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--c, var(--sg-cyan));
+  box-shadow: 0 0 8px -1px var(--c, var(--sg-cyan));
+  align-self: start;
+  margin-top: 0.32em;
+}
+
+.sgset-act__n {
+  font-size: clamp(10px, 0.9vw, 13px);
+  color: var(--sg-ink);
+  letter-spacing: 0.01em;
+}
+
+.sgset-act__c {
+  font-family: var(--sg-num);
+  font-size: clamp(9px, 0.78vw, 12px);
+  color: var(--sg-cyan);
+  overflow-wrap: anywhere;
+}
+
+.sgset-act__c--touch {
+  font-family: var(--sg-ui);
+  overflow-wrap: normal;
+}
+
+.sgset-act__d {
+  font-size: clamp(10px, 0.82vw, 12px);
+  color: var(--sg-dim);
+  line-height: 1.4;
+}
+
+.sgset-act--head .sgset-act__n,
+.sgset-act--head .sgset-act__c,
+.sgset-act--head .sgset-act__d {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.1vmin, 11px);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+/* The table reflows against its own column, not the viewport. */
+@container (max-width: 460px) {
+  .sgset-act {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+  }
+  .sgset-act__d {
+    grid-column: 2 / -1;
+  }
+  .sgset-act--head .sgset-act__d {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Gamepad list
+   -------------------------------------------------------------------------- */
+
+.sgset-pad {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 10px;
+  align-items: baseline;
+}
+
+.sgset-pad__b {
+  justify-self: start;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(24, 38, 66, 0.9);
+  border: 1px solid var(--sg-line);
+  border-bottom-width: 3px;
+  font-family: var(--sg-num);
+  font-size: clamp(9px, 0.78vw, 11px);
+  color: var(--sg-ink);
+  white-space: nowrap;
+}
+
+.sgset-pad__a {
+  font-size: clamp(10px, 0.85vw, 12px);
+  color: var(--sg-dim);
+}
+
+/* --------------------------------------------------------------------------
+   Short-viewport tuning (landscape phones, 844x390 and friends)
+   -------------------------------------------------------------------------- */
+
+@media (max-height: 460px) {
+  .sgset__dialog {
+    width: 100%;
+  }
+  .sgset-kb {
+    --kh: clamp(18px, 3vh, 26px);
+  }
+  .sgset-phone {
+    max-width: min(100%, 112vh);
+  }
+  .sgset-sec {
+    padding: 7px 11px 8px;
+  }
+  .sgset-row {
+    padding: 5px 0;
+    min-height: 30px;
+  }
+  .sgset-row--stack {
+    gap: 5px;
+  }
+  .sgset-row--stack .sgset-seg__btn {
+    min-height: 28px;
+  }
+  .sgset__head {
+    padding: 7px 12px;
+  }
+  .sgset__body {
+    padding: 10px 12px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion — the media query AND the in-panel toggle
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .sgset__dialog {
+    animation: none;
+  }
+  .sgset *,
+  .sgset *::before,
+  .sgset *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+.sgset[data-rm='on'] .sgset__dialog {
+  animation: none;
+}
+
+.sgset[data-rm='on'] *,
+.sgset[data-rm='on'] *::before,
+.sgset[data-rm='on'] *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* ==========================================================================
+   In-race tool buttons (settings gear + pause). Sit in the top-centre safe
+   zone, between the position block and the minimap, so they clear both the
+   notch and the thumb columns on a landscape phone.
+   ========================================================================== */
+.sg-tools {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 40;
+  pointer-events: none;
+}
+.sg-tools[hidden] { display: none !important; }
+
+.sg-tools__btn {
+  pointer-events: auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--sg-line);
+  border-radius: 12px;
+  background: var(--sg-panel);
+  color: var(--sg-ink);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition: border-color .14s ease, background .14s ease, transform .14s ease;
+}
+.sg-tools__btn:hover { border-color: var(--sg-line-hot); background: var(--sg-panel-hi); }
+.sg-tools__btn:active { transform: scale(.94); }
+.sg-tools__btn:focus-visible { outline: 2px solid var(--sg-cyan); outline-offset: 2px; }
+.sg-tools__btn svg { width: 21px; height: 21px; display: block; fill: none;
+  stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-tools__btn { transition: none; }
+  .sg-tools__btn:active { transform: none; }
+}
+
+@media (max-height: 430px) {
+  .sg-tools__btn { width: 38px; height: 38px; border-radius: 10px; }
+  .sg-tools__btn svg { width: 18px; height: 18px; }
+}

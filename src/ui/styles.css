@@ -1,0 +1,2693 @@
+/* ==========================================================================
+   SpaceGen Racing — 2D layer
+   HUD (in-race) + front end (title / garage / results / paused)
+
+   Rules this sheet follows:
+   - Every colour, radius and shadow is a custom property, prefixed --sg- so it
+     cannot collide with another agent's stylesheet.
+   - System / web-safe font stacks only. No @import, no external asset.
+   - Everything animated is transform / opacity / a CSS variable.
+   - Layout is one 3x3 grid so the mobile pass only reassigns grid areas.
+   ========================================================================== */
+
+:root {
+  /* --- ground ---------------------------------------------------------- */
+  --sg-void: #05070f;
+  --sg-deep: #0a0f1e;
+  --sg-panel: rgba(9, 15, 30, 0.72);
+  --sg-panel-solid: #0d1526;
+  --sg-panel-hi: rgba(24, 38, 66, 0.85);
+  --sg-line: rgba(122, 190, 255, 0.28);
+  --sg-line-hot: rgba(122, 214, 255, 0.7);
+
+  /* --- ink ------------------------------------------------------------- */
+  --sg-ink: #eaf2ff;
+  --sg-dim: #92a8ca;
+  --sg-mute: #5b6d8c;
+
+  /* --- accents --------------------------------------------------------- */
+  --sg-cyan: #22d3ff;
+  --sg-blue: #3d8bff;
+  --sg-violet: #b44dff;
+  --sg-gold: #ffd23f;
+  --sg-green: #2fe36b;
+  --sg-orange: #ff8b2f;
+  --sg-red: #ff3b5e;
+  --sg-pink: #ff2f7a;
+  --sg-white: #ffffff;
+
+  /* --- drift tiers: blue -> violet -> gold -> white --------------------- */
+  --sg-t0: #3d8bff;
+  --sg-t1: #b44dff;
+  --sg-t2: #ffd23f;
+  --sg-t3: #ffffff;
+
+  /* --- surface inks, for the track-select route map ---------------------
+     One hue per SurfaceKind. Neutral where the surface is just road, warm or
+     saturated where it is a hazard, so a glance at the map says how much of
+     the lap is trying to hurt you. These are diagram colours, not lighting:
+     the planet's own palette is the art layer's business (render/themes). */
+  --sg-surf-tarmac: #7f97b8;
+  --sg-surf-metal: #b6c4d6;
+  --sg-surf-gravel: #c39a6b;
+  --sg-surf-oil: #b44dff;
+  --sg-surf-ice: #6fdcff;
+  --sg-surf-snow: #eaf5ff;
+  --sg-surf-boost: #ffd23f;
+
+  /* --- geometry -------------------------------------------------------- */
+  --sg-r-lg: 22px;
+  --sg-r-md: 14px;
+  --sg-r-sm: 8px;
+  --sg-pad: clamp(10px, 1.7vmin, 22px);
+
+  --sg-shadow: 0 4px 0 rgba(0, 0, 0, 0.5), 0 14px 30px rgba(0, 0, 0, 0.55);
+  --sg-shadow-sm: 0 3px 0 rgba(0, 0, 0, 0.45), 0 8px 18px rgba(0, 0, 0, 0.45);
+  --sg-glow: 0 0 22px rgba(34, 211, 255, 0.35);
+
+  /* --- type ------------------------------------------------------------ */
+  --sg-display: "Arial Black", "Arial Bold", "Franklin Gothic Heavy", Impact,
+    "Haettenschweiler", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sg-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --sg-num: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* --- safe areas ------------------------------------------------------ */
+  --sg-sat: env(safe-area-inset-top, 0px);
+  --sg-sar: env(safe-area-inset-right, 0px);
+  --sg-sab: env(safe-area-inset-bottom, 0px);
+  --sg-sal: env(safe-area-inset-left, 0px);
+}
+
+/* Hidden must win over the display set by the block's own class. */
+.sg-hud [hidden],
+.sg-fe [hidden] {
+  display: none !important;
+}
+
+.sg-hud *,
+.sg-fe *,
+.sg-hud *::before,
+.sg-fe *::before,
+.sg-hud *::after,
+.sg-fe *::after {
+  box-sizing: border-box;
+}
+
+/* ==========================================================================
+   HUD SHELL
+   ========================================================================== */
+
+.sg-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  /* Thirds: the outer bottom thirds stay empty on touch layouts because the
+     touch controls own them. minmax(0,…) so nothing can blow the track out. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "tl tc tr"
+    "ml mc mr"
+    "bl bc br";
+  padding: calc(var(--sg-pad) + var(--sg-sat)) calc(var(--sg-pad) + var(--sg-sar))
+    calc(var(--sg-pad) + var(--sg-sab)) calc(var(--sg-pad) + var(--sg-sal));
+  gap: var(--sg-pad);
+  font-family: var(--sg-ui);
+  color: var(--sg-ink);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+.sg-hud.is-hidden {
+  display: none;
+}
+
+/* Scanline / hologram texture + vignette. Painted once, composited after. */
+.sg-hud__grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(150, 220, 255, 0.045) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px
+    ),
+    radial-gradient(
+      130% 100% at 50% 50%,
+      rgba(0, 0, 0, 0) 46%,
+      rgba(2, 4, 10, 0.42) 100%
+    );
+}
+
+/* Shared panel look: chunky, rounded, hard-shadowed, faintly holographic. */
+.sg-panel {
+  background: var(--sg-panel);
+  border: 2px solid var(--sg-line);
+  border-radius: var(--sg-r-md);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.14);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* ==========================================================================
+   TOP LEFT — position + lap
+   ========================================================================== */
+
+.sg-hud__pos {
+  grid-area: tl;
+  justify-self: start;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  --f: 0; /* flash 0..1, driven from JS */
+}
+
+.sg-pos {
+  display: flex;
+  align-items: flex-start;
+  line-height: 0.82;
+  font-family: var(--sg-display);
+  letter-spacing: -0.045em;
+  transform-origin: left top;
+  will-change: transform;
+  color: var(--sg-ink);
+  text-shadow:
+    0 4px 0 rgba(0, 0, 0, 0.6),
+    0 0 26px rgba(34, 211, 255, calc(0.25 + 0.6 * var(--f)));
+}
+
+.sg-pos__num {
+  font-size: clamp(54px, 9.2vmin, 116px);
+  font-style: italic;
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    var(--sg-flash, #cfe6ff) 55%,
+    #7fb6ff 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.55));
+}
+
+.sg-pos__ord {
+  font-size: clamp(20px, 3.2vmin, 40px);
+  font-style: italic;
+  margin-top: 0.28em;
+  margin-left: 0.06em;
+  color: var(--sg-flash, #9fd0ff);
+  letter-spacing: 0.02em;
+}
+
+.sg-lap {
+  display: flex;
+  align-items: baseline;
+  gap: 0.34em;
+  padding: 3px 10px 4px;
+  border-radius: var(--sg-r-sm);
+  background: rgba(8, 14, 28, 0.6);
+  border-left: 3px solid var(--sg-cyan);
+  font-family: var(--sg-display);
+  font-size: clamp(13px, 1.9vmin, 22px);
+  letter-spacing: 0.14em;
+}
+
+.sg-lap__label {
+  color: var(--sg-dim);
+  font-size: 0.78em;
+}
+
+.sg-lap__cur {
+  color: var(--sg-ink);
+}
+
+.sg-lap__sep,
+.sg-lap__tot {
+  color: var(--sg-mute);
+}
+
+.sg-hud__pos.is-final .sg-lap {
+  border-left-color: var(--sg-gold);
+}
+.sg-hud__pos.is-final .sg-lap__cur {
+  color: var(--sg-gold);
+}
+
+/* --- lap splits -----------------------------------------------------------
+   One row per completed lap, directly under the lap chip and wearing the same
+   chip language: a dark rounded plate with a coloured left rule. The rule is
+   what carries meaning — muted for a normal lap, GREEN for the fastest, which
+   is the hue the centre-screen split toast already uses to say "best", so this
+   is the same idea in the same colour rather than a second visual language for
+   it. Nothing here animates: it is a record, and a record that moves is noise
+   in the corner of the eye while the player is looking at the road.
+   -------------------------------------------------------------------------- */
+
+.sg-splits {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin-top: 3px;
+}
+
+.sg-split {
+  display: grid;
+  /* Fixed lap-number column so the times form a straight edge whatever the
+     lap count, and tabular figures so the digits do not shuffle underneath
+     each other as the live row ticks. */
+  grid-template-columns: 1.05em auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 0.6em;
+  padding: 2px 9px 3px 7px;
+  border-radius: var(--sg-r-sm);
+  /* Opaque enough to stay a dark plate over Rustfall's orange sky, which is
+     the brightest thing this corner ever sits on, without becoming a solid
+     block in a HUD whose panels are all slightly see-through. */
+  background: rgba(8, 14, 28, 0.66);
+  border-left: 3px solid rgba(122, 190, 255, 0.3);
+  font-family: var(--sg-num);
+  /* Sized against the LAP x/3 chip immediately above (1.9vmin): small enough
+     to read as a subordinate list, big enough that the gap column is legible
+     in a glance rather than requiring a look. */
+  font-size: clamp(11px, 1.75vmin, 20px);
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.sg-split__n {
+  color: var(--sg-mute);
+  text-align: right;
+}
+
+.sg-split__t {
+  color: var(--sg-ink);
+}
+
+.sg-split__d {
+  color: var(--sg-dim);
+  font-size: 0.92em;
+  text-align: right;
+}
+
+/* The fastest lap of the race so far. */
+.sg-split.is-best {
+  border-left-color: var(--sg-green);
+  background: rgba(10, 30, 22, 0.7);
+}
+.sg-split.is-best .sg-split__t {
+  color: var(--sg-green);
+}
+.sg-split.is-best .sg-split__n {
+  color: rgba(47, 227, 107, 0.72);
+}
+
+/* This row is not the one above plus one. Only reachable on a race longer
+   than the widget, where the fastest lap is pinned above the recent window. */
+.sg-split.is-skip {
+  margin-bottom: 5px;
+  box-shadow: 0 4px 0 -3px rgba(122, 190, 255, 0.3);
+}
+
+/* The lap in progress: quieter than the record above it, and deliberately one
+   digit shorter, so a glance can tell provisional from banked without reading. */
+.sg-split--live {
+  background: rgba(8, 14, 28, 0.48);
+  border-left-color: rgba(122, 190, 255, 0.16);
+}
+.sg-split--live .sg-split__t {
+  color: var(--sg-dim);
+}
+
+/* ==========================================================================
+   TOP RIGHT — minimap
+   ========================================================================== */
+
+.sg-hud__map {
+  grid-area: tr;
+  justify-self: end;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.sg-map__frame {
+  position: relative;
+  padding: 7px;
+  border-radius: var(--sg-r-md);
+  background: var(--sg-panel);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.14);
+}
+
+.sg-map__canvas {
+  display: block;
+  width: clamp(112px, 15vmin, 176px);
+  height: clamp(112px, 15vmin, 176px);
+  border-radius: var(--sg-r-sm);
+  background:
+    radial-gradient(
+      100% 100% at 50% 0%,
+      rgba(34, 211, 255, 0.1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    ),
+    rgba(4, 8, 18, 0.66);
+}
+
+.sg-map__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--sg-num);
+  font-size: clamp(10px, 1.5vmin, 15px);
+  letter-spacing: 0.04em;
+}
+
+.sg-map__clock {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(8, 14, 28, 0.66);
+  border: 1px solid var(--sg-line);
+  color: var(--sg-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.sg-map__fps {
+  color: var(--sg-mute);
+  font-size: 0.85em;
+}
+
+/* ==========================================================================
+   BOTTOM LEFT — item slots
+   ========================================================================== */
+
+.sg-hud__items {
+  grid-area: bl;
+  justify-self: start;
+  align-self: end;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.sg-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  --pop: 0; /* 0..1 settle pop, from JS */
+}
+
+.sg-slot__box {
+  position: relative;
+  width: clamp(74px, 11.5vmin, 128px);
+  height: clamp(74px, 11.5vmin, 128px);
+  display: grid;
+  place-items: center;
+  border-radius: clamp(16px, 2.6vmin, 30px);
+  background: linear-gradient(
+      160deg,
+      rgba(38, 58, 96, 0.9) 0%,
+      rgba(10, 16, 32, 0.92) 100%
+    );
+  border: 3px solid var(--sg-line);
+  box-shadow: var(--sg-shadow), inset 0 2px 0 rgba(180, 225, 255, 0.18);
+  transform: scale(calc(1 + 0.34 * var(--pop)));
+  transform-origin: center bottom;
+  will-change: transform;
+}
+
+.sg-slot--alt .sg-slot__box {
+  width: clamp(52px, 8vmin, 88px);
+  height: clamp(52px, 8vmin, 88px);
+  border-radius: clamp(12px, 1.8vmin, 20px);
+}
+
+/* Item-coloured halo behind the glyph. --ic is set from ITEMS[].color. */
+.sg-slot__glow {
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 3px solid var(--ic, transparent);
+  box-shadow: 0 0 18px var(--ic, transparent), inset 0 0 22px rgba(0, 0, 0, 0.5);
+  opacity: calc(0.35 + 0.65 * var(--pop));
+}
+
+.sg-slot__icons {
+  position: relative;
+  width: 72%;
+  height: 72%;
+  display: grid;
+  place-items: center;
+}
+
+.sg-icon {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.75));
+}
+
+.sg-slot__empty {
+  position: absolute;
+  font-family: var(--sg-display);
+  font-size: clamp(20px, 3.4vmin, 38px);
+  color: rgba(146, 168, 202, 0.32);
+  letter-spacing: 0.08em;
+}
+
+.sg-slot__pips {
+  display: flex;
+  gap: 5px;
+  height: 8px;
+}
+
+.sg-pip {
+  width: 16px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(146, 168, 202, 0.25);
+  border: 1px solid rgba(146, 168, 202, 0.35);
+}
+
+.sg-pip.is-on {
+  background: var(--sg-green);
+  border-color: #bdffd6;
+  box-shadow: 0 0 10px rgba(47, 227, 107, 0.8);
+}
+
+.sg-slot__name {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.4vmin, 14px);
+  letter-spacing: 0.14em;
+  color: var(--sg-dim);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   BOTTOM RIGHT — speed arc + drift charge ring
+   ========================================================================== */
+
+.sg-hud__gauge {
+  grid-area: br;
+  justify-self: end;
+  align-self: end;
+  position: relative;
+  width: clamp(128px, 20vmin, 214px);
+  height: clamp(128px, 20vmin, 214px);
+  --ring: var(--sg-t0);
+  --snap: 0; /* tier-change flash 0..1 */
+}
+
+.sg-gauge__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.sg-gauge__ringTrack {
+  fill: none;
+  stroke: rgba(12, 22, 42, 0.85);
+  stroke-width: 11;
+  stroke-linecap: round;
+}
+
+.sg-gauge__ringBase {
+  fill: none;
+  stroke: rgba(122, 190, 255, 0.18);
+  stroke-width: 11;
+  stroke-linecap: round;
+}
+
+.sg-gauge__ringFill {
+  fill: none;
+  stroke: var(--ring);
+  stroke-width: 11;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 8px var(--ring));
+  transition: stroke 90ms linear;
+}
+
+/* The snap: a second ring that punches out on every tier boundary. */
+.sg-gauge__ringSnap {
+  fill: none;
+  stroke: var(--ring);
+  stroke-width: calc(11px + 16px * var(--snap));
+  stroke-linecap: round;
+  opacity: calc(0.75 * var(--snap));
+  transform-origin: 60px 60px;
+  transform: scale(calc(1 + 0.09 * var(--snap)));
+}
+
+.sg-gauge__tick {
+  stroke: rgba(230, 245, 255, 0.55);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.sg-gauge__spdTrack {
+  fill: none;
+  stroke: rgba(12, 22, 42, 0.8);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.sg-gauge__spdFill {
+  fill: none;
+  stroke: var(--sg-cyan);
+  stroke-width: 8;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 255, 0.7));
+}
+
+.sg-hud__gauge.is-boost .sg-gauge__spdFill {
+  stroke: var(--sg-gold);
+  filter: drop-shadow(0 0 10px rgba(255, 210, 63, 0.9));
+}
+
+.sg-gauge__readout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  pointer-events: none;
+}
+
+.sg-gauge__spd {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(28px, 4.6vmin, 56px);
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sg-gauge__unit {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 12px);
+  letter-spacing: 0.28em;
+  color: var(--sg-dim);
+  margin-top: 2px;
+}
+
+.sg-gauge__tier {
+  margin-top: 5px;
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.35vmin, 14px);
+  letter-spacing: 0.2em;
+  color: var(--ring);
+  text-shadow: 0 0 12px var(--ring);
+  opacity: 0.95;
+  min-height: 1em;
+}
+
+/* ==========================================================================
+   BOTTOM CENTRE — charge pickups
+   ========================================================================== */
+
+.sg-hud__charge {
+  grid-area: bc;
+  justify-self: center;
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--sg-panel);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm);
+  --shake: 0;
+  transform: translate3d(calc(var(--shake) * 1px), 0, 0);
+  will-change: transform;
+}
+
+.sg-charge__icon {
+  width: clamp(18px, 2.6vmin, 28px);
+  height: clamp(18px, 2.6vmin, 28px);
+  color: var(--sg-gold);
+  flex: none;
+  filter: drop-shadow(0 0 8px rgba(255, 210, 63, 0.55));
+}
+
+.sg-charge__num {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(18px, 2.8vmin, 32px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-gold);
+  min-width: 1.6ch;
+  text-align: right;
+}
+
+.sg-charge__bar {
+  display: flex;
+  gap: 3px;
+}
+
+.sg-charge__seg {
+  width: clamp(5px, 0.8vmin, 9px);
+  height: clamp(12px, 1.9vmin, 22px);
+  border-radius: 2px;
+  background: rgba(146, 168, 202, 0.22);
+  transform: skewX(-12deg);
+}
+
+.sg-charge__seg.is-on {
+  background: var(--sg-gold);
+  box-shadow: 0 0 8px rgba(255, 210, 63, 0.75);
+}
+
+.sg-hud__charge.is-drop {
+  border-color: var(--sg-red);
+}
+
+/* ==========================================================================
+   RIGHT EDGE — Lift meter (flight class only)
+   ========================================================================== */
+
+.sg-hud__lift {
+  grid-area: mr;
+  justify-self: end;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  --lift: 1;
+}
+
+.sg-lift__label {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 12px);
+  letter-spacing: 0.22em;
+  color: var(--sg-dim);
+}
+
+.sg-lift__track {
+  position: relative;
+  width: clamp(12px, 1.9vmin, 20px);
+  height: clamp(88px, 17vmin, 190px);
+  border-radius: 999px;
+  background: rgba(8, 14, 28, 0.72);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm);
+  overflow: hidden;
+}
+
+.sg-lift__fill {
+  position: absolute;
+  inset: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #9fe8ff 0%, var(--sg-cyan) 100%);
+  transform-origin: 50% 100%;
+  transform: scaleY(var(--lift));
+  box-shadow: 0 0 14px rgba(34, 211, 255, 0.6);
+}
+
+.sg-hud__lift.is-low .sg-lift__fill {
+  background: linear-gradient(180deg, #ffb0be 0%, var(--sg-red) 100%);
+  box-shadow: 0 0 16px rgba(255, 59, 94, 0.8);
+  opacity: var(--blink, 1);
+}
+
+.sg-hud__lift.is-low .sg-lift__label {
+  color: var(--sg-red);
+}
+
+/* ==========================================================================
+   SCREEN EDGE — incoming item warnings
+   ========================================================================== */
+
+.sg-hud__warns {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.sg-warn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: clamp(84px, 13vmin, 132px);
+  height: clamp(60px, 9vmin, 92px);
+  margin-left: calc(clamp(84px, 13vmin, 132px) / -2);
+  margin-top: calc(clamp(60px, 9vmin, 92px) / -2);
+  display: grid;
+  place-items: center;
+  color: var(--wc, var(--sg-red));
+  will-change: transform, opacity;
+}
+
+.sg-warn__arc {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.sg-warn__arc path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 9;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 12px currentColor);
+}
+
+.sg-warn__icons {
+  grid-area: 1 / 1;
+  position: relative;
+  width: clamp(26px, 4vmin, 40px);
+  height: clamp(26px, 4vmin, 40px);
+  display: grid;
+  place-items: center;
+  align-self: end;
+  transform: translateY(-2px);
+}
+
+/* ==========================================================================
+   CENTRE — transient messages only
+   ========================================================================== */
+
+.sg-hud__centre {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.sg-ctr {
+  grid-area: 1 / 1;
+  text-align: center;
+  font-family: var(--sg-display);
+  will-change: transform, opacity;
+}
+
+.sg-ctr__count {
+  font-size: clamp(96px, 22vmin, 260px);
+  font-style: italic;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--sg-white);
+  text-shadow:
+    0 8px 0 rgba(0, 0, 0, 0.55),
+    0 0 60px rgba(34, 211, 255, 0.8);
+  --k: 1; /* 1 -> 0 over the beat */
+  opacity: var(--k);
+  transform: scale(calc(1.5 - 0.5 * var(--k)));
+}
+
+.sg-ctr__count.is-go {
+  color: var(--sg-green);
+  text-shadow: 0 8px 0 rgba(0, 0, 0, 0.55), 0 0 70px rgba(47, 227, 107, 0.9);
+}
+
+.sg-ctr__banner {
+  font-size: clamp(30px, 7.4vmin, 92px);
+  font-style: italic;
+  letter-spacing: 0.02em;
+  padding: 0.1em 0.5em;
+  color: #1a1204;
+  background: linear-gradient(180deg, #fff6c9 0%, var(--sg-gold) 55%, #d99b00 100%);
+  border-radius: 10px;
+  box-shadow: 0 8px 0 rgba(0, 0, 0, 0.45), 0 0 60px rgba(255, 210, 63, 0.55);
+  text-shadow: none;
+  transform: skewX(-8deg) scale(var(--s, 1));
+  opacity: var(--k, 1);
+  transform-origin: center;
+}
+
+.sg-ctr__boost {
+  align-self: center;
+  transform: translateY(clamp(58px, 12vmin, 130px)) scale(var(--s, 1));
+  font-size: clamp(20px, 4.2vmin, 52px);
+  font-style: italic;
+  letter-spacing: 0.16em;
+  color: var(--bc, var(--sg-t0));
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.5), 0 0 40px var(--bc, var(--sg-t0));
+  opacity: var(--k, 1);
+}
+
+.sg-ctr__split {
+  align-self: start;
+  transform: translateY(clamp(70px, 15vmin, 170px));
+  font-family: var(--sg-num);
+  font-size: clamp(14px, 2.4vmin, 26px);
+  letter-spacing: 0.06em;
+  color: var(--sg-ink);
+  opacity: var(--k, 1);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(8, 14, 28, 0.7);
+  border: 1px solid var(--sg-line);
+}
+
+.sg-ctr__split.is-best {
+  color: #14210f;
+  background: var(--sg-green);
+  border-color: #d3ffe4;
+}
+
+.sg-ctr__spin {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: var(--k, 0);
+  background: radial-gradient(
+    120% 90% at 50% 50%,
+    rgba(180, 77, 255, 0) 32%,
+    rgba(180, 77, 255, 0.28) 100%
+  );
+}
+
+.sg-ctr__spinTxt {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(22px, 5vmin, 62px);
+  letter-spacing: 0.2em;
+  color: var(--sg-violet);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.55), 0 0 44px rgba(180, 77, 255, 0.9);
+  transform: rotate(calc(var(--spin, 0) * 1deg));
+}
+
+/* ==========================================================================
+   HUD — compact / touch layout
+   Pulls every element inward and off the bottom outer thirds, which the
+   touch-control agent owns. The minimap shrinks; the warnings grow.
+   ========================================================================== */
+
+@media (max-width: 860px), (max-height: 540px) {
+  .sg-hud {
+    --sg-pad: clamp(8px, 1.4vmin, 14px);
+    gap: 6px;
+  }
+
+  /* charge moves up out of the thumb band */
+  .sg-hud__charge {
+    grid-area: tc;
+    align-self: start;
+    padding: 4px 10px;
+    gap: 7px;
+  }
+  .sg-charge__bar {
+    display: none;
+  }
+
+  /* items tuck under the position block, still top-left */
+  .sg-hud__items {
+    grid-area: ml;
+    align-self: start;
+    justify-self: start;
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .sg-slot__box {
+    width: clamp(58px, 15vmin, 84px);
+    height: clamp(58px, 15vmin, 84px);
+  }
+  .sg-slot--alt .sg-slot__box {
+    width: clamp(42px, 11vmin, 62px);
+    height: clamp(42px, 11vmin, 62px);
+  }
+  .sg-slot__name {
+    display: none;
+  }
+
+  /* the drift ring is the one widget that must stay large: bottom CENTRE,
+     between the two reserved thumb zones */
+  .sg-hud__gauge {
+    grid-area: bc;
+    justify-self: center;
+    align-self: end;
+    width: clamp(104px, 26vmin, 150px);
+    height: clamp(104px, 26vmin, 150px);
+  }
+
+  .sg-map__canvas {
+    width: clamp(84px, 22vmin, 112px);
+    height: clamp(84px, 22vmin, 112px);
+  }
+  .sg-map__frame {
+    padding: 5px;
+  }
+  .sg-map__fps {
+    display: none;
+  }
+
+  /* louder, not smaller */
+  .sg-warn {
+    width: clamp(96px, 26vmin, 150px);
+    height: clamp(68px, 18vmin, 104px);
+    margin-left: calc(clamp(96px, 26vmin, 150px) / -2);
+    margin-top: calc(clamp(68px, 18vmin, 104px) / -2);
+  }
+  .sg-warn__arc path {
+    stroke-width: 11;
+  }
+  .sg-warn__icons {
+    width: clamp(30px, 8vmin, 44px);
+    height: clamp(30px, 8vmin, 44px);
+  }
+
+  .sg-lift__track {
+    height: clamp(64px, 22vmin, 120px);
+    width: clamp(10px, 3vmin, 15px);
+  }
+}
+
+/* Very short landscape phones: keep the bottom row shallow. */
+@media (max-height: 420px) {
+  .sg-hud__gauge {
+    width: clamp(88px, 24vmin, 118px);
+    height: clamp(88px, 24vmin, 118px);
+  }
+  .sg-pos__num {
+    font-size: clamp(40px, 13vmin, 64px);
+  }
+  /* 390px of height total. The whole top-left stack — ordinal, lap chip and
+     splits — has to stay inside the upper third, so the rows tighten rather
+     than the list being taken away: a three-lap race is only ever three rows,
+     and a driver on a phone wants the splits as much as one on a desktop. */
+  .sg-splits {
+    gap: 1px;
+    margin-top: 2px;
+  }
+  .sg-split {
+    font-size: clamp(9px, 2.7vmin, 13px);
+    padding: 1px 7px 2px 6px;
+    column-gap: 0.5em;
+    line-height: 1.25;
+  }
+}
+
+/* ==========================================================================
+   FRONT END
+   ========================================================================== */
+
+.sg-fe {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: 1fr;
+  font-family: var(--sg-ui);
+  color: var(--sg-ink);
+  background:
+    radial-gradient(
+      120% 90% at 50% -10%,
+      rgba(34, 211, 255, 0.16) 0%,
+      rgba(0, 0, 0, 0) 55%
+    ),
+    radial-gradient(
+      90% 70% at 85% 110%,
+      rgba(180, 77, 255, 0.18) 0%,
+      rgba(0, 0, 0, 0) 60%
+    ),
+    linear-gradient(180deg, #070b16 0%, var(--sg-void) 100%);
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sg-fe.is-hidden {
+  display: none;
+}
+
+/* Pause sits over a live race: let the track show through. */
+.sg-fe[data-screen="paused"] {
+  background: rgba(3, 6, 14, 0.3);
+}
+
+.sg-fe[data-screen="paused"] .sg-fe__grid,
+.sg-fe[data-screen="paused"] .sg-fe__grain {
+  display: none;
+}
+
+.sg-fe__grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.6;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(150, 220, 255, 0.05) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px
+    ),
+    radial-gradient(
+      130% 100% at 50% 50%,
+      rgba(0, 0, 0, 0) 40%,
+      rgba(2, 4, 10, 0.6) 100%
+    );
+}
+
+/* faint grid horizon, pure CSS */
+.sg-fe__grid {
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: -10%;
+  height: 62%;
+  pointer-events: none;
+  opacity: 0.24;
+  background-image:
+    linear-gradient(rgba(34, 211, 255, 0.55) 1px, rgba(0, 0, 0, 0) 1px),
+    linear-gradient(90deg, rgba(34, 211, 255, 0.4) 1px, rgba(0, 0, 0, 0) 1px);
+  background-size: 100% 46px, 62px 100%;
+  transform: perspective(340px) rotateX(64deg);
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #000 60%);
+  -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #000 60%);
+}
+
+.sg-screen {
+  position: relative;
+  grid-area: 1 / 1;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  padding: calc(clamp(14px, 3vmin, 40px) + var(--sg-sat))
+    calc(clamp(14px, 3vmin, 40px) + var(--sg-sar))
+    calc(clamp(14px, 3vmin, 40px) + var(--sg-sab))
+    calc(clamp(14px, 3vmin, 40px) + var(--sg-sal));
+}
+
+.sg-fe[data-screen="title"] .sg-screen--title,
+.sg-fe[data-screen="track"] .sg-screen--track,
+.sg-fe[data-screen="garage"] .sg-screen--garage,
+.sg-fe[data-screen="results"] .sg-screen--results,
+.sg-fe[data-screen="paused"] .sg-screen--paused {
+  display: flex;
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.sg-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  font-family: var(--sg-display);
+  font-style: italic;
+  letter-spacing: 0.1em;
+  font-size: clamp(15px, 2.2vmin, 24px);
+  color: #06101c;
+  padding: 0.62em 1.5em;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  background: linear-gradient(180deg, #a9f0ff 0%, var(--sg-cyan) 52%, #0b9fd0 100%);
+  box-shadow: 0 6px 0 #06546f, 0 14px 26px rgba(0, 0, 0, 0.5);
+  transform: translateY(0);
+  transition: transform 90ms ease, box-shadow 90ms ease, filter 90ms ease;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+.sg-btn:hover {
+  filter: brightness(1.08);
+}
+
+.sg-btn:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 #06546f, 0 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+.sg-btn:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 4px;
+}
+
+.sg-btn--huge {
+  font-size: clamp(26px, 5.6vmin, 62px);
+  padding: 0.5em 1.5em;
+  letter-spacing: 0.14em;
+  box-shadow: 0 9px 0 #06546f, 0 22px 44px rgba(0, 0, 0, 0.55);
+}
+
+.sg-btn--huge:active {
+  transform: translateY(6px);
+  box-shadow: 0 3px 0 #06546f, 0 12px 22px rgba(0, 0, 0, 0.5);
+}
+
+.sg-btn--gold {
+  background: linear-gradient(180deg, #fff3bd 0%, var(--sg-gold) 52%, #c98f00 100%);
+  box-shadow: 0 9px 0 #7a5600, 0 22px 44px rgba(0, 0, 0, 0.55);
+}
+.sg-btn--gold:active {
+  box-shadow: 0 3px 0 #7a5600, 0 12px 22px rgba(0, 0, 0, 0.5);
+}
+
+.sg-btn--start {
+  font-size: clamp(18px, 3.1vmin, 34px);
+  padding: 0.5em 1.7em;
+  letter-spacing: 0.12em;
+}
+
+.sg-btn--ghost {
+  background: rgba(16, 26, 46, 0.8);
+  color: var(--sg-ink);
+  border: 2px solid var(--sg-line);
+  box-shadow: 0 5px 0 rgba(0, 0, 0, 0.45);
+}
+.sg-btn--ghost:active {
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* --- title -------------------------------------------------------------- */
+
+.sg-screen--title {
+  align-items: center;
+  justify-content: center;
+  gap: clamp(22px, 5vmin, 62px);
+  text-align: center;
+}
+
+.sg-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 0.84;
+}
+
+.sg-logo__main {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(46px, 13.5vmin, 172px);
+  letter-spacing: -0.02em;
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #bfe9ff 38%,
+    var(--sg-cyan) 62%,
+    #0d6ea8 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 6px 0 rgba(0, 0, 0, 0.5))
+    drop-shadow(0 0 44px rgba(34, 211, 255, 0.45));
+  transform: skewX(-7deg);
+}
+
+.sg-logo__sub {
+  margin-top: clamp(4px, 1vmin, 12px);
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.6vmin, 20px);
+  font-family: var(--sg-display);
+  font-size: clamp(13px, 2.6vmin, 34px);
+  letter-spacing: clamp(0.3em, 0.9vmin, 0.62em);
+  color: var(--sg-pink);
+  text-shadow: 0 0 26px rgba(255, 47, 122, 0.6);
+  transform: skewX(-7deg);
+}
+
+.sg-logo__rule {
+  width: clamp(24px, 7vmin, 90px);
+  height: 3px;
+  background: linear-gradient(90deg, rgba(255, 47, 122, 0), var(--sg-pink));
+  border-radius: 2px;
+}
+.sg-logo__rule--r {
+  background: linear-gradient(270deg, rgba(255, 47, 122, 0), var(--sg-pink));
+}
+
+.sg-hint {
+  font-size: clamp(11px, 1.6vmin, 15px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+/* --- track select -------------------------------------------------------
+   Same grammar as the garage: a head, a three-column grid of one read-out
+   flanked by pickable lists, an options row with the primary action on the
+   right. Everything reusable is reused (.sg-head, .sg-col, .sg-list, .sg-card,
+   .sg-detail, .sg-opts); only the route map and the chips are new.
+   ------------------------------------------------------------------------ */
+
+.sg-screen--track {
+  gap: clamp(10px, 1.8vmin, 20px);
+}
+
+.sg-tracks {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1.05fr 1.3fr 1.15fr;
+  gap: clamp(10px, 1.6vmin, 20px);
+}
+
+.sg-card__tag[data-diff="easy"] {
+  color: var(--sg-green);
+  border-color: rgba(47, 227, 107, 0.5);
+}
+.sg-card__tag[data-diff="medium"] {
+  color: var(--sg-gold);
+  border-color: rgba(255, 210, 63, 0.5);
+}
+.sg-card__tag[data-diff="hard"] {
+  color: var(--sg-red);
+  border-color: rgba(255, 59, 94, 0.5);
+}
+
+/* --- route map ---------------------------------------------------------- */
+
+.sg-trk__map {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  padding: clamp(8px, 1.4vmin, 16px);
+  border-radius: var(--sg-r-lg);
+  background:
+    radial-gradient(
+      120% 100% at 50% 0%,
+      rgba(34, 211, 255, 0.09) 0%,
+      rgba(0, 0, 0, 0) 62%
+    ),
+    rgba(8, 14, 27, 0.86);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.12);
+  overflow: hidden;
+}
+
+/* faint graticule so the map reads as an instrument, not a sticker */
+.sg-trk__map::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(122, 190, 255, 0.1) 1px, rgba(0, 0, 0, 0) 1px),
+    linear-gradient(90deg, rgba(122, 190, 255, 0.1) 1px, rgba(0, 0, 0, 0) 1px);
+  background-size: 34px 34px, 34px 34px;
+  mask-image: radial-gradient(90% 90% at 50% 50%, #000 30%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: radial-gradient(90% 90% at 50% 50%, #000 30%, rgba(0, 0, 0, 0) 100%);
+}
+
+.sg-trk__svg {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.sg-trk__casing {
+  stroke: rgba(3, 7, 16, 0.92);
+}
+
+.sg-trk__road {
+  stroke: var(--ink, var(--sg-surf-tarmac));
+  opacity: 0.85;
+}
+
+.sg-trk__frag {
+  stroke: var(--sg-white);
+  opacity: 0.55;
+}
+
+.sg-trk__line {
+  stroke: rgba(226, 245, 255, 0.95);
+  /* Resting state is the whole lap drawn: one dash exactly as long as the path,
+     at zero offset. The sweep below only animates the offset, so a map that
+     never animates is a finished map, not an empty one. */
+  stroke-dasharray: var(--len, none);
+  stroke-dashoffset: 0;
+}
+
+.sg-trk__ramp {
+  fill: var(--sg-gold);
+  stroke: rgba(3, 7, 16, 0.8);
+  stroke-width: 0.8;
+}
+
+.sg-trk__tick {
+  stroke: var(--sg-gold);
+}
+
+.sg-trk__map.is-in .sg-trk__svg {
+  animation: sgTrkIn 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sg-trk__map.is-in .sg-trk__line {
+  animation: sgTrkDraw 900ms cubic-bezier(0.32, 0.72, 0.2, 1);
+}
+
+/* Deliberately NOT an opacity fade. Every frame of this animation shows the
+   whole map; the only thing moving is scale. An entrance that dips a panel's
+   opacity is one paint-timing accident away from being photographed blank, and
+   one `both` away from being blank forever. */
+@keyframes sgTrkIn {
+  from {
+    transform: scale(0.965);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes sgTrkDraw {
+  from {
+    stroke-dashoffset: var(--len, 0);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* --- briefing panel ----------------------------------------------------- */
+
+.sg-detail--track {
+  gap: clamp(5px, 1vmin, 11px);
+}
+
+.sg-trk__world {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.25vmin, 12px);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sg-cyan);
+}
+
+.sg-trk__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.sg-fact {
+  min-width: 0;
+}
+
+.sg-fact__k {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.1vmin, 11px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+.sg-fact__v {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--sg-num);
+  font-size: clamp(11px, 1.7vmin, 16px);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-ink);
+}
+
+.sg-fact__word {
+  font-family: var(--sg-display);
+  font-size: clamp(10px, 1.45vmin, 14px);
+  letter-spacing: 0.06em;
+}
+
+.sg-pips {
+  display: inline-flex;
+  gap: 3px;
+  flex: none;
+}
+
+.sg-pips__p {
+  width: clamp(5px, 0.8vmin, 8px);
+  height: clamp(11px, 1.8vmin, 17px);
+  border-radius: 2px;
+  background: rgba(122, 190, 255, 0.16);
+  border: 1px solid rgba(122, 190, 255, 0.2);
+}
+
+.sg-pips[data-diff="easy"] .sg-pips__p.is-on {
+  background: var(--sg-green);
+  border-color: var(--sg-green);
+}
+.sg-pips[data-diff="medium"] .sg-pips__p.is-on {
+  background: var(--sg-gold);
+  border-color: var(--sg-gold);
+}
+.sg-pips[data-diff="hard"] .sg-pips__p.is-on {
+  background: var(--sg-red);
+  border-color: var(--sg-red);
+}
+
+.sg-trk__label {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.1vmin, 11px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  margin-top: 2px;
+}
+
+.sg-trk__label--row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sg-trk__climb {
+  font-family: var(--sg-num);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sg-dim);
+}
+
+/* Surface mix. "Two surfaces, one racing line" is a claim about proportions,
+   so the panel shows the proportions rather than asserting them. */
+.sg-trk__bar {
+  display: flex;
+  height: clamp(9px, 1.5vmin, 15px);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(122, 190, 255, 0.18);
+  background: rgba(122, 190, 255, 0.1);
+}
+
+.sg-trk__seg {
+  width: var(--w, 0%);
+  background: var(--ink, var(--sg-line));
+  box-shadow: inset -1px 0 0 rgba(3, 7, 16, 0.5);
+}
+
+.sg-chip__pct {
+  font-family: var(--sg-num);
+  letter-spacing: 0;
+  color: var(--sg-dim);
+}
+
+/* The elevation profile is the panel's slack-absorber: it grows into whatever
+   room the briefing has left over on a desktop and shrinks to a strip on a
+   landscape phone, so the panel is full at both ends of the range. */
+.sg-trk__elev {
+  flex: 1 1 auto;
+  min-height: 34px;
+  max-height: clamp(90px, 20vh, 190px);
+  border-radius: var(--sg-r-sm);
+  border: 1px solid rgba(122, 190, 255, 0.18);
+  background: rgba(122, 190, 255, 0.06);
+  overflow: hidden;
+}
+
+.sg-trk__elevSvg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sg-trk__elevFill {
+  fill: rgba(34, 211, 255, 0.16);
+  stroke: none;
+}
+
+.sg-trk__elevLine {
+  fill: none;
+  stroke: var(--sg-cyan);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+
+.sg-trk__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sg-chip {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 11px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--sg-line);
+  background: rgba(14, 22, 40, 0.7);
+  color: var(--sg-dim);
+  white-space: nowrap;
+}
+
+/* Surface chips carry the same ink as their run on the map, so the legend is
+   the map's key and not a second, unrelated list. */
+.sg-chip--surf {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sg-ink);
+}
+
+.sg-chip--surf::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+  background: var(--ink, var(--sg-line));
+  box-shadow: 0 0 8px var(--ink, transparent);
+}
+
+/* --- garage ------------------------------------------------------------- */
+
+.sg-screen--garage {
+  gap: clamp(10px, 1.8vmin, 20px);
+}
+
+.sg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.sg-head__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(20px, 3.6vmin, 44px);
+  letter-spacing: 0.1em;
+  color: var(--sg-ink);
+}
+
+.sg-head__title span {
+  color: var(--sg-cyan);
+}
+
+.sg-garage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1.1fr 1.25fr 1fr;
+  gap: clamp(10px, 1.6vmin, 20px);
+}
+
+.sg-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+}
+
+.sg-col__title {
+  font-family: var(--sg-display);
+  font-size: clamp(10px, 1.5vmin, 14px);
+  letter-spacing: 0.28em;
+  color: var(--sg-mute);
+  text-transform: uppercase;
+  flex: none;
+}
+
+.sg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.sg-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--sg-r-md);
+  background: rgba(14, 22, 40, 0.78);
+  border: 2px solid rgba(122, 190, 255, 0.16);
+  color: var(--sg-ink);
+  font-family: inherit;
+  cursor: pointer;
+  flex: none;
+  transition: border-color 110ms ease, background 110ms ease, transform 110ms ease;
+  touch-action: manipulation;
+}
+
+.sg-card:hover {
+  border-color: var(--sg-line);
+  background: rgba(22, 34, 60, 0.85);
+}
+
+.sg-card.is-sel {
+  border-color: var(--sg-cyan);
+  background: linear-gradient(
+    90deg,
+    rgba(34, 211, 255, 0.22) 0%,
+    rgba(14, 22, 40, 0.85) 60%
+  );
+  box-shadow: 0 0 0 1px rgba(34, 211, 255, 0.35), 0 6px 18px rgba(0, 0, 0, 0.45);
+  transform: translateX(3px);
+}
+
+.sg-card:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+}
+
+.sg-card__chip {
+  width: 16px;
+  height: 34px;
+  border-radius: 5px;
+  flex: none;
+  background: linear-gradient(180deg, var(--c1, #fff) 0%, var(--c2, #333) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 12px var(--c1, transparent);
+}
+
+.sg-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sg-card__name {
+  font-family: var(--sg-display);
+  font-size: clamp(13px, 1.9vmin, 19px);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sg-card__sub {
+  font-size: clamp(10px, 1.35vmin, 13px);
+  color: var(--sg-dim);
+  line-height: 1.25;
+}
+
+.sg-card__tag {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 11px);
+  letter-spacing: 0.14em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--sg-line);
+  color: var(--sg-dim);
+  text-transform: uppercase;
+}
+
+.sg-card__tag[data-loco="hover"] {
+  color: var(--sg-violet);
+  border-color: rgba(180, 77, 255, 0.5);
+}
+.sg-card__tag[data-loco="flight"] {
+  color: var(--sg-cyan);
+  border-color: rgba(34, 211, 255, 0.5);
+}
+.sg-card__tag[data-loco="grounded"] {
+  color: var(--sg-orange);
+  border-color: rgba(255, 139, 47, 0.5);
+}
+
+/* --- detail panel ------------------------------------------------------- */
+
+.sg-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.2vmin, 14px);
+  padding: clamp(10px, 1.8vmin, 20px);
+  border-radius: var(--sg-r-lg);
+  background: rgba(10, 17, 32, 0.8);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.12);
+  overflow-y: auto;
+}
+
+.sg-detail__name {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(20px, 3.4vmin, 40px);
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.sg-detail__nick {
+  font-size: clamp(11px, 1.6vmin, 16px);
+  color: var(--sg-gold);
+  font-style: italic;
+  letter-spacing: 0.04em;
+}
+
+.sg-stats {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 0.9vmin, 9px);
+  margin-top: 4px;
+}
+
+.sg-stat {
+  display: grid;
+  grid-template-columns: 4.6em 1fr 2.1em;
+  align-items: center;
+  gap: 8px;
+}
+
+.sg-stat__k {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 12px);
+  letter-spacing: 0.14em;
+  color: var(--sg-dim);
+  text-transform: uppercase;
+}
+
+.sg-stat__track {
+  height: clamp(9px, 1.5vmin, 15px);
+  border-radius: 3px;
+  background: rgba(122, 190, 255, 0.12);
+  overflow: hidden;
+  position: relative;
+  border: 1px solid rgba(122, 190, 255, 0.16);
+}
+
+.sg-stat__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(var(--v, 0));
+  background: linear-gradient(90deg, var(--sg-blue), var(--sg-cyan) 70%, #d6f6ff);
+  box-shadow: 0 0 10px rgba(34, 211, 255, 0.5);
+  transition: transform 200ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.sg-stat__v {
+  font-family: var(--sg-num);
+  font-size: clamp(10px, 1.5vmin, 14px);
+  text-align: right;
+  color: var(--sg-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.sg-detail__note {
+  margin-top: auto;
+  font-size: clamp(10px, 1.4vmin, 13px);
+  color: var(--sg-dim);
+  line-height: 1.45;
+  border-left: 3px solid var(--sg-line);
+  padding-left: 9px;
+}
+
+/* --- options row -------------------------------------------------------- */
+
+.sg-opts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: clamp(8px, 1.6vmin, 18px);
+}
+
+.sg-seg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sg-seg__k {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.25vmin, 12px);
+  letter-spacing: 0.2em;
+  color: var(--sg-mute);
+  text-transform: uppercase;
+}
+
+.sg-seg__grp {
+  display: flex;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 2px solid var(--sg-line);
+  background: rgba(10, 17, 32, 0.8);
+}
+
+.sg-seg__btn {
+  font-family: var(--sg-display);
+  font-size: clamp(10px, 1.4vmin, 14px);
+  letter-spacing: 0.12em;
+  padding: 0.42em 1em;
+  border: 0;
+  background: transparent;
+  color: var(--sg-dim);
+  cursor: pointer;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+.sg-seg__btn.is-sel {
+  background: var(--sg-cyan);
+  color: #06101c;
+}
+
+.sg-seg__btn:focus-visible {
+  outline: 2px solid var(--sg-white);
+  outline-offset: -3px;
+}
+
+.sg-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: clamp(10px, 1.35vmin, 13px);
+  color: var(--sg-dim);
+  letter-spacing: 0.04em;
+}
+
+.sg-key {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(24, 38, 66, 0.9);
+  border: 1px solid var(--sg-line);
+  border-bottom-width: 3px;
+  font-family: var(--sg-num);
+  font-size: 0.92em;
+  color: var(--sg-ink);
+}
+
+/* --- results ------------------------------------------------------------ */
+
+.sg-screen--results {
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 2vmin, 24px);
+}
+
+.sg-results__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(22px, 4.4vmin, 54px);
+  letter-spacing: 0.12em;
+  color: var(--sg-gold);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.5), 0 0 44px rgba(255, 210, 63, 0.4);
+  flex: none;
+}
+
+/* Which planet this result happened on. The HUD and the minimap say it during
+   the race; the results screen would otherwise be the one place a rematch
+   forgets where it is. */
+.sg-results__where {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.35vmin, 14px);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--sg-dim);
+  flex: none;
+  margin-top: -0.4em;
+  text-align: center;
+}
+
+.sg-results__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(720px, 100%);
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sg-row {
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto auto;
+  align-items: center;
+  gap: clamp(6px, 1.4vmin, 16px);
+  padding: clamp(5px, 1vmin, 10px) clamp(8px, 1.6vmin, 16px);
+  border-radius: var(--sg-r-md);
+  background: rgba(14, 22, 40, 0.82);
+  border: 2px solid rgba(122, 190, 255, 0.16);
+  border-left-width: 6px;
+  animation: sgRowIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+.sg-row.is-you {
+  border-color: var(--sg-cyan);
+  background: linear-gradient(
+    90deg,
+    rgba(34, 211, 255, 0.2),
+    rgba(14, 22, 40, 0.85) 55%
+  );
+}
+
+.sg-row.is-win {
+  border-left-color: var(--sg-gold);
+}
+
+.sg-row__p {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(16px, 2.6vmin, 30px);
+  color: var(--sg-ink);
+  text-align: center;
+}
+
+.sg-row.is-win .sg-row__p {
+  color: var(--sg-gold);
+}
+
+.sg-row__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sg-row__pilot {
+  font-family: var(--sg-display);
+  font-size: clamp(12px, 1.8vmin, 18px);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sg-row__chassis {
+  font-size: clamp(9px, 1.25vmin, 12px);
+  color: var(--sg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sg-row__time,
+.sg-row__best {
+  font-family: var(--sg-num);
+  font-size: clamp(11px, 1.6vmin, 16px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sg-row__best {
+  color: var(--sg-green);
+  font-size: clamp(9px, 1.35vmin, 13px);
+}
+
+.sg-results__meta {
+  display: flex;
+  gap: clamp(12px, 3vmin, 40px);
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.sg-meta {
+  text-align: center;
+}
+
+.sg-meta__k {
+  font-family: var(--sg-display);
+  font-size: clamp(8px, 1.15vmin, 12px);
+  letter-spacing: 0.24em;
+  color: var(--sg-mute);
+  text-transform: uppercase;
+}
+
+.sg-meta__v {
+  font-family: var(--sg-num);
+  font-size: clamp(16px, 2.8vmin, 32px);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-ink);
+}
+
+.sg-results__cta {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.8vmin, 20px);
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+@keyframes sgRowIn {
+  from {
+    opacity: 0;
+    transform: translate3d(-42px, 14px, 0) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* --- paused ------------------------------------------------------------- */
+
+.sg-screen--paused {
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 3vmin, 34px);
+  background: rgba(4, 7, 15, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.sg-paused__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(34px, 8vmin, 96px);
+  letter-spacing: 0.16em;
+  color: var(--sg-ink);
+  text-shadow: 0 6px 0 rgba(0, 0, 0, 0.5), 0 0 50px rgba(34, 211, 255, 0.35);
+}
+
+.sg-stack {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.6vmin, 16px);
+  width: min(360px, 82vw);
+}
+
+.sg-stack .sg-btn {
+  width: 100%;
+}
+
+/* --- front end responsive ---------------------------------------------- */
+
+@media (max-width: 900px) {
+  .sg-garage {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .sg-col--detail {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    max-height: 40vh;
+  }
+  .sg-col--chassis {
+    grid-row: 2;
+  }
+  .sg-col--pilot {
+    grid-row: 2;
+  }
+}
+
+/* The track grid reflows LATER than the garage (820px, not 900px) on purpose.
+   The garage's middle column is a stat read-out that needs width; the track
+   grid's is a map, which is happy in a narrow column and very unhappy in a
+   short one. The device this matters for is a landscape phone — 844x390, all
+   width and no height — where three columns is the layout that fits. Portrait
+   tablets and phones, which are narrow and tall, do stack. */
+@media (max-width: 820px) {
+  .sg-tracks {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .sg-col--route {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    max-height: 34vh;
+  }
+  .sg-col--circuits,
+  .sg-col--brief {
+    grid-row: 2;
+  }
+}
+
+/* A landscape phone leaves the briefing about 215px of column. Spend it on the
+   things that decide which circuit you pick — the name, the hook, the
+   difficulty and the surface mix — and drop the elevation profile, whose job
+   (shape of the lap) the route map is already doing two columns to the left. */
+@media (max-height: 520px) {
+  /* Give the width back to the briefing: the route map has slack to spare in
+     this aspect and the briefing is the column running out of room. */
+  .sg-tracks {
+    grid-template-columns: 0.95fr 1fr 1.45fr;
+  }
+  .sg-detail--track {
+    gap: 4px;
+  }
+  .sg-trk__label--row,
+  .sg-trk__elev {
+    display: none;
+  }
+  .sg-trk__chips {
+    gap: 4px;
+  }
+  .sg-chip {
+    padding: 2px 6px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sg-opts {
+    justify-content: center;
+  }
+  .sg-controls {
+    width: 100%;
+    justify-content: center;
+  }
+  .sg-row {
+    grid-template-columns: 2em 1fr auto;
+  }
+  .sg-row__best {
+    display: none;
+  }
+  .sg-tracks {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+  .sg-col--route {
+    grid-column: 1;
+    grid-row: 1;
+    max-height: 30vh;
+  }
+  .sg-col--circuits {
+    grid-row: 2;
+  }
+  .sg-col--brief {
+    grid-row: 3;
+  }
+  .sg-trk__facts {
+    grid-template-columns: repeat(3, minmax(0, auto));
+    justify-content: start;
+    column-gap: clamp(12px, 5vw, 28px);
+  }
+}
+
+/* ==========================================================================
+   REDUCED MOTION — kill shake, flashes and heavy transitions
+   ========================================================================== */
+
+/* ==========================================================================
+   ENCOURAGEMENT CALLOUTS
+   Centred horizontally, a third of the way down. On the chase rig the horizon
+   sits near the middle of the frame and the road the player is steering by
+   fills the bottom half, so this band is sky and the racing line is never
+   under text. No panel, no scrim, no border — the legibility is a dark halo
+   on the glyphs themselves, which occludes a few hundred pixels instead of a
+   bar across the screen.
+   ========================================================================== */
+
+.sg-cheer {
+  position: absolute;
+  left: 50%;
+  top: 33%;
+  /* The root owns POSITION and OPACITY and nothing else. Every moving part of
+     the presentation lives on the two children, so the box this thing occupies
+     — the number the placement is argued from — is a plain layout box that no
+     animation can walk down the frame. */
+  transform: translate(-50%, -50%);
+  opacity: var(--k, 0);
+  pointer-events: none;
+  text-align: center;
+  max-width: min(84vw, 940px);
+  will-change: opacity;
+  z-index: 2;
+
+  /* The escalation ladder, in four numbers, all keyed off data-w below.
+     --amp  how hard the entrance stamps
+     --dur  how long it takes to settle
+     --wo   peak opacity of the shockwave; 0 means there is no shockwave */
+  --amp: 1;
+  --dur: 320ms;
+  --wo: 0;
+}
+
+/* The shockwave. An ellipse of the line's own hue that blooms out from behind
+   the words and is gone in half a second: no hard edge at its centre, nothing
+   left behind, and no rectangle at any point in its life. At rest it is fully
+   transparent, which is the correct resting state for a thing that carries no
+   information — the opposite of the rule the line follows. */
+.sg-cheer__wave {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 160%;
+  height: 250%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.62);
+  /* Three soft stops and NO border. A solid stroke on the box edge reads as a
+     capsule outline drawn around the words -- a panel by another name -- which
+     is the one shape this widget is not allowed to make. An annulus with no
+     hard edge anywhere reads as a wave leaving the words instead. */
+  background:
+    radial-gradient(
+      closest-side ellipse at 50% 50%,
+      rgba(0, 0, 0, 0) 48%,
+      var(--cw, rgba(122, 190, 255, 0.26)) 72%,
+      rgba(0, 0, 0, 0) 96%
+    ),
+    /* A dark shoulder outside the ring, so it separates even against a sky of
+       its own hue -- Rustfall's is orange and a Nova is gold. Same trick the
+       glyphs' own outline plays, at a fifth of the strength. */
+    radial-gradient(
+      closest-side ellipse at 50% 50%,
+      rgba(0, 0, 0, 0) 66%,
+      rgba(2, 5, 12, 0.16) 86%,
+      rgba(0, 0, 0, 0) 100%
+    ),
+    radial-gradient(
+      closest-side ellipse at 50% 50%,
+      var(--cw, rgba(122, 190, 255, 0.26)) 0%,
+      rgba(0, 0, 0, 0) 55%
+    );
+  will-change: transform, opacity;
+}
+
+.sg-cheer__line {
+  /* Positioned so it paints ABOVE the absolutely-positioned wave behind it. */
+  position: relative;
+  z-index: 1;
+  font-family: var(--sg-display);
+  font-style: italic;
+  letter-spacing: 0.10em;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--cc, var(--sg-ink));
+  /* Two stacked shadows: a tight dark outline that survives a white sky, and a
+     wide soft one in the line's own hue that lifts it off dark tarmac. Neither
+     paints a rectangle, so the road behind stays visible through the gaps. */
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.85),
+    0 0 4px rgba(2, 5, 12, 0.95),
+    0 0 26px var(--cg, rgba(122, 190, 255, 0.55));
+  transform-origin: 50% 55%;
+  will-change: transform;
+}
+
+/* Weight climbs with the tier. This IS the escalation, on screen: a Spark
+   tier-up is a small grey-blue whisper that barely twitches; a cashed
+   Singularity is white, twice the size, lands with a stamp, throws a
+   shockwave and wears a chromatic fringe nothing below it has. */
+.sg-cheer[data-w="0"] {
+  --amp: 0.42;
+  --dur: 240ms;
+}
+.sg-cheer[data-w="0"] .sg-cheer__line {
+  font-size: clamp(15px, 2.6vmin, 31px);
+  opacity: 0.88;
+}
+
+.sg-cheer[data-w="1"] {
+  --amp: 0.68;
+  --dur: 285ms;
+}
+.sg-cheer[data-w="1"] .sg-cheer__line {
+  font-size: clamp(18px, 3.5vmin, 42px);
+}
+
+.sg-cheer[data-w="2"] {
+  --amp: 1;
+  --dur: 350ms;
+  --wo: 0.75;
+}
+.sg-cheer[data-w="2"] .sg-cheer__line {
+  font-size: clamp(23px, 4.5vmin, 54px);
+}
+
+.sg-cheer[data-w="3"] {
+  --amp: 1.32;
+  --dur: 420ms;
+  --wo: 1;
+}
+.sg-cheer[data-w="3"] .sg-cheer__line {
+  font-size: clamp(29px, 5.7vmin, 68px);
+  letter-spacing: 0.13em;
+  /* CHROMATIC SEPARATION, top rung only. Two fringes either side of the glyph,
+     inside its own footprint plus two pixels, so it occludes nothing new. The
+     dark pair stays first in the list and therefore nearest the glyph: that
+     outline is what keeps white text readable against a white sky, and it is
+     not allowed to be pushed out from under the fill by a decoration.
+     Static — a look, not a movement — so reduced motion keeps it. */
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.85),
+    0 0 4px rgba(2, 5, 12, 0.95),
+    -0.05em 0 0 rgba(255, 47, 122, 0.62),
+    0.05em 0 0 rgba(34, 211, 255, 0.62),
+    0 0 30px var(--cg, rgba(122, 190, 255, 0.55));
+}
+
+/* --- the entrance ---------------------------------------------------------
+   Impact, then settle: the line arrives large, leaning and slightly high,
+   overshoots a little past its resting size and lands. NO FILL MODE on any of
+   these, by design — at rest the elements fall back to the rules above, which
+   are the correct visible state. This codebase has already shipped a panel
+   that an `animation: … both` parked at opacity 0; an animation here can only
+   ever add to something that already reads.
+
+   Two identical copies of each, selected by data-beat, which cheer.ts flips on
+   every line. That is what restarts them when a bigger line replaces one that
+   is still on screen, without a forced reflow in the middle of the frame.
+   -------------------------------------------------------------------------- */
+
+@keyframes sg-cheer-in-a {
+  0% {
+    transform: translate3d(0, calc(-0.16em * var(--amp)), 0)
+      scale(calc(1 + 0.2 * var(--amp)), calc(1 + 0.12 * var(--amp)))
+      skewX(calc(-9deg * var(--amp)));
+  }
+  42% {
+    transform: translate3d(0, 0, 0)
+      scale(calc(1 - 0.05 * var(--amp)), calc(1 - 0.03 * var(--amp)))
+      skewX(calc(1.4deg * var(--amp)));
+  }
+  72% {
+    transform: translate3d(0, 0, 0)
+      scale(calc(1 + 0.018 * var(--amp)), calc(1 + 0.012 * var(--amp)))
+      skewX(calc(-0.4deg * var(--amp)));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1, 1) skewX(0deg);
+  }
+}
+
+@keyframes sg-cheer-in-b {
+  0% {
+    transform: translate3d(0, calc(-0.16em * var(--amp)), 0)
+      scale(calc(1 + 0.2 * var(--amp)), calc(1 + 0.12 * var(--amp)))
+      skewX(calc(-9deg * var(--amp)));
+  }
+  42% {
+    transform: translate3d(0, 0, 0)
+      scale(calc(1 - 0.05 * var(--amp)), calc(1 - 0.03 * var(--amp)))
+      skewX(calc(1.4deg * var(--amp)));
+  }
+  72% {
+    transform: translate3d(0, 0, 0)
+      scale(calc(1 + 0.018 * var(--amp)), calc(1 + 0.012 * var(--amp)))
+      skewX(calc(-0.4deg * var(--amp)));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1, 1) skewX(0deg);
+  }
+}
+
+@keyframes sg-cheer-wave-a {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.62);
+  }
+  20% {
+    opacity: var(--wo, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.45);
+  }
+}
+
+@keyframes sg-cheer-wave-b {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.62);
+  }
+  20% {
+    opacity: var(--wo, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.45);
+  }
+}
+
+.sg-cheer[data-beat="0"] .sg-cheer__line {
+  animation: sg-cheer-in-a var(--dur) cubic-bezier(0.16, 0.88, 0.3, 1) 1;
+}
+.sg-cheer[data-beat="1"] .sg-cheer__line {
+  animation: sg-cheer-in-b var(--dur) cubic-bezier(0.16, 0.88, 0.3, 1) 1;
+}
+/* The wave runs on every rung and is simply worth zero opacity below Nova,
+   which is cheaper than four more selectors and keeps the timing identical. */
+.sg-cheer[data-beat="0"] .sg-cheer__wave {
+  animation: sg-cheer-wave-a calc(var(--dur) * 1.5) ease-out 1;
+}
+.sg-cheer[data-beat="1"] .sg-cheer__wave {
+  animation: sg-cheer-wave-b calc(var(--dur) * 1.5) ease-out 1;
+}
+
+/* ==========================================================================
+   THE FINISH CEREMONY
+   The camera has left the chase rig to orbit the car, so the middle of the
+   frame is the shot and nothing may sit in it. The card goes high, the field
+   counter and the skip control go low.
+   ========================================================================== */
+
+/* Everything that describes a car the player is no longer driving. */
+.sg-hud.is-ceremony .sg-hud__gauge,
+.sg-hud.is-ceremony .sg-hud__items,
+.sg-hud.is-ceremony .sg-hud__charge,
+.sg-hud.is-ceremony .sg-hud__lift,
+.sg-hud.is-ceremony .sg-hud__warns,
+.sg-hud.is-ceremony .sg-hud__pos,
+.sg-hud.is-ceremony .sg-map__meta,
+.sg-hud.is-ceremony .sg-cheer {
+  display: none;
+}
+
+.sg-fin {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  /* ONE COLUMN, SPELLED OUT. Leaving the columns implicit put the field
+     counter and the skip button -- both grid-row 3 -- into two auto columns,
+     which then stretched to half the screen each, and the "centred" card
+     landed at 25% and the button at 75%. Four explicit rows, one explicit
+     column, one item per row. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto auto;
+  justify-items: center;
+  padding: calc(var(--sg-pad) + var(--sg-sat)) 0 calc(var(--sg-pad) + var(--sg-sab));
+  z-index: 3;
+}
+
+.sg-fin__card {
+  grid-row: 1;
+  text-align: center;
+  animation: sg-fin-in 620ms cubic-bezier(0.16, 0.9, 0.28, 1) both;
+}
+
+.sg-fin__label {
+  font-family: var(--sg-ui);
+  font-size: clamp(10px, 1.5vmin, 15px);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: var(--sg-dim);
+}
+
+.sg-fin__place {
+  font-family: var(--sg-display);
+  font-style: italic;
+  line-height: 0.92;
+  color: var(--fc, var(--sg-ink));
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.55), 0 0 46px var(--fg, rgba(122, 190, 255, 0.5));
+}
+
+.sg-fin[data-rank='win'] {
+  --fc: var(--sg-gold);
+  --fg: rgba(255, 210, 63, 0.75);
+}
+.sg-fin[data-rank='podium'] {
+  --fc: #dff0ff;
+  --fg: rgba(122, 214, 255, 0.6);
+}
+.sg-fin[data-rank='ran'] {
+  --fc: var(--sg-ink);
+  --fg: rgba(122, 190, 255, 0.35);
+}
+
+.sg-fin__num {
+  font-size: clamp(52px, 11vmin, 128px);
+  letter-spacing: -0.04em;
+}
+
+.sg-fin__ord {
+  font-size: clamp(22px, 4.4vmin, 52px);
+  letter-spacing: 0.02em;
+}
+
+.sg-fin__time {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(15px, 2.4vmin, 28px);
+  letter-spacing: 0.06em;
+  color: var(--sg-ink);
+  margin-top: 0.15em;
+}
+
+.sg-fin__field {
+  grid-row: 3;
+  font-family: var(--sg-ui);
+  font-size: clamp(11px, 1.6vmin, 16px);
+  letter-spacing: 0.18em;
+  color: var(--sg-dim);
+  margin-bottom: 8px;
+  /* It sits low in the frame, which is where the cars are. The HUD's own
+     shadow is not enough against a lit chassis crossing under it. */
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px rgba(2, 5, 12, 0.95);
+}
+
+.sg-fin__skip {
+  grid-row: 4;
+  align-self: end;
+  pointer-events: auto;
+  appearance: none;
+  font: inherit;
+  font-family: var(--sg-ui);
+  font-size: clamp(12px, 1.8vmin, 17px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sg-ink);
+  background: rgba(8, 14, 28, 0.72);
+  border: 1px solid var(--sg-line);
+  border-radius: 999px;
+  padding: 10px 26px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, opacity 200ms ease;
+}
+
+.sg-fin__skip:hover:not(:disabled),
+.sg-fin__skip:focus-visible {
+  background: rgba(18, 32, 58, 0.9);
+  border-color: var(--sg-line-hot);
+  outline: none;
+}
+
+.sg-fin__skip:disabled {
+  opacity: 0;
+  cursor: default;
+}
+
+@keyframes sg-fin-in {
+  from {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The field counter and the button share the bottom row; stack them so they
+   never overlap on a short viewport. */
+@media (max-width: 860px), (max-height: 540px) {
+  /* A landscape phone has ~390px of height. The bottom strip is already the
+     skip button, and the field counter down there lands on top of whatever
+     car is crossing the frame, so it moves up under the card instead. */
+  .sg-fin__field {
+    grid-row: 2;
+    align-self: start;
+    margin-bottom: 0;
+  }
+  .sg-fin__skip {
+    padding: 9px 20px;
+  }
+  /* The callout drops a little on a landscape phone: 33% of 390px is only
+     129px down, which on a 844x390 viewport is where the horizon actually
+     sits. 38% keeps it in sky. */
+  .sg-cheer {
+    top: 38%;
+    max-width: 84vw;
+  }
+  /* Shallower on a 390px-tall frame: the wave is measured in multiples of the
+     line's own height, and at full expansion the tall version would put its
+     outer edge on the horizon. */
+  .sg-cheer__wave {
+    height: 195%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-row {
+    animation: none !important;
+  }
+  /* Both of these are enhancements over a resting state that is already
+     correct — the map is drawn and the panel is opaque with the animation off,
+     so killing them here removes motion and nothing else. */
+  .sg-trk__map.is-in .sg-trk__svg,
+  .sg-trk__map.is-in .sg-trk__line {
+    animation: none !important;
+  }
+  .sg-btn,
+  .sg-card,
+  .sg-stat__fill,
+  .sg-gauge__ringFill {
+    transition: none !important;
+  }
+  .sg-hud__charge {
+    transform: none !important;
+  }
+  .sg-gauge__ringSnap {
+    display: none;
+  }
+  .sg-pos {
+    transform: none !important;
+  }
+  .sg-ctr__count {
+    transform: none !important;
+  }
+  .sg-slot__box {
+    transform: none !important;
+  }
+  .sg-hud__lift.is-low .sg-lift__fill {
+    opacity: 1 !important;
+  }
+  .sg-ctr__spinTxt {
+    transform: none !important;
+  }
+  /* Callouts fade, and that is the whole of it: they never stamp, never skew,
+     never slide, never flicker, and the shockwave does not exist. Opacity is
+     driven from JS, and every element's resting state is already the readable
+     one, so nothing below removes anything the player needs to see -- the
+     words are still there, still the escalating size, still wearing the
+     Singularity fringe, which is a colour rather than a movement. */
+  .sg-cheer {
+    transform: translate(-50%, -50%) !important;
+  }
+  .sg-cheer__line,
+  .sg-cheer__wave {
+    animation: none !important;
+  }
+  .sg-cheer__line {
+    transform: none !important;
+  }
+  .sg-cheer__wave {
+    opacity: 0 !important;
+  }
+  .sg-fin__card {
+    animation: none !important;
+  }
+}

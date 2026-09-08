@@ -1,0 +1,34 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Playwright is a devDependency used only by tools/smoke.mjs, which runs
+  # locally against a real Chromium. Netlify installs devDependencies, and
+  # playwright's postinstall downloads ~150MB of browsers it will never open.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+  # The build is `tsc --noEmit && vite build`, so a type error fails the deploy
+  # rather than shipping a broken bundle. That is deliberate.
+
+# Hashed bundles are immutable; the shell must always revalidate so a new
+# deploy is picked up rather than served from a stale cache.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
