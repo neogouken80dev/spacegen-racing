@@ -109,6 +109,7 @@ export class Game {
   private skipArmed = false
 
   // Adaptive quality
+  private resizeObs: ResizeObserver | null = null
   private frameTimes: number[] = []
   private frameIdx = 0
   private qualityCooldown = 0
@@ -200,6 +201,17 @@ export class Game {
     }
 
     window.addEventListener('resize', this.onResize)
+    window.addEventListener('orientationchange', this.onResize)
+    // The visual viewport moves independently of the layout viewport when a
+    // mobile URL bar slides away; the window does not always hear about it.
+    window.visualViewport?.addEventListener('resize', this.onResize)
+    // And the element itself, which is the thing that actually has to match:
+    // a ResizeObserver fires AFTER layout, so it reports the size the page
+    // settled on rather than one it was passing through.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObs = new ResizeObserver(() => this.syncSize())
+      this.resizeObs.observe(this.container)
+    }
     document.addEventListener('visibilitychange', this.onVisibility)
 
     this.onResize()
@@ -537,6 +549,9 @@ export class Game {
   // -------------------------------------------------------------------------
   private readonly loop = (now: number): void => {
     this.raf = requestAnimationFrame(this.loop)
+    // Before anything is drawn. See the note on syncSize: the shape of the
+    // picture is an invariant we check, not an event we hope arrives.
+    this.syncSize()
     const rawDt = Math.min(0.25, (now - this.lastTime) / 1000)
     this.lastTime = now
     if (rawDt <= 0) return
@@ -747,12 +762,52 @@ export class Game {
   }
 
   // -------------------------------------------------------------------------
-  private readonly onResize = (): void => {
+  /**
+   * KEEPING THE PICTURE THE RIGHT SHAPE.
+   *
+   * A perspective camera whose `aspect` matches the surface it renders to
+   * cannot distort anything -- so every stretched frame is a frame where those
+   * two disagreed, and the ONLY way they disagree is if the surface changed
+   * and nothing told the camera.
+   *
+   * This used to be subscribed to `window.resize` alone, and on a phone that is
+   * not enough. Rotating to landscape fires resize while the layout viewport is
+   * still mid-transition, so the handler samples a size the page is about to
+   * stop having; the URL bar sliding away resizes the visual viewport without
+   * necessarily firing it again; and an element can change size for reasons the
+   * window never hears about at all. Whatever the camera latched onto in that
+   * moment then persists for the rest of the session, and the whole image is
+   * scaled by the ratio between the two -- a portrait aspect held on a
+   * landscape canvas stretches everything horizontally by nearly five times.
+   * Reported from play, twice, as the car looking flattened.
+   *
+   * So the size is no longer something we are TOLD about. `syncSize` below is
+   * called every frame and reconciles the three numbers that must agree; the
+   * listeners are kept only so the correction lands on the same frame as the
+   * change rather than the one after it.
+   */
+  private readonly onResize = (): void => { this.syncSize() }
+
+  /** Last size actually pushed to the renderer, so the per-frame check is a
+   *  pair of float compares and not a stream of redundant GL calls. */
+  private sizedW = -1
+  private sizedH = -1
+
+  /**
+   * Reconcile canvas size, renderer size and camera aspect. Cheap enough to run
+   * unconditionally: two reads and two compares when nothing has moved, which
+   * is every frame but the handful where something has.
+   */
+  private syncSize(): void {
     const w = this.container.clientWidth || window.innerWidth
     const h = this.container.clientHeight || window.innerHeight
+    if (w <= 0 || h <= 0) return
+    if (w === this.sizedW && h === this.sizedH) return
+    this.sizedW = w
+    this.sizedH = h
     this.renderer.setSize(w, h, false)
     this.applyRenderScale()
-    this.chase.resize(w / Math.max(1, h))
+    this.chase.resize(w / h)
     this.post?.resize(w, h)
   }
 
@@ -768,6 +823,10 @@ export class Game {
   dispose(): void {
     cancelAnimationFrame(this.raf)
     window.removeEventListener('resize', this.onResize)
+    window.removeEventListener('orientationchange', this.onResize)
+    window.visualViewport?.removeEventListener('resize', this.onResize)
+    this.resizeObs?.disconnect()
+    this.resizeObs = null
     document.removeEventListener('visibilitychange', this.onVisibility)
     this.teardownWorld()
     disposeVehicleCache()
