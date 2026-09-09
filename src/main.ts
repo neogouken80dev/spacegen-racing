@@ -7,7 +7,12 @@ const start = (): void => {
   // game from starting.
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').catch(() => {})
+      // updateViaCache 'none' keeps the browser's HTTP cache away from sw.js
+      // itself, so a new worker is actually noticed on the next visit rather
+      // than after the old script's max-age expires.
+      navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+        .then((reg) => { reg.update().catch(() => {}) })
+        .catch(() => {})
     })
   }
 }
