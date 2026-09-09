@@ -105,6 +105,7 @@ export class Race {
         vertVel: 0,
         grounded: true,
         wallTime: 0,
+        windPush: 0,
         driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false,
         driftTime: 0,
         chainStacks: 0, chainWindow: 0,

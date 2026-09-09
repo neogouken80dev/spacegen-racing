@@ -21,7 +21,7 @@ import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
 import { createInput, type InputManager } from './input'
 import { ChaseCamera } from './camera'
 import { clamp01 } from '../sim/math'
-import type { VfxSystem, TrackVisual, EnvironmentVisual } from '../render/api'
+import type { VfxSystem, TrackVisual, EnvironmentVisual, CrosswindFrame } from '../render/api'
 
 const DT = T.sim.dt
 const RACER_COUNT = 8
@@ -88,6 +88,17 @@ export class Game {
   private selection = { chassisId: 'solaire', pilotId: 'pip' }
   private raf = 0
   private reduceMotion = false
+  /**
+   * This frame's crosswind, refilled in place and handed to the environment.
+   *
+   * One long-lived object rather than a literal per frame: renderFrame runs at
+   * display rate and this is the render loop's hot path, so allocating a Vec3
+   * and a wrapper here is 120 objects a second for the garbage collector to
+   * find during a race.
+   */
+  private readonly wind: CrosswindFrame = {
+    push: 0, right: { x: 1, y: 0, z: 0 }, reduceMotion: false,
+  }
   /**
    * The player's visual-intensity choice, 0..1 each. Held here rather than
    * only inside PostFx because the adaptive scaler destroys and rebuilds the
@@ -725,7 +736,23 @@ export class Game {
       }
       this.vfx?.update(dt, st, this.chase.camera.position, this.localId)
       this.trackVis?.update(dt, st.time)
-      this.envVis?.update(dt, st.time, this.chase.camera.position)
+      // THE CROSSWIND, HANDED OVER RATHER THAN DERIVED.
+      //
+      // `windPush` is the acceleration the sim actually applied to this racer
+      // this frame — after the per-class scale and after the friction-budget
+      // cap — and `right` is the road's own banked, gravity-aware lateral. The
+      // environment recomputes neither; see CrosswindFrame in render/api.ts.
+      //
+      // The LIVE racer, not `localView`: the interpolated render copy is
+      // rebuilt from a JSON clone taken at spawn and lags a frame, and the
+      // wind is a force the player is fighting right now.
+      this.wind.push = local.windPush
+      const wsmp = this.track.at(local.splineS)
+      this.wind.right.x = wsmp.right.x
+      this.wind.right.y = wsmp.right.y
+      this.wind.right.z = wsmp.right.z
+      this.wind.reduceMotion = this.reduceMotion
+      this.envVis?.update(dt, st.time, this.chase.camera.position, this.wind)
       // Callouts BEFORE the HUD, so the HUD knows whether this frame's drift
       // release has already been announced up in the sky band and can stand
       // its own centre-screen flash down. Driven from here rather than from

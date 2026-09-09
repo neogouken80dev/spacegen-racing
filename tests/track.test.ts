@@ -270,6 +270,13 @@ describe.each([
       // and the crack ripple is a decal on the ice.
       if (mesh.name.startsWith('landmark-smelt') || mesh.name === 'heat-shimmer') continue
       if (mesh.name === 'crack-ripple') continue
+      // The crosswind debris is a CAMERA-ANCHORED volume, exactly like the
+      // motes and the fog banks — its instances wrap into a cube around the
+      // viewer in the vertex shader, so its buffer holds a seeded box at the
+      // origin and its world position is wherever the camera is. Asking
+      // whether it clears the road is the same question as asking whether the
+      // dust does. The other two escape this fixture only by being Points.
+      if (mesh.name === 'wind-debris') continue
       // Aetherion's void skin is a decal ON the phasing spans, 14 cm over the
       // deck, drawn only while the sim says that deck does not exist. It is on
       // the road on purpose and is the one thing in this file that is.

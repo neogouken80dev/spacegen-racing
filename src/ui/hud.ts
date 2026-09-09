@@ -108,6 +108,51 @@ const SPD_ARC = SPD_C * (240 / 360)
 /** Max drift charge = the last tier threshold. */
 const DRIFT_MAX = TUNING.drift.tierTimes[TUNING.drift.tierTimes.length - 1]
 
+/**
+ * THE CROSSWIND INDICATOR.
+ *
+ * Reported from play on The Hollow Choir: "I didn't have any visual cues of
+ * the crosswind to know what was going on." The blown debris in the world is
+ * the primary cue; this is the one that cannot be missed, cannot be mistaken
+ * for scenery, and survives a player who has turned reduced motion on.
+ *
+ * IT READS `RacerState.windPush`, which is the acceleration the sim ACTUALLY
+ * applied to this racer this frame — already scaled by the chassis's
+ * `fieldForceMult` and already capped against the friction budget. It is never
+ * recomputed from `TrackSample.wind`: the cap folds in the chassis, the
+ * surface, the vacuum and whether the car is airborne, and the HUD must agree
+ * with the tyres rather than with the level file.
+ *
+ * SIGN IS SCREEN DIRECTION, and it happens to need no conversion. Positive
+ * push is toward `TrackSample.right`, which is `forward x up`; the chase
+ * camera's own screen-right basis vector is also `forward x up`. So a positive
+ * push points the chevrons right because the car really is going right on
+ * screen. (At yaw 0 both are world MINUS X. This repo has had that backwards
+ * twice; it is written down here so the third time is caught.)
+ */
+const WIND_BARS = 4
+
+/** |windPush| in m/s^2 at which each rung lights. */
+const WIND_STEPS = [1.5, 5, 9, 12.5]
+
+/**
+ * Show / hide thresholds, m/s^2. Hysteresis, because a wind band ramps in and
+ * out over ~70 m and the bake carves calm air around every item-box row: a
+ * single threshold makes the widget blink on and off across those seams.
+ */
+const WIND_SHOW = 1.5
+const WIND_HIDE = 0.9
+
+/** Chevrons. Stroke only, so `currentColor` carries the lit state. */
+const CHEV_L =
+  '<svg class="sg-wind__chSvg" viewBox="0 0 12 16" aria-hidden="true">' +
+  '<path d="M9 2 L3 8 L9 14" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+const CHEV_R =
+  '<svg class="sg-wind__chSvg" viewBox="0 0 12 16" aria-hidden="true">' +
+  '<path d="M3 2 L9 8 L3 14" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
 const WARN_SLOTS = 4
 const WARN_ITEMS: ItemId[] = [
   'railMissile', 'seekerMissile', 'alphaMissile', 'voidMine', 'gravityWell',
@@ -367,6 +412,11 @@ class HudImpl implements Hud {
   // lift
   private readonly liftWrap: HTMLElement
 
+  // crosswind
+  private readonly windWrap: HTMLElement
+  /** [0] = the left-pointing ladder, [1] = the right-pointing one. */
+  private readonly windCh: HTMLElement[][] = []
+
   // warnings
   private readonly warns: WarnUi[] = []
 
@@ -414,6 +464,10 @@ class HudImpl implements Hud {
   private topSpeed = 60
   private isFlight = false
   private liftCap = 1
+  private windOn = false
+  /** 0 until the first update, so the first frame always writes the class. */
+  private windDir = 0
+  private lastWindBars = -1
 
   // viewport size, refreshed on resize only — never read from layout in update()
   private viewW = 1280
@@ -578,6 +632,33 @@ class HudImpl implements Hud {
     const liftTrack = div('sg-lift__track', this.liftWrap)
     div('sg-lift__fill', liftTrack)
     this.liftWrap.hidden = true
+
+    // --- LOWER CENTRE: crosswind ------------------------------------------
+    // Grid area `mc`, bottom-aligned: it sits directly above whatever is in
+    // the bottom-centre cell — the charge pill on desktop, the whole
+    // instrument strip on a phone — on BOTH layouts, without being a child of
+    // either. The compact band is 40 px tall on a 412 px-wide frame and every
+    // element in it has already been fought for; putting a fifth thing inside
+    // it is how that strip reaches the thumb clusters.
+    //
+    // Both ladders are built and exactly one is ever visible. The hidden side
+    // keeps its box (visibility, not display) so the pill does not change
+    // width when the wind changes sign, which on Aetherion's rotunda it does.
+    this.windWrap = div('sg-hud__wind', root)
+    const windL = div('sg-wind__arrows sg-wind__arrows--l', this.windWrap)
+    div('sg-wind__label', this.windWrap).textContent = 'WIND'
+    const windR = div('sg-wind__arrows sg-wind__arrows--r', this.windWrap)
+    const windHosts = [windL, windR]
+    for (let s = 0; s < 2; s++) {
+      const row: HTMLElement[] = []
+      for (let i = 0; i < WIND_BARS; i++) {
+        const c = div('sg-wind__ch', windHosts[s])
+        c.appendChild(svgFrom(s === 0 ? CHEV_L : CHEV_R))
+        row.push(c)
+      }
+      this.windCh.push(row)
+    }
+    this.windWrap.hidden = true
 
     // --- SCREEN EDGE: incoming warnings -----------------------------------
     const warnHost = div('sg-hud__warns', root)
@@ -849,6 +930,7 @@ class HudImpl implements Hud {
     this.updateGauge(r, dt)
     this.updateCharge(r, dt)
     this.updateLift(r, dt)
+    this.updateWind(r)
     this.updateWarnings(r, state)
     this.updateCentre(r, state, dt)
     this.updateMap(state, track, r)
@@ -1209,6 +1291,45 @@ class HudImpl implements Hud {
       this.liftWrap.style.setProperty(
         '--blink', (0.45 + 0.55 * Math.abs(Math.sin(this.blinkPhase))).toFixed(2),
       )
+    }
+  }
+
+  /**
+   * The crosswind indicator. See WIND_BARS for what it reads and why.
+   *
+   * No dt, no timers, no easing: this is the one channel that must not lag.
+   * `windPush` already carries the gust envelope, so the ladder breathes on
+   * its own, and the hysteresis on WIND_SHOW / WIND_HIDE is the only smoothing
+   * there is.
+   */
+  private updateWind(r: RacerState): void {
+    const push = r.windPush
+    const mag = push < 0 ? -push : push
+    const on = this.windOn ? mag >= WIND_HIDE : mag >= WIND_SHOW
+    if (on !== this.windOn) {
+      this.windOn = on
+      this.windWrap.hidden = !on
+    }
+    if (!on) return
+
+    const dir = push >= 0 ? 1 : -1
+    if (dir !== this.windDir) {
+      this.windDir = dir
+      this.windWrap.classList.toggle('is-right', dir > 0)
+      this.windWrap.classList.toggle('is-left', dir < 0)
+    }
+
+    let bars = 0
+    while (bars < WIND_STEPS.length && mag >= WIND_STEPS[bars]) bars++
+    if (bars !== this.lastWindBars) {
+      this.lastWindBars = bars
+      for (let s = 0; s < 2; s++) {
+        const row = this.windCh[s]
+        for (let i = 0; i < row.length; i++) {
+          const lit = i < bars
+          if (row[i].classList.contains('is-on') !== lit) row[i].classList.toggle('is-on', lit)
+        }
+      }
     }
   }
 

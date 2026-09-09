@@ -960,10 +960,68 @@ export function stepVehicle(
     const gust = 1
       + T.hazard.windGustDepth * Math.sin(ctx.raceTime * (Math.PI * 2 / T.hazard.windGustPeriod))
       + T.hazard.windRippleDepth * Math.sin(ctx.raceTime * (Math.PI * 2 / T.hazard.windRipplePeriod))
-    const push = smp.wind * T.hazard.windScale * gust * loco.fieldForceMult * DT
+    // -----------------------------------------------------------------------
+    // THE CAP, AND WHY IT HAD TO EXIST.
+    //
+    // Reported from play: "there are portions of the track where I try to
+    // turn, but it pushes me to the right." Measured, and he was right twice
+    // over.
+    //
+    // This push was an UNBOUNDED external acceleration. It is added here,
+    // outside the friction budget, so nothing in the model ever asked whether
+    // the tyres could resist it -- and on the two windy circuits they could
+    // not. The Hollow Choir's Ribs author 26 m/s^2; the gust envelope
+    // (windGustDepth 0.45 + windRippleDepth 0.18) multiplies the AUTHORED
+    // number by 1.63, so what a player actually meets is 42.4, against a total
+    // lateral budget of 36.5 for Solaire. At the Fall's turn-in, where the
+    // vacuum has already taken 42% of the grip, it ran 176-308% of budget
+    // depending on chassis. Above 100% there is no steering input that wins:
+    // the car goes right because the arithmetic says so.
+    //
+    // The A/B says the same thing without any theory -- same driver, same lap,
+    // wind on vs wind off, worst displacement +31.3 m on a 20 m half-width.
+    // The wind alone moved the car 156% of the way to the barrier. Aetherion
+    // 130%. Cryostatic, which authors 7, came in at 4% -- which is what this
+    // mechanic is supposed to feel like and is the control that says the model
+    // was never wrong, only the magnitude.
+    //
+    // WHY NO GATE CAUGHT IT. The balance harness measures win share, and
+    // stepAI derives its corner speed from this same `gripAccel` -- so the AI
+    // never tries to turn harder than it can and never reports that it failed
+    // to. 22/26 were chosen because they moved Vector-7 from 27.2% of wins to
+    // 17.0%: a BALANCE number, spent as a FEEL force. This is the exact hole
+    // the Phase 1 human gate exists to cover, and it took one lap to find.
+    //
+    // THE FIX IS A CEILING, NOT SMALLER NUMBERS. Capping against `gripAccel`
+    // -- which already folds in the surface, the vacuum, off-track and being
+    // airborne -- means the wind is automatically gentle exactly where grip is
+    // scarce, on every track, including ones not written yet. Lowering the
+    // authored values would have fixed the Ribs and left the vacuum corner
+    // broken, because there the budget collapses under a fixed wind.
+    //
+    // THE CLASS CONTRACT SURVIVES because the share scales with
+    // `fieldForceMult`: grounded may lose 35% of its budget to the wind, hover
+    // 52%, flight 63%. The flight tax is still nearly double the grounded one
+    // -- that is what the wind is FOR -- but every class keeps enough budget
+    // to steer with. `windGripCeiling` is the backstop that holds even if
+    // someone raises the share or authors a new class.
+    // -----------------------------------------------------------------------
+    const share = Math.min(T.hazard.windGripShare * loco.fieldForceMult, T.hazard.windGripCeiling)
+    const ceiling = gripAccel * share
+    const want = smp.wind * T.hazard.windScale * gust * loco.fieldForceMult
+    const accel = clamp(want, -ceiling, ceiling)
+    const push = accel * DT
     r.vel.x += smp.right.x * push
     r.vel.z += smp.right.z * push
     if (_grav) r.vel.y += smp.right.y * push
+    // Published for the art. The renderer must NEVER recompute this: the
+    // ceiling depends on the chassis, the surface, the vacuum and whether the
+    // car is airborne, and a second copy of that arithmetic in the render
+    // layer is precisely how the AI's corner model drifted away from the
+    // physics for the first eight passes of this project.
+    r.windPush = accel
+  } else {
+    r.windPush = 0
   }
 
   // -------------------------------------------------------------------------

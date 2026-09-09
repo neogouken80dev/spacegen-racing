@@ -68,7 +68,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
       z: p.z + smp.normal.z * loco.rideHeight,
     },
     vel: { x: smp.tangent.x * speed, y: smp.tangent.y * speed, z: smp.tangent.z * speed },
-    yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0,
+    yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: smp.tangent.x, y: smp.tangent.y, z: smp.tangent.z },
     up: { x: smp.normal.x, y: smp.normal.y, z: smp.normal.z },
     driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,

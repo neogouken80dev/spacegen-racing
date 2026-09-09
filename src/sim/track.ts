@@ -515,6 +515,57 @@ export class Track {
       }
     }
 
+    // -------------------------------------------------------------------------
+    // CALM AIR AROUND THE ITEM BOXES.
+    //
+    // Reported from play on the Hollow Choir: "I noticed it on straights where
+    // supply boxes are. I couldn't get the supply boxes and it was annoying."
+    // That is not bad luck, it is a collision between two deliberate choices.
+    // The crosswind is AIMED at the straights -- it is the one tax on this
+    // circuit that charges the flight class, which is strongest where the road
+    // is straight -- and the item rows are on the straights too, because a row
+    // has to sit on the driven line or the AI never takes it. So the two
+    // systems were authored onto the same metres by two different arguments,
+    // and neither author noticed.
+    //
+    // A pickup is a LATERAL AIMING TASK with one attempt and no feedback until
+    // it has already failed. That is the one thing a crosswind must not be
+    // laid over: everywhere else the wind costs line, which the player can see
+    // and trade against, but here it silently converts a skill into a coin
+    // flip. Rows are 4-4.4m spreads of 2.4m boxes -- half a car width of
+    // margin -- so even a modest push is the difference between a hit and a
+    // miss.
+    //
+    // Done in the BAKE rather than in each track's wind function on purpose:
+    // the calm is a property of where the boxes are, so it must follow them.
+    // Move a row and the quiet air moves with it; add a track with wind and
+    // boxes and it is already handled. Four hand-edited wind envelopes would
+    // have drifted out of sync the first time a row moved by 20 metres.
+    //
+    // Asymmetric, because the task is: you need clear air on the APPROACH to
+    // line up, and almost none after the box is behind you.
+    // -------------------------------------------------------------------------
+    if (def.itemBoxRows.length > 0) {
+      const { itemCalmBefore: before, itemCalmAfter: after, itemCalmFade: fade } = TUNING.hazard
+      const m = this.samples.length
+      for (let i = 0; i < m; i++) {
+        const smp = this.samples[i]
+        if (smp.wind === 0) continue
+        const s = (i / m) * this.length
+        let calm = 1
+        for (const row of def.itemBoxRows) {
+          // Signed gap to the row, wrapped to [-L/2, L/2]. Negative means the
+          // row is still AHEAD of this sample, which is the approach.
+          let d = s - row.at * this.length
+          d -= Math.round(d / this.length) * this.length
+          const reach = d < 0 ? before : after
+          const t = clamp((Math.abs(d) - reach) / Math.max(1e-6, fade), 0, 1)
+          calm = Math.min(calm, t * t * (3 - 2 * t))
+        }
+        smp.wind *= calm
+      }
+    }
+
     // The permanent-deck twins. Built LAST so they carry the ramp pass, and
     // built only where the deck actually phases -- `safeHalf` stays entirely
     // empty on a track that authors no `phase`, which is what keeps `project()`

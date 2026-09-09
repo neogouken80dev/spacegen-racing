@@ -59,7 +59,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number): Racer
     id: 0, chassisId, pilotId: 'pip', isAI: false, isLocal: false, aiSkill: 4,
     pos: { x: p.x, y: p.y + smp.normal.y * loco.rideHeight, z: p.z },
     vel: { x: Math.sin(yaw) * speed, y: 0, z: Math.cos(yaw) * speed },
-    yaw, yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0,
+    yaw, yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: Math.sin(yaw), y: 0, z: Math.cos(yaw) }, up: { x: 0, y: 1, z: 0 },
     driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,
     chainStacks: 0, chainWindow: 0, boostTime: 0, boostMag: 0, boostSource: 'none',

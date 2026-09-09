@@ -881,6 +881,28 @@ export const CRYOSTATIC_THEME: Theme = {
     color: (_pal, fog) => new THREE.Color(0.90, 0.95, 1.0).lerp(fog, 0.44),
   },
 
+  /**
+   * SPINDRIFT, AND DELIBERATELY NOT A SECOND SNOW SYSTEM.
+   *
+   * This planet already has driving snow: `motes` above falls at 3.4 m/s and
+   * shears into streaks inside the blizzard band. What it does NOT do is say
+   * which way. The mote shader rotates its sprites to a fixed ~25 degrees in
+   * SCREEN space and thins them across it — a beautiful blizzard, and a
+   * blizzard that looks identical whether the air is pushing you left or
+   * right. So this layer is not more snow, it is the other phenomenon: loose
+   * surface snow picked up off the pack and driven ACROSS the road.
+   *
+   * Sparse, long and very faint, because the frame here is already the
+   * fullest of the four circuits and Cryostatic's crosswind is the mildest on
+   * the roster (7 m/s^2 authored, measured at 4% of a half-width of
+   * displacement over a lap, against Aetherion's 130%). It should read as a
+   * texture on the storm, not as a second storm.
+   */
+  debris: {
+    count: 340, box: 76, length: 6.4, width: 0.20, alpha: 0.26, fall: 0.5,
+    color: (_pal, fog) => new THREE.Color(0.93, 0.96, 1.0).lerp(fog, 0.5),
+  },
+
   sky: {
     band: 'aurora',
     auroraLow: 0x36ffa2,

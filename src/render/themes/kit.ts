@@ -204,6 +204,67 @@ export interface MoteStyle {
   color(pal: Palette, fog: THREE.Color): THREE.Color
 }
 
+/**
+ * BLOWN DEBRIS — the crosswind, made visible.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS IN THE KIT AND NOT IN A THEME.
+ *
+ * `TrackNode.wind` was a strong lateral acceleration with NO art at all. From
+ * play on The Hollow Choir: "there are portions of the track where I try to
+ * turn, but it pushes me to the right", and "I didn't have any visual cues of
+ * the crosswind to know what was going on." A force the player cannot see is
+ * not weather, it is a bug — and three of the four shipped circuits author
+ * wind, so the cue has to be a property of WIND rather than of a planet.
+ *
+ * So the placement engine owns the system (environment.ts, next to the motes
+ * and the fog banks, which are the same kind of camera-anchored volume) and a
+ * theme owns only the material identity below. A track that authors wind and
+ * says nothing here gets `DEFAULT_DEBRIS` and is legible on day one.
+ *
+ * WHAT IT HAS TO READ, in this order:
+ *
+ *   1. DIRECTION. Every streak is a wedge lying along the track's own `right`
+ *      axis, travelling toward the end that is wide. Two channels, one of
+ *      which (the wedge) survives a still frame.
+ *   2. STRENGTH. Density and drift speed both ride the ACTUAL applied push,
+ *      so a stretch the tyres can absorb looks calmer than one they cannot.
+ *
+ * NON-EMISSIVE, ALWAYS. This layer fills a large share of the frame at full
+ * strength, and this project has a documented history of additive VFX erasing
+ * the road (see the glare budget in postfx.ts). It draws with NormalBlending
+ * at low alpha and never approaches the bloom threshold, so the debris can
+ * only tint the frame toward `color` — never brighten it.
+ * ---------------------------------------------------------------------------
+ */
+export interface DebrisStyle {
+  /** Instance budget at particleScale 1.0. This is ONE draw call. */
+  count: number
+  /** Side of the camera-anchored wrap volume, metres. */
+  box: number
+  /** Base streak length, metres, before the per-instance and strength gain. */
+  length: number
+  /** Streak width at the leading (wide) end, metres. */
+  width: number
+  /** Base alpha before the distance fade. Keep this LOW — see above. */
+  alpha: number
+  /** Constant settle, m/s. Grit falls; shed paint flake barely does. */
+  fall: number
+  /** Debris colour, given the track palette and the fog colour. */
+  color(pal: Palette, fog: THREE.Color): THREE.Color
+}
+
+/**
+ * What a windy track gets if its theme says nothing: pale grit, mid-sized,
+ * faint. Deliberately neutral rather than pretty — a new planet blowing
+ * generic dust is obviously unfinished, where no debris at all just looks like
+ * the wind bug all over again.
+ */
+export const DEFAULT_DEBRIS: DebrisStyle = {
+  count: 640, box: 86, length: 5.2, width: 0.26, alpha: 0.38, fall: 1.1,
+  color: (_pal, fog) => new THREE.Color(0.72, 0.74, 0.78).lerp(fog, 0.45),
+}
+
 /** Sky dome extras layered on top of the shared gradient. */
 export interface SkyStyle {
   /**
@@ -410,6 +471,17 @@ export interface Theme {
   /** Distance at which the terrain has fully graded onto the fog colour. */
   terrainFade: [number, number]
   motes: MoteStyle
+  /**
+   * Material identity for the crosswind debris. See DebrisStyle.
+   *
+   * OPTIONAL ON PURPOSE, with three states, because the cue is owned by the
+   * mechanic and not by the planet: omit it and a windy track gets
+   * DEFAULT_DEBRIS for free, author it to dress the wind in local material,
+   * or set it to `null` to opt out entirely. A track that authors no `wind`
+   * anywhere builds no debris system at all whatever this says, so Rustfall
+   * pays nothing for it.
+   */
+  debris?: DebrisStyle | null
   sky: SkyStyle
   fogBanks: FogBankStyle | null
   weather: WeatherStyle | null

@@ -692,7 +692,36 @@ export const TUNING = {
       // Rustfall is worth ~7 points of win share on Cryostatic: 12.5% -> 19.3%,
       // retention 45.2% -> 49.0%, and the whole roster tightens from a
       // 12.5-25.2 spread to 17.7-22.2.
-      driftChargeMult: 0.90, driftArcMult: 0.85, gripMult: 1.01,
+      // gripMult 1.01 -> 0.95. THE CROSSWIND CAP TOOK THIS CLASS'S BIGGEST
+      // BILL AWAY, and the honest reading of that is uncomfortable: the flight
+      // class's balance had been resting on a bug. The uncapped crosswind ran
+      // 207% of Vector-7's lateral budget at peak gust (fieldForceMult 1.8 on
+      // an unbounded force), so the "tax" was not a headwind it fought -- it
+      // was being put into the barrier on every gallery straight. Bound it to
+      // something steerable and the class went 28.7% -> 33.3% of wins on The
+      // Hollow Choir with nothing else changed.
+      //
+      // Raising the authored draughts to put more road at the ceiling was
+      // tried first and made it WORSE (33.3% -> 37.7%): the ceiling scales with
+      // fieldForceMult, so lengthening the capped stretch hands the same ratio
+      // to everyone and the extra metres cost the grounded field more than the
+      // class that spends 30% of the lap in the air. The wind is simply no
+      // longer a big enough lever to carry this balance, and pretending
+      // otherwise means re-breaking the thing a player just reported.
+      //
+      // So the bill is charged with the knob that exists for exactly this --
+      // fine trim that does not move the published stat block. Measured at 200
+      // races on hollowchoir: 1.01 -> 37.0% of wins, 0.95 -> 20.5%, 0.90 ->
+      // 10.0%. Steep, which is the grip finding restated: a point of grip is
+      // worth 15-20 points of win share and this is that term with usable
+      // resolution.
+      //
+      // 0.95 was the right answer for The Hollow Choir alone and overshot by
+      // 20 points on Aetherion, which is one knob against four circuits. The
+      // shipped value is 0.98, chosen across both: it puts every Hollow Choir
+      // chassis in band and returns Aetherion to roughly the balance it had
+      // before the cap, including its long-documented marginal Bulwark.
+      driftChargeMult: 0.90, driftArcMult: 0.85, gripMult: 0.98,
       knockbackMult: 1.60, fieldForceMult: 1.80, gapCross: 999,
       liftCapacity: 4.0, liftRegen: 0.625, cleanLandingTolerance: 0.21,
       // Flight gains most, which is the GDD's contract and is expressed here
@@ -1275,6 +1304,37 @@ export const TUNING = {
      * counterweight a crosswind actually is.
      */
     windScale: 1.0,
+    /**
+     * THE CEILING ON A CROSSWIND, as a share of the car's own lateral friction
+     * budget, before the class multiplier.
+     *
+     * The wind is applied outside the budget, so without this it is an
+     * unopposable force and a large enough authored value makes a stretch of
+     * road literally unsteerable -- which is what shipped on two circuits and
+     * what a single human lap found. Multiplied by fieldForceMult, so the
+     * effective shares are grounded 0.35, hover 0.53, flight 0.63: the flight
+     * tax survives, and everybody keeps budget to steer with.
+     *
+     * It is capped against `gripAccel` rather than `lateralBudget`, so it
+     * already knows about the surface, the vacuum, off-track and being
+     * airborne. That is the property worth protecting: the wind gets gentle
+     * exactly where grip is scarce, on tracks that do not exist yet.
+     */
+    windGripShare: 0.35,
+    /** Hard backstop on the share above, whatever fieldForceMult is. */
+    windGripCeiling: 0.75,
+    /**
+     * CALM AIR AROUND AN ITEM ROW, metres. See the calm pass in sim/track.ts:
+     * a pickup is a lateral aiming task with one attempt and no feedback, and
+     * a crosswind over it converts a skill into a coin flip. Asymmetric
+     * because the aiming happens on the approach -- 70m at racing pace is
+     * about 1.3 seconds to line up.
+     */
+    itemCalmBefore: 70,
+    /** Metres of calm kept PAST a row. Small: the task is already over. */
+    itemCalmAfter: 22,
+    /** Smoothstep shoulder on both ends, so the air never switches on. */
+    itemCalmFade: 34,
     windGustPeriod: 3.7,
     /** Gust envelope depth: 0 = steady, 1 = swings between 0 and 2x. */
     windGustDepth: 0.45,

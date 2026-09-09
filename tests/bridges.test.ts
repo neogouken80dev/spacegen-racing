@@ -89,7 +89,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
       z: p.z + smp.normal.z * loco.rideHeight,
     },
     vel: { x: smp.tangent.x * speed, y: smp.tangent.y * speed, z: smp.tangent.z * speed },
-    yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0,
+    yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: smp.tangent.x, y: smp.tangent.y, z: smp.tangent.z },
     up: { x: smp.normal.x, y: smp.normal.y, z: smp.normal.z },
     driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,
@@ -521,6 +521,13 @@ describe('the flat tracks cannot reach any of this', () => {
     //             re-firing every frame a wheel was on a strip, banking up to
     //             209s of boost) plus the AI drift-commitment latch. Both are
     //             global sim changes and both were expected to move this.
-    expect(race.hash()).toBe('29ca22ed')
+    //   b1d19475  the crosswind cap (a player reported being pushed sideways
+    //             with no steering that could answer it) forced a re-trim of
+    //             locomotion.flight.gripMult, 1.01 -> 0.98. The cap and the
+    //             item-box calm are PROVABLY INERT here -- Rustfall authors no
+    //             wind, and pinning gripMult back at 1.01 reproduces 29ca22ed
+    //             exactly with both of them still in. This move is the flight
+    //             trim and nothing else.
+    expect(race.hash()).toBe('b1d19475')
   })
 })

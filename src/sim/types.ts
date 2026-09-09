@@ -202,6 +202,14 @@ export interface RacerState {
    * the sim could not tell the two apart and charged the impact every frame.
    */
   wallTime: number
+  /**
+   * The crosswind acceleration ACTUALLY applied this frame, m/s^2, signed
+   * (positive = toward the sample's `right`). Already scaled by the class's
+   * fieldForceMult and already capped against the friction budget, so it is
+   * what the car felt rather than what the track authored. The art reads this
+   * and never recomputes it -- see the cap in sim/vehicle.ts.
+   */
+  windPush: number
 
   // Drift / boost
   driftSide: DriftSide

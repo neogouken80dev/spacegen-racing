@@ -344,7 +344,7 @@ export function stationaryRacer(chassisId: string, pilotId: string): RacerState 
     altitude: ride,
     vertVel: 0,
     grounded: true,
-    wallTime: 0,
+    wallTime: 0, windPush: 0,
     driftSide: 0,
     driftCharge: 0,
     driftTier: -1,

@@ -20,9 +20,41 @@ export interface TrackVisual {
   dispose(): void
 }
 
+/**
+ * THE CROSSWIND, AS THE LOCAL RACER ACTUALLY FELT IT THIS FRAME.
+ *
+ * Handed to the environment so the blown-debris layer can show the player
+ * which way the air is shoving them and how hard. Both numbers are READ from
+ * the sim and neither is derived in the render layer:
+ *
+ *   - `push` is `RacerState.windPush`, which the sim publishes AFTER scaling
+ *     by the chassis's `fieldForceMult` and AFTER capping against the friction
+ *     budget. The render layer must never recompute it from `TrackSample.wind`
+ *     — the cap folds in the chassis, the surface, the vacuum and whether the
+ *     car is airborne, and a second copy of that arithmetic here is exactly
+ *     how the AI's corner model drifted away from the physics for eight
+ *     passes of this project.
+ *   - `right` is `TrackSample.right`, the authoritative lateral direction.
+ *     NOT world +X, and not `forward x up` recomputed on this side: `right` is
+ *     banked and gravity-aware, and at yaw 0 it is world MINUS X.
+ */
+export interface CrosswindFrame {
+  /** Signed m/s^2 along `right`. Positive pushes the car toward `right`. */
+  push: number
+  /** Unit lateral direction of the road under the local racer. */
+  right: Vec3
+  /** The player asked for less movement. Calms the layer; never hides it. */
+  reduceMotion: boolean
+}
+
 export interface EnvironmentVisual {
   group: THREE.Group
-  update(dt: number, time: number, cameraPos: Vec3): void
+  /**
+   * `wind` is optional so a caller that has no race — the headless cost probe
+   * and the terrain fixtures in tests/ — can still drive the world. Omitted,
+   * the debris layer eases to nothing rather than freezing mid-gust.
+   */
+  update(dt: number, time: number, cameraPos: Vec3, wind?: CrosswindFrame): void
   dispose(): void
 }
 

@@ -2203,6 +2203,43 @@ export const AETHERION_THEME: Theme = {
     color: (pal, fog) => new THREE.Color().setHex(pal.b).lerp(fog, 0.52),
   },
 
+  /**
+   * THE ONLY WIND ART ON THIS PLANET, which is why it is not shy.
+   *
+   * `weather` below is null on purpose — driving the fog, the key light and
+   * the sun disc off the crosswind would have faded the city's sightlines in
+   * and out once a lap — so the causeway's 16.4 m/s^2 had literally nothing
+   * drawing it. This is that, and it costs the sightline nothing: it is a
+   * near-field layer that never touches the fog.
+   *
+   * Bone-pale grit off the limestone terraces, `pal.a`, half-graded onto the
+   * fog. A bigger box than the other two planets for the same reason the
+   * motes have one: the air here is clear for 640 m and a volume that ends 40
+   * m out reads as a bubble around the car.
+   *
+   * The causeway is where this earns its place. Three phasing half-spans, no
+   * barriers, 16 m of half-width, a crosswind that peaks between the second
+   * and third span — and the surviving lane is the UPWIND one, so the whole
+   * section is a question about which way the air is going. It was being
+   * asked with no picture at all.
+   */
+  debris: {
+    count: 1200, box: 82, length: 5.6, width: 0.26, alpha: 0.50, fall: 0.9,
+    // A MID VALUE, and that is a contrast decision rather than a colour one.
+    // Grit off the terraces wants to be `pal.a` — the bone limestone the whole
+    // city is cut from — but `pal.a` is 0.83 luminance and so is this
+    // planet's sky, so the first pass drew pale streaks on a pale sky and they
+    // were invisible above the skyline while reading fine over the road. Half
+    // the way to `pal.c`, the deep violet in the shadows, lands at about 0.48:
+    // dark enough to silhouette against the sky, light enough to show against
+    // the deck. Only a quarter of the way onto the fog, because the air here
+    // is clear for 640 m and grading it out early takes the far field away.
+    color: (pal, fog) => new THREE.Color()
+      .setHex(pal.a)
+      .lerp(new THREE.Color().setHex(pal.c), 0.5)
+      .lerp(fog, 0.25),
+  },
+
   sky: { band: 'strata' },
 
   /**

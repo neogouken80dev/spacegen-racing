@@ -710,6 +710,89 @@
 }
 
 /* ==========================================================================
+   TOP CENTRE — crosswind
+
+   Grid area `tc`, which was one of the two empty cells in the 3x3 (the centre
+   transients are an absolutely positioned overlay, not a grid item). Nothing
+   had to move to make room for it, and the compact instrument strip — which
+   is already fighting for width between two thumb clusters — is untouched.
+
+   WHY NOT LOWER, NEAR THE OTHER INSTRUMENTS. It was in `mc` first, bottom
+   aligned so it rode above the charge pill. On a desktop frame that puts it
+   exactly on the roof of the player's own car, which is dead centre and about
+   200 px tall: the pill was legible and the thing it was describing was
+   underneath it. Bottom centre belongs to the car.
+
+   `margin-top` clears the in-race tool bar, which is NOT part of this grid —
+   it is an absolutely positioned overlay pinned to `top: max(10px, safe-area)`
+   at 44 px tall (38 on compact) — so the two would otherwise stack on the same
+   pixels. It is the one hardcoded offset in this sheet and it is a function of
+   that bar's height; if the bar changes size, this follows it.
+
+   Orange rather than gold or red: gold is the charge meter, red is an inbound
+   weapon, and this is neither. It is a fact about the road.
+   ========================================================================== */
+
+.sg-hud__wind {
+  grid-area: tc;
+  justify-self: center;
+  align-self: start;
+  margin-top: 50px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 11px 4px;
+  border-radius: 999px;
+  background: var(--sg-panel);
+  border: 2px solid rgba(255, 139, 47, 0.42);
+  box-shadow: var(--sg-shadow-sm);
+}
+
+.sg-wind__label {
+  font-family: var(--sg-display);
+  font-size: clamp(9px, 1.25vmin, 13px);
+  letter-spacing: 0.2em;
+  color: var(--sg-dim);
+  line-height: 1;
+}
+
+.sg-wind__arrows {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  /* The unlit side keeps its box so the pill cannot change width when the
+     wind changes sign, which on Aetherion's rotunda it does mid-corner. */
+  visibility: hidden;
+}
+
+/* Rung 1 nearest the label, growing outward, on both sides. */
+.sg-wind__arrows--l {
+  flex-direction: row-reverse;
+}
+
+.sg-hud__wind.is-left .sg-wind__arrows--l,
+.sg-hud__wind.is-right .sg-wind__arrows--r {
+  visibility: visible;
+}
+
+.sg-wind__ch {
+  display: block;
+  color: rgba(255, 139, 47, 0.2);
+}
+
+.sg-wind__ch.is-on {
+  color: var(--sg-orange);
+  filter: drop-shadow(0 0 5px rgba(255, 139, 47, 0.75));
+}
+
+.sg-wind__chSvg {
+  display: block;
+  width: clamp(7px, 1vmin, 10px);
+  height: clamp(9px, 1.35vmin, 14px);
+  overflow: visible;
+}
+
+/* ==========================================================================
    RIGHT EDGE — Lift meter (flight class only)
    ========================================================================== */
 
@@ -996,6 +1079,16 @@
   }
   .sg-hud__charge.is-drop .sg-charge__num {
     color: var(--sg-red);
+  }
+
+  /* The tool bar is 38px on compact rather than 44, so the pill comes up with
+     it. Tighter all round: it must never be wide enough to crowd the minimap
+     on a 412px frame. */
+  .sg-hud__wind {
+    gap: 6px;
+    padding: 2px 9px 3px;
+    border-width: 1px;
+    margin-top: 46px;
   }
 
   /* items tuck under the position block, still top-left */
@@ -2843,6 +2936,7 @@
 .sg-hud.is-ceremony .sg-hud__items,
 .sg-hud.is-ceremony .sg-hud__charge,
 .sg-hud.is-ceremony .sg-hud__lift,
+.sg-hud.is-ceremony .sg-hud__wind,
 .sg-hud.is-ceremony .sg-hud__warns,
 .sg-hud.is-ceremony .sg-hud__pos,
 .sg-hud.is-ceremony .sg-map__meta,

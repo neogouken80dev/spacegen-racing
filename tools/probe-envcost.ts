@@ -33,8 +33,17 @@ for (const def of TRACKS) {
     const g = (mesh as THREE.Mesh).geometry as THREE.BufferGeometry
     const idx = g.getIndex()
     const pos = g.getAttribute('position')
+    // TWO WAYS TO BE INSTANCED, and this used to count only one of them.
+    // InstancedMesh carries its own `count`; a plain Mesh drawing an
+    // InstancedBufferGeometry carries it on the GEOMETRY, and the crosswind
+    // debris is the second kind (one unit quad, n instances, one draw call).
+    // Counted as x1 it reported 2 triangles for 560 quads.
+    const ig = g as THREE.InstancedBufferGeometry
     const inst = (mesh as unknown as THREE.InstancedMesh).isInstancedMesh
-      ? (mesh as unknown as THREE.InstancedMesh).count : 1
+      ? (mesh as unknown as THREE.InstancedMesh).count
+      : ig.isInstancedBufferGeometry
+        ? (ig.instanceCount === Infinity ? 1 : ig.instanceCount)
+        : 1
     const t = (o as THREE.Points).isPoints
       ? 0
       : Math.round(((idx ? idx.count : pos.count) / 3) * inst)

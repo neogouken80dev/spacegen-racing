@@ -1947,6 +1947,35 @@ export const HOLLOWCHOIR_THEME: Theme = {
   },
 
   /**
+   * WHAT THE DRAUGHT IS CARRYING.
+   *
+   * Two hundred years of shed hull: oxidised plate scale and paint flake off a
+   * structure that has been corroding in its own escaping atmosphere. So the
+   * colour is `pal.a` — the grey-green the whole wreck is painted in — warmed
+   * a sixth of the way toward the amber emergency lighting, which is the only
+   * light source down here that is still working and therefore the only thing
+   * these flakes can be catching.
+   *
+   * Longer and slower-settling than the default. This is the inside of a
+   * sealed drum, not an open plain: the draught runs circumferentially with
+   * nowhere to go, so what it lifts stays up, and `fall` is 0.5 for the same
+   * reason the motes' is 0.35.
+   *
+   * IT DISAPPEARS IN THE BREACH FOR FREE, and that is the point of driving the
+   * layer off `windPush`. `wind` on this circuit is 22-26 in the galleries and
+   * exactly zero through the tear, because a crosswind is air and there is
+   * none out there — so the debris stops at the same metre the haze, the dust
+   * and the fog do, without this file knowing where the Breach is.
+   */
+  debris: {
+    count: 1000, box: 78, length: 5.0, width: 0.26, alpha: 0.50, fall: 0.5,
+    color: (pal, fog) => new THREE.Color()
+      .setHex(pal.a)
+      .lerp(new THREE.Color().setHex(pal.accent), 0.16)
+      .lerp(fog, 0.26),
+  },
+
+  /**
    * A STARFIELD, BECAUSE THE SKY HERE IS NOT AN ATMOSPHERE.
    *
    * `starHorizon` is low (0.10): the haze this wreck outgasses only reaches a

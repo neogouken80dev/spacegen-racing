@@ -528,7 +528,7 @@ function spinDragAt(s: number): number {
   const mouths = smoothBand(s, 0, 70, DRUM_ARC - 70, DRUM_ARC)
   return SPIN_DRAG_PEAK * inSealed * mouths
 }
-const SPIN_DRAG_PEAK = 24.0
+const SPIN_DRAG_PEAK = 40.0
 
 function drumTag(i: number, n: number): string | undefined {
   if (i === 0) return 'nave'
@@ -926,8 +926,8 @@ function extWind(s: number): number {
   const ribs = smoothBand(s, E_RIBS - 20, E_RIBS + 80, E_SPINE - 80, E_SPINE + 10)
   return round1(DRAUGHT_KEEL * keel + DRAUGHT_RIBS * ribs)
 }
-const DRAUGHT_KEEL = 22
-const DRAUGHT_RIBS = 26
+const DRAUGHT_KEEL = 38
+const DRAUGHT_RIBS = 46
 
 function extTag(s: number): string | undefined {
   if (s < 1) return 'transept-out'

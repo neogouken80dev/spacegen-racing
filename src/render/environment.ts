@@ -19,6 +19,9 @@
  *   1  airborne motes (Points, camera-anchored, wrapped in the vertex shader):
  *      dust that hangs, or snow that falls and shears in a crosswind
  *   1  fog banks — the cheap fake volumetrics, when the theme asks for them
+ *   1  blown debris — instanced streaks lying along the road's own `right`,
+ *      driven by the crosswind the LOCAL RACER actually felt. Built only on a
+ *      track that authors `wind` somewhere, so a calm planet pays nothing.
  *
  * THE HORIZON CONTRACT. The sky's colour at d.y == 0 is EXACTLY the fog colour
  * currently on the scene's FogExp2, and the terrain shell's albedo is graded
@@ -45,11 +48,11 @@
 import * as THREE from 'three'
 import { TUNING } from '../content/tuning'
 import type { Track } from '../sim/track'
-import type { EnvironmentVisual, RenderQuality, Vec3 } from './api'
+import type { CrosswindFrame, EnvironmentVisual, RenderQuality, Vec3 } from './api'
 import { crackProgress } from './hazardSignal'
 import { themeFor } from './themes'
 import {
-  mulberry32,
+  DEFAULT_DEBRIS, mulberry32,
   type FrameInfo, type Palette, type PropSpec, type TerrainPoint, type ThemeContext,
 } from './themes/kit'
 
@@ -858,6 +861,192 @@ void main() {
 }
 `
 
+/* ------------------------------------------------------- crosswind debris */
+
+/**
+ * BLOWN DEBRIS — one draw call that says which way the air is shoving you.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PROBLEM. `TrackNode.wind` is a lateral acceleration of up to 26 m/s^2
+ * and, until this existed, it had no art whatsoever. Reported from play on The
+ * Hollow Choir: "there are portions of the track where I try to turn, but it
+ * pushes me to the right", followed by "I didn't have any visual cues of the
+ * crosswind to know what was going on." A force with no picture reads as the
+ * game being broken, not as weather.
+ *
+ * WHAT IS DRAWN. `DebrisStyle.count` instanced quads on ONE
+ * InstancedBufferGeometry — two triangles of geometry for the whole layer, and
+ * one draw call — wrapped into a cube that rides with the camera like the motes.
+ * Every quad is a WEDGE lying along the track's own `right` axis: wide at the
+ * downwind end, tapering to nothing upwind, and travelling toward the wide
+ * end. That is deliberately two channels for the same fact, because only one
+ * of them survives a screenshot, a paused frame or a reduced-motion player:
+ *
+ *   - the MOTION reads direction while the game is running;
+ *   - the WEDGE reads direction while it is not.
+ *
+ * WHAT DRIVES IT. `CrosswindFrame.push` — `RacerState.windPush`, the value the
+ * sim published after the per-class scale and after the friction-budget cap.
+ * Never `TrackSample.wind`. The consequence is worth stating because it is the
+ * whole reason the cue is honest: on a stretch where the tyres can absorb the
+ * gale the cap holds the push down and the air goes QUIET, and where the
+ * budget has collapsed (the vacuum corner, a hover chassis on ice) the same
+ * authored number arrives as a wall of debris. The picture and the physics
+ * cannot disagree because there is only one number.
+ *
+ * WHY DENSITY IS A SHADER GATE AND NOT AN INSTANCE COUNT. Every instance
+ * carries a threshold in [0,1) and collapses its own quad to a degenerate
+ * point when the normalised strength is under it. The buffer is written ONCE
+ * at build and never touched again: scaling `InstancedMesh.count` per frame
+ * would work too, but it makes density a function of buffer ORDER, so streaks
+ * would wink out in the sequence they were seeded rather than at random, and a
+ * fading gust would visibly unzip. A degenerate quad rasterises no fragments,
+ * so the cost of the off instances is the vertex shader and nothing else.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * Applied push, m/s^2, that counts as a full-strength field.
+ *
+ * Measured after the sim's cap: a grounded chassis peaks around 12-13, hover
+ * around 19, flight around 23. 14 therefore takes a grounded car very close to
+ * full density at the worst of The Hollow Choir's Ribs, and saturates the two
+ * classes the wind is actually aimed at — which is right, because DENSITY is
+ * the "there is weather here" channel and it should read the same to everyone.
+ * The class difference is carried by SPEED instead (see DEBRIS_SPEED_*), which
+ * is the channel with headroom left.
+ */
+const DEBRIS_FULL_PUSH = 14
+
+/** Lateral drift at zero push, m/s, and the gain per m/s^2 of push. */
+const DEBRIS_SPEED_BASE = 7
+const DEBRIS_SPEED_GAIN = 1.8
+
+/** Deadband, m/s^2. Under this the layer is off — no shimmer on a calm road. */
+const DEBRIS_DEADBAND = 0.8
+
+/**
+ * How fast the drawn strength chases the sim's, per second.
+ *
+ * 5.2 is a ~190 ms time constant, chosen against the gust envelope rather than
+ * by eye: `T.hazard.windRipplePeriod` is 1.31 s, so the layer still breathes
+ * on the ripple the player is feeling, while the one-frame collapses the cap
+ * produces (the push is capped against a budget that drops 75% the instant the
+ * wheels leave the deck) are smoothed into a lull instead of a strobe.
+ */
+const DEBRIS_EASE = 5.2
+
+/**
+ * REDUCED MOTION. The layer is calmed, never removed.
+ *
+ * Removing it would answer a question the player did not ask: they asked for
+ * less movement, not for the crosswind to go back to being invisible — and
+ * this project has already shipped the bug where a motion toggle reached the
+ * camera and not the VFX. So the drift speed drops to a quarter, the density
+ * to two thirds, and the streaks LENGTHEN, which shifts the whole cue onto the
+ * static wedge channel. The HUD indicator is untouched by this and carries
+ * direction on its own.
+ */
+const DEBRIS_RM_SPEED = 0.25
+const DEBRIS_RM_DENSITY = 0.66
+const DEBRIS_RM_LENGTH = 1.3
+
+const DEBRIS_VERT = /* glsl */`
+uniform vec3 uCam;
+uniform vec3 uRight;
+uniform float uTime;
+uniform float uBox;
+uniform float uDir;
+uniform float uStrength;
+uniform float uSpeed;
+uniform float uLen;
+uniform float uWide;
+uniform float uFall;
+attribute vec3 iPos;
+// x: drift phase, y: width jitter, z: density threshold, w: length jitter
+attribute vec4 iSeed;
+varying float vFade;
+varying float vHead;
+varying float vAcross;
+void main() {
+  // Density gate. Off instances keep their vertex cost and lose their fragment
+  // cost, because len and wide below are multiplied by this.
+  float live = step(iSeed.z, uStrength);
+
+  vec3 p = iPos;
+  // Advect along the ROAD's lateral axis, at a per-instance fraction of the
+  // field speed so the volume shears instead of marching in lockstep.
+  p += uRight * (uDir * uTime * uSpeed * (0.70 + 0.60 * iSeed.x));
+  p.y -= uTime * uFall * (0.55 + 0.9 * iSeed.y);
+  // Wrap into a cube that rides with the camera. Isotropic on purpose: on a
+  // gravity track the car drives the inside of a drum, and a debris field
+  // banded in world Y would be a horizontal slab through a cylinder.
+  vec3 d = mod(p - uCam + uBox * 0.5, uBox) - uBox * 0.5;
+  vec3 c = uCam + d;
+
+  float dist = length(d);
+  vec3 view = dist > 1e-4 ? d / dist : vec3(0.0, 0.0, 1.0);
+  // Ribbon frame: length along the wind axis, thickness across the viewer.
+  vec3 side = cross(uRight, view);
+  float sl = length(side);
+  // Degenerate exactly when the streak is end-on to the camera and has no
+  // visible length anyway. Fall back to any perpendicular so nothing is NaN.
+  vec3 alt = abs(uRight.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  side = sl > 1e-3 ? side / sl : normalize(cross(uRight, alt));
+
+  // Longer and denser in a stronger field, so strength has a size channel too.
+  float len = uLen * (0.55 + 0.95 * iSeed.w) * (0.55 + 0.75 * uStrength) * live;
+  // 0 at the upwind tail, 1 at the downwind head, whichever way the wind blows.
+  float head = position.x * uDir + 0.5;
+  float wide = uWide * (0.6 + 0.8 * iSeed.y) * mix(0.16, 1.0, head) * live;
+
+  vec3 world = c + uRight * (position.x * len) + side * (position.y * wide);
+  // Faded at the box rim so nothing pops in, and HARD up close.
+  //
+  // The near number is not cosmetic, and it took three passes to get right.
+  // A 5 m streak 4 m from the lens is 1,700 px long and 90 px wide on a
+  // 1440-wide frame, and a tapered quad at that size does not read as a
+  // thrown object at all: the first two A/Bs came back with soft diamonds
+  // lying over the car. Nothing inside 9 m draws, and the layer only reaches
+  // full weight past 20 m, which leaves a band roughly 9-36 m out — the same
+  // shape of answer the fog banks use (they fade in over 14-55 m) and for
+  // exactly the same reason.
+  // Near fade 4->12m. It was briefly 10->22 after an A/B that compared two
+  // exposures 1.2s apart -- VFX particles age on wall-clock dt, so a second of
+  // dying exhaust read as debris blobs near the car and the fade was widened
+  // to chase art that was never this system's. That emptied 4-10m, which is
+  // the strongest parallax band and the one that sells lateral motion.
+  vFade = (1.0 - smoothstep(uBox * 0.25, uBox * 0.46, dist)) * smoothstep(4.0, 12.0, dist);
+  vHead = head;
+  vAcross = position.y;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+}
+`
+
+const DEBRIS_FRAG = /* glsl */`
+uniform vec3 uColor;
+uniform float uAlpha;
+varying float vFade;
+varying float vHead;
+varying float vAcross;
+void main() {
+  // Soft across the thickness; along the length, dense at the head and gone at
+  // the tail. Non-emissive and low alpha: NormalBlending means this can only
+  // tint the frame toward uColor, so it can never reach the bloom threshold
+  // and can never do to the road what the additive VFX did before the glare
+  // budget existed.
+  // A solid core out to 60% of the half-width and a short shoulder. Softer
+  // than this and a streak reads as a smudge rather than as a thrown object.
+  float across = 1.0 - smoothstep(0.30, 0.5, abs(vAcross));
+  float along = smoothstep(0.0, 0.42, vHead) * (1.0 - smoothstep(0.86, 1.0, vHead));
+  float a = across * along * vFade * uAlpha;
+  if (a < 0.004) discard;
+  gl_FragColor = vec4(uColor, a);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`
+
 /* ------------------------------------------------------------------ public */
 
 export function buildEnvironment(
@@ -1176,6 +1365,101 @@ export function buildEnvironment(
     bankCamU = bmat.uniforms.uCam.value as THREE.Vector3
   }
 
+  /* ---- crosswind debris ------------------------------------------------- */
+  //
+  // Built only where there is wind to show. `windiest` is the strongest
+  // AUTHORED value anywhere on the lap, which is a build-time question and the
+  // only place `TrackSample.wind` is read on this side: it decides whether the
+  // system exists at all. What it LOOKS like frame to frame is decided
+  // entirely by `RacerState.windPush` coming in through update().
+  let windiest = 0
+  for (let i = 0; i < m; i++) windiest = Math.max(windiest, Math.abs(track.samples[i].wind))
+  const dbStyle = theme.debris === undefined ? DEFAULT_DEBRIS : theme.debris
+  let debrisMesh: THREE.Mesh | null = null
+  let debrisU: {
+    cam: THREE.Vector3; right: THREE.Vector3; time: { value: number }
+    dir: { value: number }; strength: { value: number }; speed: { value: number }
+    len: { value: number }; base: number
+  } | null = null
+  if (dbStyle && windiest > 0) {
+    const n = Math.max(96, Math.round(dbStyle.count * quality.particleScale))
+    // The lateral at the START LINE, used to seed uRight. The first frame after
+    // a world build happens BEFORE update() runs, and a zero vector there is a
+    // frame of degenerate quads.
+    const r0 = track.samples[0].right
+    // One unit quad, instanced. 2 triangles of geometry for the whole layer;
+    // the instance count is what multiplies into the triangle bill.
+    const dgeo = new THREE.InstancedBufferGeometry()
+    dgeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
+    ]), 3))
+    dgeo.setIndex([0, 1, 2, 0, 2, 3])
+    const ipos = new Float32Array(n * 3)
+    const iseed = new Float32Array(n * 4)
+    const wrand = mulberry32(0x3f00d)
+    for (let i = 0; i < n; i++) {
+      ipos[i * 3] = wrand() * dbStyle.box
+      ipos[i * 3 + 1] = wrand() * dbStyle.box
+      ipos[i * 3 + 2] = wrand() * dbStyle.box
+      iseed[i * 4] = wrand()
+      iseed[i * 4 + 1] = wrand()
+      // The density threshold. Skewed so the field THINS from full rather than
+      // starting empty: at strength 0.35 roughly two thirds of the streaks are
+      // already alive, which is what a light draught looks like.
+      iseed[i * 4 + 2] = wrand() ** 1.7
+      iseed[i * 4 + 3] = wrand()
+    }
+    dgeo.setAttribute('iPos', new THREE.InstancedBufferAttribute(ipos, 3))
+    dgeo.setAttribute('iSeed', new THREE.InstancedBufferAttribute(iseed, 4))
+    dgeo.instanceCount = n
+    dgeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity)
+    const dmat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+      side: THREE.DoubleSide,
+      fog: false,
+      uniforms: {
+        uCam: { value: new THREE.Vector3() },
+        uRight: { value: new THREE.Vector3(r0.x, r0.y, r0.z) },
+        uTime: { value: 0 },
+        uBox: { value: dbStyle.box },
+        uDir: { value: 1 },
+        uStrength: { value: 0 },
+        uSpeed: { value: DEBRIS_SPEED_BASE },
+        uLen: { value: dbStyle.length },
+        uWide: { value: dbStyle.width },
+        uFall: { value: dbStyle.fall },
+        uAlpha: { value: dbStyle.alpha },
+        uColor: { value: dbStyle.color(pal, baseFog) },
+      },
+      vertexShader: DEBRIS_VERT,
+      fragmentShader: DEBRIS_FRAG,
+    })
+    const debris = new THREE.Mesh(dgeo, dmat)
+    // Named so the clearance fixture in tests/track.test.ts can name it back.
+    // It is a camera-anchored volume, like the motes and the fog banks, so
+    // "keep it off the road" is not a question that applies to it.
+    debris.name = 'wind-debris'
+    debris.frustumCulled = false
+    // In front of the motes: the streaks are the message, the dust is texture.
+    debris.renderOrder = 6
+    debris.visible = false
+    group.add(debris)
+    geometries.push(dgeo); materials.push(dmat)
+    debrisU = {
+      cam: dmat.uniforms.uCam.value as THREE.Vector3,
+      right: dmat.uniforms.uRight.value as THREE.Vector3,
+      time: dmat.uniforms.uTime as { value: number },
+      dir: dmat.uniforms.uDir as { value: number },
+      strength: dmat.uniforms.uStrength as { value: number },
+      speed: dmat.uniforms.uSpeed as { value: number },
+      len: dmat.uniforms.uLen as { value: number },
+      base: dbStyle.length,
+    }
+    debrisMesh = debris
+  }
+
   /* ---- weather ---------------------------------------------------------- */
   //
   // The authored `wind` on a TrackNode is a gameplay force. Here it is also the
@@ -1219,13 +1503,25 @@ export function buildEnvironment(
   const skySunU = skyUniforms.uSunFade as { value: number }
   const frame: FrameInfo = { dt: 0, time: 0, camX: 0, camY: 0, camZ: 0, wind: 0, crack: 0 }
   let windNow = 0
+  /** Eased normalised debris strength, 0..1. See DEBRIS_EASE. */
+  let pushNow = 0
+  /**
+   * The drawn wind direction, +1 / -1, held through a lull.
+   *
+   * Latched rather than read live because `sign(0)` is not a direction: the
+   * push crosses zero at the head and tail of every band and inside every
+   * gust trough, and taking the sign there would flip the whole field for a
+   * frame or two while it was still visible on the way out. The latch only
+   * moves when the sim is unambiguous about which way the air is going.
+   */
+  let pushDir = 1
 
   /* ---- lifecycle -------------------------------------------------------- */
 
   return {
     group,
 
-    update(dt: number, time: number, cameraPos: Vec3): void {
+    update(dt: number, time: number, cameraPos: Vec3, wind?: CrosswindFrame): void {
       // The sky dome is camera-locked in its vertex shader, so there is nothing
       // to move here — which also means it cannot be left stale by a frame that
       // renders without calling update().
@@ -1256,6 +1552,40 @@ export function buildEnvironment(
         moteWindU.value = windNow
         moteAlphaU.value = mo.alpha * (1 + (weather.moteGain - 1) * windNow)
         if (bankWindU) bankWindU.value = windNow
+      }
+
+      /* -- crosswind debris -- */
+      if (debrisU && debrisMesh) {
+        // `push` is what the sim APPLIED. It is never recomputed here — see
+        // CrosswindFrame in render/api.ts for why that matters.
+        const push = wind ? wind.push : 0
+        const mag = Math.abs(push)
+        const rm = wind ? wind.reduceMotion : false
+        // The deadband is applied to the RAW push, so a track that authors no
+        // wind, and the Breach, and the calm air the bake carves around every
+        // item-box row, are all silent rather than faintly shimmering.
+        const wantRaw = mag < DEBRIS_DEADBAND
+          ? 0
+          : Math.min(1, (mag - DEBRIS_DEADBAND) / (DEBRIS_FULL_PUSH - DEBRIS_DEADBAND))
+        const want = rm ? wantRaw * DEBRIS_RM_DENSITY : wantRaw
+        pushNow += (want - pushNow) * Math.min(1, Math.max(0, dt) * DEBRIS_EASE)
+        if (mag >= DEBRIS_DEADBAND) pushDir = push >= 0 ? 1 : -1
+        debrisU.strength.value = pushNow
+        debrisU.dir.value = pushDir
+        // Speed rides the RAW magnitude, not the normalised strength, so the
+        // classes the wind is aimed at keep a channel of their own after
+        // density has saturated: a flight chassis at 23 m/s^2 drives the field
+        // across at 48 m/s where a grounded one at 12 sees 29.
+        const speed = DEBRIS_SPEED_BASE + DEBRIS_SPEED_GAIN * mag
+        debrisU.speed.value = rm ? speed * DEBRIS_RM_SPEED : speed
+        debrisU.len.value = debrisU.base * (rm ? DEBRIS_RM_LENGTH : 1)
+        // `right` is TrackSample.right, handed over rather than derived.
+        if (wind) debrisU.right.set(wind.right.x, wind.right.y, wind.right.z)
+        debrisU.cam.set(cameraPos.x, cameraPos.y, cameraPos.z)
+        debrisU.time.value = time
+        // Below this the layer contributes nothing a player can see, so it
+        // costs a visibility test instead of 500 vertex-shader invocations.
+        debrisMesh.visible = pushNow > 0.004
       }
 
       /* -- theme hooks -- */
