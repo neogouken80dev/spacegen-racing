@@ -49,6 +49,20 @@ const cycles = process.argv.some((a) => a.startsWith('--u='))
   ? arg('u', '0').split(',').map(Number)
   : [null]
 const LAT = Number(arg('lat', '0'))
+/**
+ * Race times to photograph each position at, or [null] for "whenever".
+ *
+ * `--u=` names a position in a PHASING SPAN's own cycle, which is the right
+ * control for Aetherion's causeway and no control at all on a track with no
+ * bridges -- it reads the span's phase and returns without doing anything.
+ * The Hollow Choir needs the other kind: its drum hull turns at 0.09 rad/s on
+ * a 70-second period, so "is the bore actually rotating" and "what does the
+ * spin look like a quarter turn later" are questions about the race clock
+ * directly. `--t=0,18,35` freezes the sim at each of those and shoots.
+ */
+const times = process.argv.some((a) => a.startsWith('--t='))
+  ? arg('t', '0').split(',').map(Number)
+  : [null]
 const LANDSCAPE = process.argv.includes('--landscape')
 const MOBILE = LANDSCAPE || process.argv.includes('--mobile')
 const VIEWPORT = LANDSCAPE
@@ -120,7 +134,7 @@ const clickText = async (labels) => {
 }
 await clickText(['PLAY NOW', 'PLAY', 'Play'])
 await page.waitForSelector('.sg-screen--track .sg-card--track', { state: 'visible', timeout: 20000 })
-const NAME = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion Prime' }[trackId] ?? trackId
+const NAME = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion Prime', hollowchoir: 'The Hollow Choir' }[trackId] ?? trackId
 await page.locator('.sg-screen--track .sg-card--track').filter({ hasText: NAME }).first().click()
 await page.waitForTimeout(1400)
 await page.locator('.sg-screen--track .sg-btn--start').click()
@@ -192,6 +206,18 @@ for (const s of positions) {
     }
   }, [s, LAT])
   await waitSim(1.2)
+ for (const tAt of times) {
+  if (tAt !== null) {
+    // Same freeze the cycle path uses, and for the same reason: at one to five
+    // frames a second the 0.25 s frame clamp can walk the clock further
+    // between setting it and the shutter than the thing being photographed
+    // moves in a second.
+    await page.evaluate((v) => {
+      window.__GAME__.maxSubSteps = 0
+      window.__GAME__.race.state.time = v
+    }, tAt)
+    await page.waitForTimeout(1400)
+  }
  for (const u of cycles) {
   // The cycle position LAST, so it is not walked on by the settle. Everything
   // that reads the beat -- the sim's fall test and all three shaders -- is a
@@ -253,12 +279,12 @@ for (const s of positions) {
       off: me.offTrackTime, respawn: me.respawnTime, t: g.race.state.time, ahead,
     }
   })
-  const tag = (u === null ? '' : `-u${String(Math.round(u * 100)).padStart(2, '0')}`)
+  const tag = (tAt === null ? '' : `-t${String(Math.round(tAt)).padStart(3, '0')}`)
+    + (u === null ? '' : `-u${String(Math.round(u * 100)).padStart(2, '0')}`)
     + (LAT === 0 ? '' : `-lat${LAT > 0 ? 'p' : 'm'}${String(Math.abs(Math.round(LAT))).padStart(2, '0')}`)
   const name = `${KIND}-${trackId}-s${String(Math.round(s)).padStart(4, '0')}${tag}.png`
   await page.screenshot({ path: join(OUT, name) })
   report.push({ s, u, ...info, ...after, shot: name })
-  await page.evaluate(() => { window.__GAME__.maxSubSteps = 400 })
   const aim = after.ahead
     ? `road60 at ${(after.ahead.x * 100).toFixed(0)}%,${(after.ahead.y * 100).toFixed(0)}% ${after.ahead.front ? '' : 'BEHIND '}`
     : ''
@@ -267,6 +293,8 @@ for (const s of positions) {
     `  -> settled s=${after.s.toFixed(0)} alt=${after.alt.toFixed(2)} grounded=${after.grounded}` +
     ` ${aim} ${name}`)
  }
+ }
+  await page.evaluate(() => { window.__GAME__.maxSubSteps = 400 })
 }
 console.log(`console errors: ${errors.length}`)
 if (errors.length) console.log(errors.slice(0, 5).join('\n'))

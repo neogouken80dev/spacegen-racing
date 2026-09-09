@@ -597,6 +597,10 @@ uniform vec3 uAurLow;
 uniform vec3 uAurHigh;
 uniform float uAurGain;
 #endif
+#ifdef SG_STARS
+uniform float uStarGain;
+uniform float uStarHorizon;
+#endif
 varying vec3 vDir;
 
 /** Interleaved gradient noise: fine, isotropic, and far less blotchy than a
@@ -664,6 +668,46 @@ void main() {
   // linearly in d.y put the violet over most of the visible sky.
   vec3 aur = mix(uAurLow, uAurHigh, clamp((d.y - 0.14) * 1.55, 0.0, 1.0));
   c += aur * curt * band * uAurGain;
+#elif defined(SG_STARS)
+  // A STARFIELD, FOR A SKY THAT IS NOT AN ATMOSPHERE.
+  //
+  // Cell-hashed on the direction's dominant-axis CUBE FACE, not on the noise
+  // field the other two branches use: a star is a point, and a value-noise
+  // blob raised to a high power is a smudge that swims as the camera turns.
+  // Projecting onto the face gives an (almost) uniform grid over the sphere
+  // with no atan(), no pole and no seam, and one hash per layer rather than
+  // the eight a 3D value-noise tap costs — so this branch is CHEAPER than the
+  // dust strata it replaces, which matters because the dome has no depth test
+  // and therefore shades every pixel in the frame.
+  //
+  // Two layers: a sparse bright one and a dense faint one. The sub-cell
+  // position comes out of the same hash, so a star is never on a lattice.
+  vec3 ad = abs(d);
+  vec3 fc = ad.x > ad.y && ad.x > ad.z ? d.zyx : (ad.y > ad.z ? d.xzy : d.xyz);
+  vec2 uv = fc.xy / abs(fc.z);
+  float face = floor(fc.z * 0.5 + 0.5) + (ad.x > ad.y && ad.x > ad.z ? 4.0 : (ad.y > ad.z ? 2.0 : 0.0));
+  float star = 0.0;
+  for (int L = 0; L < 2; L++) {
+    float sc = L == 0 ? 58.0 : 148.0;
+    vec2 g = uv * sc;
+    vec2 gi = floor(g), gf = fract(g);
+    float h1 = h31(vec3(gi, face + float(L) * 8.0));
+    float h2 = h31(vec3(gi.yx * 1.37 + 4.1, face + float(L) * 8.0 + 31.0));
+    // Most cells hold nothing. The threshold is the density control and it is
+    // deliberately brutal: a sky with a star in every cell is a noise texture.
+    float live = step(L == 0 ? 0.974 : 0.935, h2);
+    vec2 sp = vec2(h1, fract(h1 * 91.7)) * 0.7 + 0.15;
+    // A STAR IS A POINT, AND THE RADIUS IS IN CELLS. The first cut multiplied
+    // the cell-space distance by the cell COUNT, which made every star as wide
+    // as its own cell -- 58 of them across a 90-degree face, so the sky came
+    // out as a grid of white squares the size of a window. 7% of a cell is
+    // one to two pixels at any viewport this game ships on.
+    float rad = length(gf - sp) / (L == 0 ? 0.072 : 0.052);
+    star += live * (1.0 - smoothstep(0.0, 1.0, rad)) * (L == 0 ? 1.0 : 0.42) * (0.35 + 0.9 * h1);
+  }
+  // Into the haze at the horizon, and never over the sun's own scatter.
+  c += vec3(0.86, 0.90, 1.0) * star * uStarGain
+     * smoothstep(-0.02, uStarHorizon, d.y) * (1.0 - 0.85 * pow(sd, 3.0));
 #else
   // Dust strata. 3D noise squashed on Y so it reads as drifting horizontal
   // bands rather than the fixed sine rings this used to draw, which were
@@ -847,7 +891,9 @@ export function buildEnvironment(
   const skyGeo = new THREE.SphereGeometry(SKY_R, 48, 24)
   const skyUniforms: Record<string, { value: unknown }> = {
     uTop: { value: new THREE.Color().setHex(def.skyTop) },
-    uBot: { value: new THREE.Color().setHex(def.skyBottom) },
+    // The dome's low colour, which a theme may hold apart from the
+    // HemisphereLight's sky colour. See SkyStyle.domeLow.
+    uBot: { value: new THREE.Color().setHex(theme.sky.domeLow ?? def.skyBottom) },
     // The sky's horizon anchor IS the scene fog colour, driven from the same
     // object every frame so weather can move both together.
     uFog: { value: ourFog.color },
@@ -861,12 +907,17 @@ export function buildEnvironment(
     skyUniforms.uAurHigh = { value: new THREE.Color().setHex(theme.sky.auroraHigh ?? 0x3a76ff) }
     skyUniforms.uAurGain = { value: theme.sky.auroraGain ?? 0.5 }
   }
+  if (theme.sky.band === 'stars') {
+    skyUniforms.uStarGain = { value: theme.sky.starGain ?? 1.0 }
+    skyUniforms.uStarHorizon = { value: theme.sky.starHorizon ?? 0.16 }
+  }
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     depthTest: false,
     fog: false,
-    defines: theme.sky.band === 'aurora' ? { SG_AURORA: '' } : {},
+    defines: theme.sky.band === 'aurora' ? { SG_AURORA: '' }
+      : theme.sky.band === 'stars' ? { SG_STARS: '' } : {},
     uniforms: skyUniforms as unknown as { [k: string]: THREE.IUniform },
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
@@ -1154,6 +1205,9 @@ export function buildEnvironment(
     }
   }
   const blizFog = weather ? new THREE.Color().setHex(weather.fogColor) : baseFog
+  // Defaulted rather than required, so the tracks that shipped before a theme
+  // needed to ask keep the value this was hardcoded at.
+  const hemiScale = weather?.hemiScale ?? 0.75
   const baseSun = def.sunIntensity
   const baseHemi = def.ambientIntensity
 
@@ -1198,7 +1252,7 @@ export function buildEnvironment(
         ourFog.color.copy(baseFog).lerp(blizFog, windNow)
         sun.intensity = baseSun * (1 + (weather.sunScale - 1) * windNow)
         skySunU.value = 1 - 0.97 * windNow
-        hemi.intensity = baseHemi * (1 + (0.75 - 1) * windNow)
+        hemi.intensity = baseHemi * (1 + (hemiScale - 1) * windNow)
         moteWindU.value = windNow
         moteAlphaU.value = mo.alpha * (1 + (weather.moteGain - 1) * windNow)
         if (bankWindU) bankWindU.value = windNow

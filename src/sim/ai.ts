@@ -7,6 +7,7 @@ import { TUNING as T } from '../content/tuning'
 import { getDerived, getLocomotion } from '../content/chassis'
 import {
   STEER_SIGN, lateralBudget, cornerSpeedAt, driftSurfaceFactor, signedAngleAround,
+  vacuumGripMult, vacuumTopSpeedMult,
 } from './vehicle'
 
 /**
@@ -350,9 +351,21 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
     ? T.hazard.crackedSurface
     : aheadSample.surface
   const surfaceGrip = 1 + (SURFACE_GRIP[aheadSurface] - 1) * loco.surfaceFrictionInfluence * T.ai.surfaceCaution
-  const cornerLimit = cornerSpeedAt(lateralBudget(derived, loco, surfaceGrip), k)
-    * T.ai.corneringCaution
-  let desired = Math.min(derived.topSpeed * speedCap, cornerLimit)
+  // HARD VACUUM moves BOTH sides of this comparison and in opposite directions:
+  // the ceiling goes up because the air has stopped resisting, and the corner
+  // limit collapses because there is nothing left to push against. Read off the
+  // sample the car is heading FOR, exactly like the surface above -- a vacuum
+  // that fades in over 90m of corner has to be braked for before it arrives,
+  // not after. Gated on the track authoring any, so the three shipped circuits
+  // never evaluate it and their AI is bit-identical.
+  let budget = lateralBudget(derived, loco, surfaceGrip)
+  let ceiling = derived.topSpeed * speedCap
+  if (track.hasVacuum) {
+    budget *= vacuumGripMult(aheadSample.vacuum, loco)
+    ceiling *= vacuumTopSpeedMult(aheadSample.vacuum)
+  }
+  const cornerLimit = cornerSpeedAt(budget, k) * T.ai.corneringCaution
+  let desired = Math.min(ceiling, cornerLimit)
   // The light-bridges. Gated on the track carrying any, so the two shipped
   // circuits never enter the planner and their AI is bit-identical.
   if (track.hasBridges) {

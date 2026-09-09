@@ -249,6 +249,49 @@ export function driftSurfaceFactor(surfaceGrip: number): number {
 }
 
 /**
+ * THE VACUUM, HALF ONE: the air is not slowing you down any more.
+ *
+ * Multiplier on top speed at vacuum `vac` (0..1). See T.vacuum.dragRemoved for
+ * why this is a multiplier on the asymptote rather than a drag force removed:
+ * `T.sim.airDrag` has never been read by anything, there is no drag term in
+ * this file to switch off, and adding one would move three balanced circuits.
+ *
+ * At terminal velocity thrust balances drag and drag goes as v^2, so removing
+ * a fraction f of the drag multiplies the terminal speed by 1/sqrt(1 - f).
+ *
+ * EXPORTED BECAUSE ai.ts MUST USE THIS FUNCTION AND NOT A SECOND GUESS AT IT,
+ * the same contract `lateralBudget` already carries. An AI that did not know
+ * the vacuum raises its ceiling would simply lift off the throttle in the one
+ * place on the lap where the throttle is the whole answer.
+ *
+ * `vac <= 0` returns exactly 1, and `x * 1` is exact in IEEE754, so every
+ * metre of every track that authors no vacuum is bit-identical.
+ */
+export function vacuumTopSpeedMult(vac: number): number {
+  if (vac <= 0) return 1
+  return 1 / Math.sqrt(1 - clamp01(vac) * T.vacuum.dragRemoved * T.sim.airDrag)
+}
+
+/**
+ * THE VACUUM, HALF TWO: the medium you were pushing against to turn is gone.
+ *
+ * Multiplier on the lateral friction budget at vacuum `vac`, scaled by the
+ * class's own `vacuumGripLoss` -- hover worst, grounded middle, flight least.
+ * This is the SECOND multiplier on the budget, sitting alongside the surface
+ * one: a corner in vacuum on a low-grip surface is charged for both, because
+ * both are true.
+ *
+ * Exported for ai.ts for the same reason as above, and it matters more here:
+ * the AI's whole corner-speed model is `sqrt(budget / k)`, so an AI blind to
+ * this arrives at every vacuum corner above a limit that really has moved and
+ * really does cost the corner.
+ */
+export function vacuumGripMult(vac: number, loco: LocomotionProfile): number {
+  if (vac <= 0) return 1
+  return 1 - clamp01(vac) * loco.vacuumGripLoss
+}
+
+/**
  * Stick position mapped to slide commitment: 0 = full counter-steer (wide,
  * shallow), 1 = full lock into the drift (tight, heavily crabbed). Everything
  * about the slide -- arc, crab and charge rate -- reads off this one number,
@@ -426,7 +469,12 @@ export function stepVehicle(
   // multipliers the old lateral-decay term carried: there is nothing under the
   // tyres to push against.
   // ---------------------------------------------------------------------------
+  // HARD VACUUM. Gated on the track authoring any, so the three circuits that
+  // shipped before it existed never read the field. See TrackNode.vacuum.
+  const vac = track.hasVacuum ? smp.vacuum : 0
+
   let gripAccel = lateralBudget(derived, loco, surfaceGrip)
+  if (vac > 0) gripAccel *= vacuumGripMult(vac, loco)
   if (offTrack) gripAccel *= T.offTrack.grip
   if (!r.grounded && loco.gapCross < 900) gripAccel *= 0.25
 
@@ -435,6 +483,10 @@ export function stepVehicle(
   // -------------------------------------------------------------------------
   const chargeBonus = 1 + Math.min(r.charges, T.boost.chargeMax) * T.boost.chargePer
   let topSpeed = derived.topSpeed * chargeBonus
+  // The vacuum raises the ceiling before the penalties, so running wide in
+  // vacuum still costs T.offTrack.speedMult of a bigger number rather than
+  // being forgiven by it.
+  if (vac > 0) topSpeed *= vacuumTopSpeedMult(vac)
   if (offTrack) topSpeed *= T.offTrack.speedMult
   if (r.slowTime > 0) topSpeed *= 1 - r.slowMag
 
@@ -938,10 +990,39 @@ export function stepVehicle(
   const overRoad = Math.abs(proj.lateral) <= smp.width * T.offTrack.edgeTolerance
 
   if (loco.liftCapacity > 0) {
-    r.liftActive = eff.lift && r.lift > 0
+    // ---------------------------------------------------------------------
+    // THE VACUUM TAKES THE LIFT WITH THE AIR, and it is the same rule that
+    // takes hover's cushion: no medium, no aerodynamic anything. A flight
+    // chassis in hard vacuum is a very fast brick with attitude control.
+    //
+    // THIS IS THE BILL THE FLIGHT CLASS PAYS FOR THE REST OF THE MECHANIC, and
+    // it is charged here rather than by softening `vacuumGripLoss`, because the
+    // GDD contract is that flight GAINS MOST from a vacuum and softening the
+    // grip term to fix a win share is how Aetherion's rotunda roll got broken
+    // and had to be reverted. Flight still keeps the most cornering and gets
+    // the same top-speed gift; what it gives up is the one thing only it has.
+    //
+    // Measured on The Hollow Choir at 200 races, `maxLift` clamped to zero for
+    // the whole lap: Vector-7 28.7% -> 21.0% of wins, air share 34% -> 0%,
+    // boost uptime 54% -> 48%. Lift is worth about eight points of win share on
+    // this circuit and about a fifth of the road it is used on is the Breach,
+    // so charging it there is worth roughly a point and a half -- a trim, not
+    // the whole answer, and the header of hollowchoir.ts says so.
+    //
+    // At vacuum 0 this is `loco.maxLift` by construction (the branch is not
+    // taken) and `eff.lift && r.lift > 0` exactly as before, so no track that
+    // authors no vacuum can tell the difference.
+    // ---------------------------------------------------------------------
+    const liftCeiling = vac > 0
+      ? loco.rideHeight + (loco.maxLift - loco.rideHeight) * (1 - vac)
+      : loco.maxLift
+    // Thrust into nothing is not spent: a chassis that cannot climb does not
+    // burn its Lift budget trying. Charging for the attempt would be punishing
+    // the same fact twice.
+    r.liftActive = eff.lift && r.lift > 0 && liftCeiling > loco.rideHeight + 0.05
     if (r.liftActive) {
       r.lift = Math.max(0, r.lift - DT)
-      targetAlt = loco.maxLift
+      targetAlt = liftCeiling
     } else {
       r.lift = Math.min(loco.liftCapacity, r.lift + loco.liftRegen * DT)
     }

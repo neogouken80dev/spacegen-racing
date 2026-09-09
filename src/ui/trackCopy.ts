@@ -86,6 +86,21 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
       'throws you across the gap to the orrery, and the lower city -- plaza, ' +
       'descent and the Glyph Steps -- is buried in two thousand years of dust.',
   },
+  hollowchoir: {
+    world: 'Derelict Megastructure',
+    hook: 'Rotating gravity, and a hull with a hole in it.',
+    difficulty: 'Hard',
+    note:
+      'The drift track. Five corners in three kilometres, two direction ' +
+      'changes in the whole lap, and every corner long enough to bank a ' +
+      'Singularity. A third of it runs on the inside of a spinning habitat ' +
+      'drum, corkscrewing a full turn from the deck to the ceiling and back, ' +
+      'so down points outward the whole way round. The drum\'s hull is torn ' +
+      'open across the middle of that: no air means no drag and a higher top ' +
+      'speed, and it also means nothing to corner against, so the Breach is a ' +
+      'gift on the straight and a bill at both ends of it. Hovercraft feel it ' +
+      'worst -- the cushion they ride on is the thing that is missing.',
+  },
 }
 
 const UNRATED: TrackCopy = {

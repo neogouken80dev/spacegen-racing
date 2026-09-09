@@ -7,6 +7,7 @@ import { lateralBudget, cornerSpeedAt } from '../src/sim/vehicle'
 import { RUSTFALL } from '../src/content/tracks/rustfall'
 import { CRYOSTATIC } from '../src/content/tracks/cryostatic'
 import { AETHERION } from '../src/content/tracks/aetherion'
+import { HOLLOWCHOIR } from '../src/content/tracks/hollowchoir'
 import { TUNING } from '../src/content/tuning'
 import { buildEnvironment } from '../src/render/environment'
 import { buildTrackVisual } from '../src/render/trackMesh'
@@ -150,6 +151,33 @@ describe.each([
   // in the ribbon's own frame at `corridor(width) + pad`, hanging along
   // -normal, so its entire surface is BEHIND the road at every sample.
   ['Aetherion', AETHERION],
+  // The Hollow Choir joined with its art pass, and it is the case the fixture
+  // is LEAST able to speak for -- worth stating precisely, because the design
+  // note written before the pass predicted the wrong failure.
+  //
+  // The prediction was that `reach()` would divide by a `|right_xz|` that
+  // passes through zero on the drum. It does not: `right` on this bore is
+  // `-cos(psi) * e_phi + sin(psi) * e_z`, so `|right_xz|^2` is
+  // `cos^2(psi) cos^2(phi) + sin^2(psi)`, and psi is 80 degrees through the
+  // whole Breach -- measured, the minimum over the lap is 0.92 and the scale
+  // never diverges.
+  //
+  // What DOES break is one step earlier. The fixture picks the cross-section a
+  // point stands on by requiring it to be within 0.9 m ALONG the track, using
+  // the plan projection of the frame -- and where the road is a wall, the plan
+  // tangent and the plan right are parallel, so "along the track" and "across
+  // it" are the same direction in plan and the test cannot tell them apart. So
+  // on the drum this suite is not measuring what it measures elsewhere.
+  //
+  // The drum is guarded by CONSTRUCTION instead, which is the same answer
+  // Aetherion's rotunda gives: every radius in `themes/hollowchoir.ts` is an
+  // offset from a cylinder FITTED to the ribbon's own samples, and the
+  // smallest of them is `R + 14` against a road that reaches 79.3 m from that
+  // fitted axis at its worst point. What this suite does cover on this track
+  // is the 73% of the lap that is ordinary road -- the two galleries, the
+  // Gantry's portals, the Carousel's spindle and every scattered prop -- which
+  // is exactly where something can wander onto the tarmac.
+  ['Hollow Choir', HOLLOWCHOIR],
 ])('%s environment fits the ribbon', (_name, def) => {
   const track = new Track(def)
   const m = track.samples.length

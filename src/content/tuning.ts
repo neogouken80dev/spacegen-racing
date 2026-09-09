@@ -595,6 +595,13 @@ export const TUNING = {
       driftChargeMult: 1.00, driftArcMult: 1.00, gripMult: 1.00,
       knockbackMult: 1.00, fieldForceMult: 1.00, gapCross: 0,
       liftCapacity: 0, liftRegen: 0, cleanLandingTolerance: 0,
+      // A wheel in vacuum still has a wheel, a contact patch and all of its
+      // mass pressing it down -- spin gravity does not care whether there is
+      // air. What it loses is the aero load that was helping to plant it, so
+      // it gives up a little under half its lateral budget and keeps the rest.
+      // This is the middle of the three and the anchor the other two are set
+      // against.
+      vacuumGripLoss: 0.42,
     },
     // Balance pass 2026-09: hover and flight used to carry driftArcMult above
     // 1.0 and gripMult well below it. driftArcMult scales BOTH the drift yaw
@@ -637,6 +644,32 @@ export const TUNING = {
       driftChargeMult: 0.95, driftArcMult: 0.95, gripMult: 1.04,
       knockbackMult: 1.25, fieldForceMult: 1.50, gapCross: 4.0,
       liftCapacity: 0, liftRegen: 0, cleanLandingTolerance: 0,
+      // HOVER IS THE CLASS THE VACUUM IS AIMED AT, and it is the one case
+      // where the fiction and the mechanic agree without being argued into
+      // agreement: a hovercraft corners by pushing on the cushion of air it is
+      // floating on, and in vacuum there is no cushion. It gives up nearly two
+      // five points more of its lateral budget than grounded gives up, which
+      // is the GDD contract stated as a number.
+      //
+      // THE LADDER WAS 0.62 / 0.42 / 0.26 AND THAT SPREAD WAS THE WHOLE
+      // BALANCE PROBLEM. At R=150 in full vacuum it priced the same corner at
+      // 39.0 m/s for hover, 47.2 for grounded and 53.7 for flight -- a 14.7 m/s
+      // spread on 420m of road. Measured at 200 races on The Hollow Choir:
+      // Vector-7 46.5% of wins, Filament 1.5%, and tools/probe-sector.ts put
+      // 1.17s of Vector-7's 2.79s per-lap advantage in the three bins that
+      // carry the vacuum. The ORDER is the contract; the spread was never part
+      // of it, and 0.47/0.42/0.38 keeps the order with a 3.3 m/s spread.
+      //
+      // The flight class's bill for coming out best here is charged in the
+      // SAME mechanic and not by flattening this ladder: a vacuum has no air
+      // to make aerodynamic lift with either. See the lift block in
+      // sim/vehicle.ts.
+      //
+      // It is the one place in the locomotion table where hover is strictly
+      // worse than grounded on the same metres. The standing caveat (see the
+      // Aetherion report: "hover is grounded plus a field-force tax and minus
+      // nothing") is why that was worth building.
+      vacuumGripLoss: 0.47,
     },
     flight: {
       // maxLift stays at the GDD's 5.0m even though Lift is currently a net
@@ -662,6 +695,19 @@ export const TUNING = {
       driftChargeMult: 0.90, driftArcMult: 0.85, gripMult: 1.01,
       knockbackMult: 1.60, fieldForceMult: 1.80, gapCross: 999,
       liftCapacity: 4.0, liftRegen: 0.625, cleanLandingTolerance: 0.21,
+      // Flight gains most, which is the GDD's contract and is expressed here
+      // as losing least: a chassis that is already flying is the one least
+      // dependent on a contact patch. See the note on hover for why the gap is
+      // six points rather than the sixteen it started at.
+      //
+      // THIS IS A KNOWN RISK AND IT IS PAID FOR ELSEWHERE ON THE TRACK, not
+      // softened here. Vector-7 was at 27.0% of wins on Aetherion against a
+      // 30% ceiling with roster-high air time, so a section that hands the
+      // flight class both the top-speed gift and the smallest cornering loss
+      // needs a bill somewhere. The Hollow Choir's is the drum's spin drag --
+      // a crosswind at fieldForceMult 1.80 through both walled drum corners.
+      // See the header of content/tracks/hollowchoir.ts for the measurement.
+      vacuumGripLoss: 0.38,
     },
   },
 
@@ -1126,6 +1172,38 @@ export const TUNING = {
   /**
    * THE GRAVITY SYSTEM. Only bites on tracks that author up-vectors.
    */
+  /**
+   * HARD VACUUM. Only bites on tracks that author TrackNode.vacuum.
+   */
+  vacuum: {
+    /**
+     * HOW MUCH OF `T.sim.airDrag` A FULL VACUUM TAKES AWAY, 0..1.
+     *
+     * The honest note first, because it changes what this number means.
+     * `T.sim.airDrag` has been in tuning since the first pass and IS NOT READ
+     * BY ANYTHING -- grep the repo. There is no drag term in stepVehicle: the
+     * longitudinal controller drives ground speed toward `derived.topSpeed`
+     * asymptotically, so air resistance in this sim is not a force, it is
+     * already baked into the top speed the roster was tuned at. Adding a real
+     * drag term would have been the physically tidy move and it would have
+     * moved all three shipped circuits, which the brief forbids and which is
+     * the right call anyway: they are balanced against the speeds they have.
+     *
+     * So the vacuum removes the drag by RAISING the asymptote instead, and
+     * `airDrag` finally does the job it was named for -- it is read as "the
+     * fraction of a car's thrust that the air was eating at top speed". At
+     * terminal velocity thrust equals drag and drag goes as v^2, so removing a
+     * fraction f of it multiplies top speed by 1/sqrt(1 - f). At airDrag 0.24
+     * and dragRemoved 1.0 that is 1.147x: Bulwark's 59.2 m/s becomes 67.9 and
+     * Dray-9's 63.6 becomes 72.9.
+     *
+     * It is deliberately the SAME multiplier for every class. The medium is a
+     * property of the road, not of the car; the class contract lives entirely
+     * in `vacuumGripLoss` below, where it can be read in one place.
+     */
+    dragRemoved: 1.0,
+  },
+
   gravity: {
     /**
      * Seconds for a racer's up-vector to close half the gap to the surface it

@@ -234,7 +234,7 @@ const GLARE_INTENSITY = (() => {
  */
 const CHASSIS = (process.argv.find((a) => a.startsWith('--chassis=')) ?? '').slice(10)
 
-const TRACK_NAMES = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion Prime' }
+const TRACK_NAMES = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion Prime', hollowchoir: 'The Hollow Choir' }
 const trackId = (process.argv.find((a) => a.startsWith('--track=')) ?? '--track=rustfall').slice(8)
 const trackName = TRACK_NAMES[trackId]
 if (!trackName) {

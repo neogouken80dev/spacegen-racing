@@ -206,13 +206,45 @@ export interface MoteStyle {
 
 /** Sky dome extras layered on top of the shared gradient. */
 export interface SkyStyle {
-  /** 'strata' = drifting dust bands. 'aurora' = animated polar curtains. */
-  band: 'strata' | 'aurora'
+  /**
+   * 'strata' = drifting dust bands. 'aurora' = animated polar curtains.
+   * 'stars' = a fixed starfield, for a sky that is not an atmosphere.
+   *
+   * One branch is compiled into the dome by a #define, so a planet pays for
+   * the band it uses and nothing at all for the other two.
+   */
+  band: 'strata' | 'aurora' | 'stars'
   /** Aurora curtain colours, low and high. */
   auroraLow?: number
   auroraHigh?: number
   /** Aurora brightness. */
   auroraGain?: number
+  /**
+   * THE DOME'S LOW-SKY COLOUR, when it must differ from `TrackDef.skyBottom`.
+   *
+   * `skyBottom` does double duty: it is the colour the dome grades to just
+   * above the horizon AND it is the HemisphereLight's sky colour, which on
+   * every shipped track is fine because a bright sky and a bright up-facing
+   * fill are the same physical fact. On the Hollow Choir they are opposites.
+   * That planet's fill has to carry the whole drum, because the key does no
+   * work on the inside of a cylinder — but its sky is vacuum, and a vacuum
+   * bright enough to light a drum is a sky you cannot see a star in, which
+   * costs that track the one image the Breach is for. Set this and the dome
+   * takes it while the light rig keeps `skyBottom`.
+   *
+   * Unset on every other planet, where the two are the same number.
+   */
+  domeLow?: number
+  /**
+   * Starfield brightness, and how far down the sky the field survives.
+   *
+   * `starHorizon` is the d.y at which stars have faded fully into the haze:
+   * anything lit by a real atmosphere wants this high, and a vacuum with a
+   * dust horizon wants it low. The field is FIXED — it does not drift, does
+   * not twinkle, and costs two cell hashes per fragment.
+   */
+  starGain?: number
+  starHorizon?: number
 }
 
 /**
@@ -243,6 +275,20 @@ export interface WeatherStyle {
   fogDensity: number
   /** Key light multiplier at full strength — a blizzard has no sun. */
   sunScale: number
+  /**
+   * Hemisphere fill multiplier at full strength. Defaults to 0.75, which is
+   * what this was hardcoded at before any theme needed to ask.
+   *
+   * The Hollow Choir is why it is a field. On that circuit `wind` marks where
+   * there is AIR — 24 across the drum's sealed bays, exactly zero through the
+   * Breach — and the fill is the only light that does any work inside a drum,
+   * because the key runs along the axis and N.L is near zero on the whole
+   * bore. Dropping the fill where the air is therefore makes the vacuum
+   * section the BRIGHTEST part of the drum, which is both what the track def
+   * says ("the interior of the drum is lit by whatever comes through the
+   * Breach") and the one channel loud enough to be felt rather than noticed.
+   */
+  hemiScale?: number
   /** Extra mote alpha and count multiplier at full strength. */
   moteGain: number
 }

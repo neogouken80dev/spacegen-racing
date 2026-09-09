@@ -106,6 +106,41 @@ export interface TrackNode {
    */
   wind?: number
   /**
+   * HARD VACUUM, 0..1. 0 is a breathable atmosphere -- every metre of the
+   * first three circuits -- and 1 is open space.
+   *
+   * It does exactly two things, and both of them are the SAME fact stated
+   * twice: there is no medium here.
+   *
+   *   - the air is not slowing you down any more, so top speed climbs
+   *     (`vacuumTopSpeedMult` in sim/vehicle.ts, derived from T.sim.airDrag);
+   *   - the medium a chassis pushes against to change direction is gone, so
+   *     the lateral friction budget collapses (`vacuumGripMult`, scaled per
+   *     locomotion class by LocomotionProfile.vacuumGripLoss).
+   *
+   * A straight-line gift that charges anyone who needs to turn in it, which is
+   * why the beat it was built for -- The Hollow Choir's Breach -- puts the
+   * vacuum exactly where the road is a geodesic and fades it in and out
+   * THROUGH the two corners either side. A vacuum that only ever covers
+   * straight road is a gift with no bill attached.
+   *
+   * IT INTERPOLATES BETWEEN NODES, EXACTLY LIKE `wind`, and for the same
+   * reason: a hull breach that switched on at a sample boundary would take
+   * the grip out from under a car mid-corner in one frame. Authoring a ramp
+   * is the whole mechanic, not a nicety.
+   *
+   * IT IS DETERMINISTIC AND IDENTICAL FOR EVERY RACER. Like Cryostatic's
+   * fragile shelf and Aetherion's phasing spans, it is a property of the ROAD
+   * and of nothing else -- no RNG, no per-racer state, not even race time. Two
+   * clients agree by construction because there is nothing to agree about.
+   *
+   * A NOTE ON WIND. Vacuum and `wind` are mutually exclusive by physics: a
+   * crosswind is air, and there is none here. Nothing enforces that -- the sim
+   * would happily blow a gale through hard vacuum -- so it is an authoring
+   * rule, and The Hollow Choir keeps it.
+   */
+  vacuum?: number
+  /**
    * THE GRAVITY SYSTEM.
    *
    * Surface up-vector at this node, world space, need not be normalised.
@@ -184,6 +219,8 @@ export interface TrackSample {
   open: boolean
   fragile: boolean
   wind: number
+  /** Hard vacuum, 0..1. See TrackNode.vacuum. 0 on a track that authors none. */
+  vacuum: number
   /**
    * Phasing light-bridge offset in cycles, or -1 where the deck is permanent.
    * -1 on every sample of a track that authors no `phase`, and `bridgeSolid`
@@ -236,6 +273,14 @@ export class Track {
    */
   readonly hasBridges: boolean = false
   /**
+   * True if any node authors a non-zero `vacuum`. Read by stepVehicle and
+   * stepAI to skip the vacuum terms entirely, so the three circuits that
+   * shipped before this existed take literally the branches they took then --
+   * the same gate `hasGravity` and `hasBridges` already carry, for the same
+   * reason.
+   */
+  readonly hasVacuum: boolean = false
+  /**
    * The phasing spans, as arc-length intervals, in lap order.
    *
    * Built once here rather than scanned per frame: the AI has to plan its
@@ -284,6 +329,7 @@ export class Track {
     }
     this.length = cum[cum.length - 1]
     this.hasFragile = def.nodes.some((n) => n.fragile === true)
+    this.hasVacuum = def.nodes.some((n) => (n.vacuum ?? 0) > 0)
 
     // Gravity: normalise the authored up-vectors once, up front, so the bake
     // loop below can interpolate them without re-normalising per sample. A node
@@ -345,6 +391,11 @@ export class Track {
         // Wind interpolates, so a blizzard band can ramp in and out instead of
         // switching on at a sample boundary and punching the car sideways.
         wind: lerp(n0.wind ?? 0, n1.wind ?? 0, nf),
+        // Vacuum interpolates for the same reason and one stronger: this term
+        // is a multiplier on the LATERAL BUDGET, so a step change in it is a
+        // step change in how hard the car can corner. `?? 0` is what makes a
+        // track written before this existed read exactly 0 everywhere.
+        vacuum: clamp(lerp(n0.vacuum ?? 0, n1.vacuum ?? 0, nf), 0, 1),
         // A phasing span is a DECK and needs both of its ends. See TrackNode.
         // phase for why this is an AND where `open`/`bounce`/`fragile` are ORs.
         // The half that gives way is AND'd with it: a segment whose two ends

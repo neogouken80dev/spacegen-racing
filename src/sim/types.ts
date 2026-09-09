@@ -20,6 +20,12 @@ export interface LocomotionProfile {
   knockbackMult: number
   /** Lateral force multiplier for wind, vacuum and gravity wells. */
   fieldForceMult: number
+  /**
+   * Share of the lateral friction budget this class loses in a full hard
+   * vacuum, 0..1. See TrackNode.vacuum and T.vacuum: hover loses most (it is
+   * riding on the medium that is gone), flight least.
+   */
+  vacuumGripLoss: number
   /** Max gap width crossable without a ramp, metres. 0 = none. */
   gapCross: number
   /** Seconds of Lift available (flight only). */
