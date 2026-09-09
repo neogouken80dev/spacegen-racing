@@ -1953,6 +1953,102 @@
   border-color: rgba(255, 139, 47, 0.5);
 }
 
+/* --- live vehicle preview -----------------------------------------------
+   The car, with its pilot in it, at the top of the Loadout column. Wears the
+   same jacket as the track screen's route map -- same radius, same 2px hairline,
+   same top-lit radial and inset highlight -- because it is the same kind of
+   object: an instrument panel in the middle column with a pickable list either
+   side. The 3D inside it is drawn on a TRANSPARENT buffer, so this background
+   is the background of the shot and the panel and the render cannot drift apart.
+   ------------------------------------------------------------------------ */
+
+.sg-prev {
+  position: relative;
+  flex: 1 1 44%;
+  min-height: 108px;
+  border-radius: var(--sg-r-lg);
+  overflow: hidden;
+  background:
+    radial-gradient(
+      120% 96% at 50% 4%,
+      rgba(34, 211, 255, 0.16) 0%,
+      rgba(0, 0, 0, 0) 62%
+    ),
+    radial-gradient(
+      80% 60% at 50% 108%,
+      rgba(180, 77, 255, 0.16) 0%,
+      rgba(0, 0, 0, 0) 70%
+    ),
+    rgba(8, 14, 27, 0.86);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm), inset 0 1px 0 rgba(180, 225, 255, 0.12);
+  /* The gesture rule. `none` HERE and nowhere else: a swipe that starts on this
+     box is ours and the browser never claims it, while a swipe that starts on
+     either list is never seen by this element at all and scrolls the list the
+     way it always did. Nothing is bound at the document level, which is the
+     usual way a drag surface next to a scroll surface steals the scroll. */
+  touch-action: none;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.sg-prev.is-drag {
+  cursor: grabbing;
+  border-color: var(--sg-line-hot);
+}
+
+/* faint graticule, exactly as the route map wears one, so the box reads as an
+   instrument rather than as a hole cut in the panel */
+.sg-prev::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(122, 190, 255, 0.10) 1px, rgba(0, 0, 0, 0) 1px),
+    linear-gradient(90deg, rgba(122, 190, 255, 0.10) 1px, rgba(0, 0, 0, 0) 1px);
+  background-size: 34px 34px, 34px 34px;
+  mask-image: radial-gradient(70% 60% at 50% 55%, #000 0%, rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: radial-gradient(70% 60% at 50% 55%, #000 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.sg-prev__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sg-prev__hint {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 1;
+  pointer-events: none;
+  font-size: clamp(8px, 1.1vmin, 11px);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  opacity: 0.9;
+  transition: opacity 260ms ease;
+}
+
+/* Said once. The moment the player has actually turned the car they know, and
+   a permanent instruction is just a label on a thing that no longer needs one. */
+.sg-prev__hint.is-gone {
+  opacity: 0;
+}
+
+/* How the Loadout column is divided between the two. Scoped to the garage on
+   purpose: .sg-detail is shared with the track screen's briefing, which has no
+   preview above it and must keep filling its column. */
+.sg-garage .sg-detail {
+  flex: 1 1 56%;
+}
+
 /* --- detail panel ------------------------------------------------------- */
 
 .sg-detail {
@@ -2321,16 +2417,60 @@
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto 1fr;
   }
+  /* A DEFINITE height, and a taller one than the 40vh max this used to carry.
+     Taller because there are two things stacked in this row now rather than
+     one; definite because they are sized as percentages OF it, and a percentage
+     of an auto height resolves to nothing -- both panels then collapse onto
+     their own content and the locomotion note ends up behind a scrollbar it
+     does not need. 50vh still leaves the two lists a clear half of the screen,
+     which is what the two-column stack was protecting. */
   .sg-col--detail {
     grid-column: 1 / -1;
     grid-row: 1;
-    max-height: 40vh;
+    height: 50vh;
   }
   .sg-col--chassis {
     grid-row: 2;
   }
   .sg-col--pilot {
     grid-row: 2;
+  }
+  /* Portrait: the preview is the wide thing in a wide row. It gets a little
+     less than half so the six stat bars AND the locomotion note underneath
+     them still fit without the panel having to be scrolled. */
+  .sg-prev {
+    flex: 1 1 40%;
+    min-height: 118px;
+  }
+  .sg-garage .sg-detail {
+    flex: 1 1 60%;
+  }
+}
+
+/* A LANDSCAPE PHONE IS NOT A SHORT PORTRAIT ONE.
+   844x390 stacks (it is under 900px wide), which leaves the Loadout row about
+   200px of height to hold two things that both want 200px. Stacking them there
+   gives a sliver of car over a sliver of numbers and neither is usable. There
+   is width to spare instead -- the row is the full 844px -- so the preview and
+   the stat panel sit SIDE BY SIDE, which is the same three-across grammar the
+   desktop garage uses, folded one level down. */
+@media (max-width: 900px) and (max-height: 560px) {
+  .sg-col--detail {
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 49vh;
+    max-height: none;
+  }
+  .sg-col--detail > .sg-col__title {
+    grid-column: 1 / -1;
+  }
+  .sg-prev {
+    min-height: 0;
+  }
+  .sg-col--detail .sg-detail {
+    padding: 8px 10px;
+    gap: 4px;
   }
 }
 
@@ -2361,6 +2501,26 @@
    difficulty and the surface mix — and drop the elevation profile, whose job
    (shape of the lap) the route map is already doing two columns to the left. */
 @media (max-height: 520px) {
+  /* A landscape phone is all width and no height: 412px, of which the head,
+     the options row and the column title take about 130 before anything is
+     drawn. The six stat bars and the locomotion note underneath the preview
+     need about 175px of what is left and cannot be argued down, so here the
+     preview stops being a PERCENTAGE and becomes a fixed slice -- a smaller
+     one, which is the "present on phones at reduced size" half of the design
+     decision made literal. It is still a car you can see and still a car you
+     can turn. */
+  .sg-prev {
+    flex: 0 0 clamp(72px, 24vh, 130px);
+    min-height: 0;
+  }
+  .sg-garage .sg-detail {
+    flex: 1 1 auto;
+    gap: 4px;
+    padding: 8px 10px;
+  }
+  .sg-prev__hint {
+    display: none;
+  }
   /* Give the width back to the briefing: the route map has slack to spare in
      this aspect and the briefing is the column running out of room. */
   .sg-tracks {

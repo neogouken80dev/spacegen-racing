@@ -7,7 +7,10 @@
  * planet, then pick the car to take to it.
  *
  * Unlike the HUD this is not on the frame budget, but every node is still
- * built once and reused so a rematch never leaks DOM.
+ * built once and reused so a rematch never leaks DOM. The one exception is the
+ * garage's vehicle preview, which really does run a render loop and really does
+ * hold a WebGL context of its own -- and therefore is built and torn down with
+ * the screen rather than with the front end. See ui/garagePreview.ts.
  *
  * Every control on every screen is a real <button>. That is the whole
  * accessibility strategy: pointer, touch, keyboard and gamepad all converge on
@@ -20,6 +23,7 @@ import { PILOTS } from '../content/pilots'
 import { TRACKS } from '../content/tracks'
 import { Track, type SurfaceKind, type TrackDef } from '../sim/track'
 import { copyFor, DIFFICULTY_RANK } from './trackCopy'
+import { createGaragePreview, type GaragePreview } from './garagePreview'
 
 export type QualityTier = 'low' | 'medium' | 'high'
 export type ScreenId = 'title' | 'track' | 'garage' | 'results' | 'paused'
@@ -421,6 +425,12 @@ class FrontEndImpl implements FrontEnd {
 
   private readonly detName: HTMLElement
   private readonly detNick: HTMLElement
+  /**
+   * The live car + pilot above the stat bars. Owns a WebGL context of its own,
+   * which is exactly why it is asked to show() and hide() rather than merely
+   * being display:none'd with the screen -- see ui/garagePreview.ts.
+   */
+  private readonly preview: GaragePreview
   private readonly statFills: HTMLElement[] = []
   private readonly statVals: HTMLElement[] = []
   private readonly detNote: HTMLElement
@@ -595,9 +605,17 @@ class FrontEndImpl implements FrontEnd {
       this.chassisCards.push(card)
     }
 
-    // detail column
+    // detail column. The preview sits at the TOP of it and the stat bars run
+    // underneath: the car is what a player is choosing and the numbers are the
+    // argument for the choice, so the numbers go second. The two pickable
+    // lists either side keep the position and the width they always had.
     const dCol = el('div', 'sg-col sg-col--detail', grid)
     el('div', 'sg-col__title', dCol, 'Loadout')
+    this.preview = createGaragePreview(dCol, {
+      chassisId: this.chassisId,
+      pilotId: this.pilotId,
+      tier: this.quality,
+    })
     const detail = el('div', 'sg-detail', dCol)
     this.detName = el('div', 'sg-detail__name', detail)
     this.detNick = el('div', 'sg-detail__nick', detail)
@@ -770,6 +788,12 @@ class FrontEndImpl implements FrontEnd {
     // The route bake is deferred to the first view so it never sits between
     // page load and the title screen.
     if (screen === 'track') this.refreshTrack()
+    // The preview's WebGL context exists for exactly as long as the garage is
+    // the screen being looked at, and not one frame longer. Every other screen
+    // -- including the pause menu, which sits over a live race -- takes it
+    // down, so no second context is ever alive while the game is rendering.
+    if (screen === 'garage') this.preview.show()
+    else this.preview.hide()
     // Focus the primary action so Enter / Space always does the obvious thing.
     const target =
       screen === 'title' ? this.playBtn
@@ -787,6 +811,7 @@ class FrontEndImpl implements FrontEnd {
 
   hide(): void {
     this.root.classList.add('is-hidden')
+    this.preview.hide()
     this.padStop()
     const active = document.activeElement
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur()
@@ -850,6 +875,7 @@ class FrontEndImpl implements FrontEnd {
 
   dispose(): void {
     window.removeEventListener('keydown', this.onKey)
+    this.preview.dispose()
     this.padStop()
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root)
   }
@@ -950,6 +976,10 @@ class FrontEndImpl implements FrontEnd {
     for (let i = 0; i < this.qualityBtns.length; i++) {
       this.qualityBtns[i].classList.toggle('is-sel', QUALITIES[i] === q)
     }
+    // The quality control is on this screen, so it should be answerable on
+    // this screen: the preview rebuilds at the chosen tier and the player can
+    // see what LOW actually costs them before they commit to a race.
+    this.preview.setQuality(q)
   }
 
   private refreshDetail(): void {
@@ -964,6 +994,10 @@ class FrontEndImpl implements FrontEnd {
     }
     this.detNote.textContent =
       LOCO_NOTE[def.locomotion] + '  //  PILOT ' + pilot.name + ' — ' + pilot.read
+    // One place for both halves of the selection. selectChassis and selectPilot
+    // both land here, so the car in the box can never disagree with the card
+    // that is lit up in either list.
+    this.preview.setSelection(def.id, pilot.id)
   }
 
   /**
