@@ -5,3 +5,9 @@ shots/
 .DS_Store
 *.log
 .netlify/
+
+# Delivery patches. Generated with `git format-patch` from commits that are
+# already in this history, copied here only to hand to a machine that pulls by
+# patch rather than by remote. Committing them would duplicate the history as
+# text, and there is a new one most sessions.
+*.patch
