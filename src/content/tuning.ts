@@ -1640,6 +1640,30 @@ export const TUNING = {
      * line); `bump` force is closing speed along the pair normal, which is a
      * much smaller number for the same drama, hence the separate scale.
      */
+    /**
+     * SCALED UP AFTER THE FIRST PLAY REPORT: "I still don't see the sparks
+     * when hitting the railings or barriers or on impact."
+     *
+     * They were there and they were shipped and pushed -- the report was not
+     * about a missing feature, it was about an invisible one. The numbers say
+     * why plainly enough: a streak was 0.19 m and an ember 0.105 m. A 19 cm
+     * streak seen from a chase camera twelve metres back, on a car doing 60
+     * m/s, is a couple of pixels for a couple of frames. Every screenshot the
+     * effect was signed off on was a STILL, with the sim frozen, at a distance
+     * chosen to photograph it -- which is exactly the condition under which a
+     * 19 cm spark looks fine and the only condition.
+     *
+     * So: 3.3x the streak, 3.2x the ember, 2.3x the count, 1.7x the throw,
+     * 1.8x the linger, 1.6x the brightness. The bloom had 20x of headroom
+     * against the drift effect, so brightness was never the constraint.
+     *
+     * Then photographed, and pulled BACK on one axis. At lum 5.0 the burst
+     * read as a white flare: `writeHsvLum` normalises to a target luminance,
+     * so pushing luminance up walks every hue toward white and quietly deletes
+     * the randomised colour that was the point. 4.0 with a higher saturation
+     * floor keeps the streak hot and lets the colour survive in the core --
+     * brightness and hue pull against each other here, and the ask was colour.
+     */
     wallForceFull: 22,
     bumpForceFull: 12,
     /**
@@ -1647,11 +1671,11 @@ export const TUNING = {
      * where f is the normalised force. The quadratic term is what makes a slam
      * a burst without putting a threshold under the trickle.
      */
-    countBase: 0.55,
-    countLin: 9.0,
-    countQuad: 30.0,
+    countBase: 0.95,
+    countLin: 17.0,
+    countQuad: 54.0,
     /** Hard ceiling on the sparks ONE contact event may ask for. */
-    countPerEvent: 48,
+    countPerEvent: 112,
     /**
      * THE BUDGET, and the only thing bounding the worst case.
      *
@@ -1664,10 +1688,10 @@ export const TUNING = {
      * Worst-case live contact particles = bucketFrac*pool + refillFrac*pool*L,
      * where L is the longest slot lifetime (flight + bounce + ember).
      */
-    bucketFrac: 0.13,
-    refillFrac: 0.09,
+    bucketFrac: 0.26,
+    refillFrac: 0.17,
     /** Share of sparks that get the full arc -> bounce -> settle treatment. */
-    bounceShare: 0.34,
+    bounceShare: 0.46,
     /** Road bounces before the spark settles. Clamped to 2 in the renderer. */
     bounces: 1,
     /** Normal-direction restitution and along-road friction at each bounce. */
@@ -1691,20 +1715,20 @@ export const TUNING = {
      * headless probe caught it (1 settled ember out of 56 particles); no
      * screenshot would have.
      */
-    speedBase: 3.2,
-    speedSpan: 11.0,
+    speedBase: 5.6,
+    speedSpan: 19.0,
     /**
      * Air-time cap on the first leg, seconds. A spark whose solved flight is
      * longer than this is demoted to a plain non-bouncing spark rather than
      * being given a lower arc it did not earn: a two-second hang time means
      * the spark is heading somewhere the road plane is no longer the road.
      */
-    flightMax: 0.85,
+    flightMax: 1.15,
     /** Seconds the settled ember glows before it is gone. */
-    emberLife: 0.85,
+    emberLife: 1.50,
     /** Quad size, metres: spark streak, settled ember. */
-    sparkSize: 0.190,
-    emberSize: 0.105,
+    sparkSize: 0.620,
+    emberSize: 0.450,
     /**
      * Scene-linear luminance. `lum` is a THIN stretched streak, so it may sit
      * well over the bloom threshold (0.78 on high) exactly as the drift
@@ -1720,8 +1744,8 @@ export const TUNING = {
      * road under a plain full boost -- two orders of magnitude of unused
      * headroom, and an effect nobody could see. See tools/probe-sparkshots.mjs.
      */
-    lum: 3.20,
-    emberLum: 0.75,
+    lum: 4.00,
+    emberLum: 1.28,
     /**
      * RANDOM COLOUR PER IMPACT.
      *
@@ -1735,7 +1759,7 @@ export const TUNING = {
      * yellow cannot arrive three times brighter than a random blue.
      */
     hueJitter: 0.055,
-    satMin: 0.45,
+    satMin: 0.62,
     satMax: 0.95,
     /**
      * Seconds a contact may lapse before the next one counts as a NEW impact

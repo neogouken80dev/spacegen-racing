@@ -1457,11 +1457,27 @@ function landmarks(ctx: ThemeContext): void {
       // Toward the road, in plan.
       const inX = -Math.cos(yaw) * side, inZ = Math.sin(yaw) * side
       const H = Math.max(9, smp.pos.y - by + 9)
-      // Six points up the mast and out along the head. A single foot test
-      // misses a post whose MIDDLE is what crosses a deck fifteen metres up,
-      // which is exactly what the Carousel's crossover does to it.
+      // UP THE MAST AT A FIXED METRIC PITCH, NOT AT FRACTIONS OF ITS HEIGHT.
+      //
+      // This used to sample [0, 0.4H, 0.75H, H] and it shipped a lamp post
+      // standing in the middle of the start/finish straight. The comment was
+      // already right about the failure -- a post whose MIDDLE crosses a deck
+      // -- and the fix was wrong in a way only arithmetic shows: the airspace
+      // band `makeRoadTest` looks at is 7.5 m tall, and on a 29 m mast the gap
+      // between the first two samples is 11.6 m. The mast that was reported
+      // sat with its foot at y=26.7 and its next sample at y=38.3, while the
+      // road it went through is at y=30.8 with the band running 29.8 to 37.3.
+      // It straddled the band exactly, and every sample missed.
+      //
+      // A fraction-based pitch gets COARSER as the object gets taller, which
+      // is precisely backwards: a taller mast crosses more airspace. 2 m is a
+      // quarter of the band, so nothing can slip between two samples however
+      // tall it grows.
       let blocked = false
-      for (const [dh, dy] of [[0, 0], [0, H * 0.4], [0, H * 0.75], [0, H], [2.0, H + 0.4], [3.4, H + 0.4]]) {
+      const rungs: [number, number][] = [[2.0, H + 0.4], [3.4, H + 0.4]]
+      for (let dy = 0; dy <= H; dy += 2) rungs.push([0, dy])
+      rungs.push([0, H])
+      for (const [dh, dy] of rungs) {
         if (fouls(bx + inX * dh, by + dy, bz + inZ * dh, 2.4)) { blocked = true; break }
       }
       if (blocked) continue
@@ -1562,10 +1578,52 @@ function landmarks(ctx: ThemeContext): void {
             xf(cx + (rnd() - 0.5) * 7, y + 3, cz + (rnd() - 0.5) * 7,
               rnd() * 3, (rnd() - 0.5) * 0.8, (rnd() - 0.5) * 0.9)))
         }
-        // Four dock arms at 36 m up, one of them dropped onto the deck.
+        /**
+         * FOUR DOCK ARMS AT 36 M UP, ONE OF THEM DROPPED ONTO THE DECK -- AND
+         * WHICH ONE IS NOW MEASURED, NOT AUTHORED.
+         *
+         * Reported from play: "there is what seems to be a lampost object ...
+         * near the end of the track ... placed in the middle of the track."
+         * That was this. Arm 2 drooped at -0.62 rad from 36 m, so a 40 m arm
+         * with a lamp on its tip came down to 12.8 m -- and landed on the
+         * road, 12.5 m inside the edge and 4.7 m above the deck at s=3252 m.
+         * From the seat, a fallen arm with a lit head reads as a lamp post
+         * lying across the track, which is exactly what it was.
+         *
+         * THE CLEARANCE ARGUMENT ABOVE WAS TRUE AND MEASURED THE WRONG ROAD.
+         * `rMin` is the closest the CAROUSEL's own 660 m comes to the
+         * centroid, and it is a genuine 96 m. But the intrusion is at
+         * s=3252 m, which is past the Carousel entirely -- the run-out to the
+         * start line, road that was never in the measurement. A landmark with
+         * a 64 m reach cannot be cleared against one beat of a lap that
+         * crosses over itself twice.
+         *
+         * So the arm that falls is chosen by asking the road. `fouls` tests
+         * every sample on the circuit, which is the whole point of it, and the
+         * arm keeps its full droop only where the ground under it is clear.
+         * The art intent survives -- one arm has come down -- and it can never
+         * again come down on a racing line, including on a lap re-authored
+         * later.
+         */
+        let fallen = -1
+        for (let k = 0; k < 4 && fallen < 0; k++) {
+          const a = (k / 4) * Math.PI * 2 + 0.4
+          let clear = true
+          // Walk the drooped arm from the hub to the tip. A single tip test
+          // misses an arm whose MIDDLE crosses a deck, which is the same
+          // mistake the wayside masts already had to fix.
+          for (let f = 0; f <= 1.001 && clear; f += 0.1) {
+            const rr = 24 + 40 * f
+            if (fouls(cx + Math.sin(a) * rr, gy + 36 + Math.sin(-0.62) * 40 * f,
+              cz + Math.cos(a) * rr, 4.0)) clear = false
+          }
+          if (clear) fallen = k
+        }
         for (let k = 0; k < 4; k++) {
           const a = (k / 4) * Math.PI * 2 + 0.4
-          const droop = k === 2 ? -0.62 : k === 0 ? -0.08 : 0
+          // If no arm has clear ground the landmark simply keeps all four up,
+          // which is a duller silhouette and never a hazard.
+          const droop = k === fallen ? -0.62 : k === (fallen + 2) % 4 ? -0.08 : 0
           const len = 40
           solid.push(part(new THREE.BoxGeometry(len, 2.6, 3.2), ALLOY,
             xf(cx + Math.sin(a) * (24 + len / 2), gy + 36 + Math.sin(droop) * len * 0.5,

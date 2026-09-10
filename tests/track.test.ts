@@ -242,16 +242,43 @@ describe.each([
     const mat = new THREE.Matrix4()
     const p = new THREE.Vector3()
     const bad: string[] = []
+    // ALONG THE EDGES, NOT JUST AT THE CORNERS.
+    //
+    // This used to test vertices only, and it passed a lamp post standing in
+    // the middle of The Hollow Choir's start/finish straight for a whole
+    // release. A mast is a tall thin box: its only vertices are at the two
+    // ends, one on the ground below the deck and one in the air above it, so
+    // an object whose MIDDLE goes through the road has no vertex anywhere near
+    // the band and clears this fixture by construction. The reported post ran
+    // from y=26.7 to y=55.8 through a road at y=30.8 and was invisible here.
+    //
+    // Walking each triangle edge at 0.6 m -- a tenth of the band -- costs a
+    // few seconds on four tracks and makes the fixture able to see the shape
+    // of prop that actually causes this, which is anything long and thin.
+    const a = new THREE.Vector3(), b = new THREE.Vector3()
+    const idx = mesh.geometry.getIndex()
+    const tris = idx ? idx.count / 3 : pos.count / 3
     mesh.updateMatrix()
     for (let n = 0; n < count && bad.length < 6; n++) {
       if (inst.isInstancedMesh) inst.getMatrixAt(n, mat); else mat.copy(mesh.matrix)
-      for (let v = 0; v < pos.count; v++) {
-        p.set(pos.getX(v), pos.getY(v), pos.getZ(v)).applyMatrix4(mat)
-        const r = reach(p.x, p.y, p.z)
-        if (!r || r.dy < band[0] || r.dy > band[1]) continue
-        bad.push(`${mesh.name} reaches ${r.pen.toFixed(2)}m inside the edge at ` +
-          `s=${r.s.toFixed(0)}m, ${r.dy.toFixed(2)}m above the road`)
-        break
+      let found = false
+      for (let t = 0; t < tris && !found; t++) {
+        for (let e = 0; e < 3 && !found; e++) {
+          const i0 = idx ? idx.getX(t * 3 + e) : t * 3 + e
+          const i1 = idx ? idx.getX(t * 3 + ((e + 1) % 3)) : t * 3 + ((e + 1) % 3)
+          a.set(pos.getX(i0), pos.getY(i0), pos.getZ(i0)).applyMatrix4(mat)
+          b.set(pos.getX(i1), pos.getY(i1), pos.getZ(i1)).applyMatrix4(mat)
+          const steps = Math.min(64, Math.max(1, Math.ceil(a.distanceTo(b) / 0.6)))
+          for (let k = 0; k <= steps; k++) {
+            p.lerpVectors(a, b, k / steps)
+            const r = reach(p.x, p.y, p.z)
+            if (!r || r.dy < band[0] || r.dy > band[1]) continue
+            bad.push(`${mesh.name} reaches ${r.pen.toFixed(2)}m inside the edge at ` +
+              `s=${r.s.toFixed(0)}m, ${r.dy.toFixed(2)}m above the road`)
+            found = true
+            break
+          }
+        }
       }
     }
     return bad
@@ -281,6 +308,30 @@ describe.each([
       // deck, drawn only while the sim says that deck does not exist. It is on
       // the road on purpose and is the one thing in this file that is.
       if (mesh.name === 'bridge-void-decal') continue
+      // STRUCTURES THE ROAD RUNS THROUGH OR INSIDE.
+      //
+      // These three enclose the road rather than stand beside it, so they meet
+      // it by construction and edge sampling correctly reports the seam. The
+      // vertex test never saw them because a seam has no corner in the band.
+      // Named individually rather than pattern-matched, so a NEW prop cannot
+      // inherit an exemption by being called something similar:
+      //
+      //   drum-hull           cut where the road threads through each mouth of
+      //                       The Hollow Choir's drum. Grazes 1.4 cm BELOW the
+      //                       surface at s=774m -- the junction itself.
+      //   landmark-ice-tunnel Cryostatic's tunnel is a tunnel: its walls rise
+      //                       from the roadside and its roof spans the road.
+      //                       Reported 1 cm inside the forgiving edge, 4.2 m
+      //                       up, which is the wall meeting the verge.
+      //   landmark-rotunda    Aetherion's road runs INSIDE the rotunda. Its
+      //                       floor is the road, so 0.13 m above the surface
+      //                       is the surface.
+      //
+      // Anything that is not one of these and touches the road is a bug, which
+      // is the whole point of the list being short and explicit.
+      if (mesh.name === 'drum-hull') continue
+      if (mesh.name === 'landmark-ice-tunnel') continue
+      if (mesh.name === 'landmark-rotunda') continue
       bad.push(...offenders(mesh, [-0.15, 5.0]))
     }
     expect(bad.slice(0, 5)).toEqual([])
