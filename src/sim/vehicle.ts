@@ -1399,7 +1399,7 @@ export function stepVehicle(
         r.vel.x = bvx
         r.vel.z = bvz
         if (_grav) r.vel.y = bvy
-        r.events.push({ t: 'wall', force: severity * 0.5 })
+        r.events.push({ t: 'wall', force: severity * 0.5, px: r.pos.x, py: r.pos.y, pz: r.pos.z, nx: wallNormalX, ny: wallNormalY, nz: wallNormalZ })
       } else {
         // A barrier takes away the speed you drove INTO it. It does not reach
         // round and take the speed you were carrying ALONG it.
@@ -1488,7 +1488,7 @@ export function stepVehicle(
         if (severity > T.drift.collisionCancelSpeed) {
           r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0
         }
-        r.events.push({ t: 'wall', force: severity })
+        r.events.push({ t: 'wall', force: severity, px: r.pos.x, py: r.pos.y, pz: r.pos.z, nx: wallNormalX, ny: wallNormalY, nz: wallNormalZ })
       }
     }
   }

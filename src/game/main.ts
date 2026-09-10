@@ -734,6 +734,14 @@ export class Game {
         const n = Math.ceil(st.countdown - 0.6)
         this.entityVis?.setStartLights(Math.max(0, Math.min(3, n)))
       }
+      // ONE TOGGLE, EVERY CONSUMER. `reduceMotion` here is the player's own
+      // choice (settings panel) initialised from the OS preference, and it
+      // already reaches the chase shake below and the crosswind debris. The
+      // VFX pass used to read `prefers-reduced-motion` for itself, so a player
+      // who turned the toggle ON with the OS preference OFF got a calm camera
+      // and the full strobing effect set. Pushed every frame because it is one
+      // property write and there is then no path by which the two can differ.
+      if (this.vfx) this.vfx.reduceMotion = this.reduceMotion
       this.vfx?.update(dt, st, this.chase.camera.position, this.localId)
       this.trackVis?.update(dt, st.time)
       // THE CROSSWIND, HANDED OVER RATHER THAN DERIVED.

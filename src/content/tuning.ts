@@ -1611,6 +1611,153 @@ export const TUNING = {
      */
     minViewportHeight: 300,
   },
+  /**
+   * IMPACT SPARKS — barrier contact and car-to-car contact.
+   *
+   * Read by `render/vfx.ts` ONLY. Nothing in `src/sim` may read this key: the
+   * sparks are a render-layer effect driven off published events, and the
+   * moment a number here reaches the physics the determinism gate is a lie.
+   *
+   * THE THREE DECISIONS THIS TABLE ENCODES, all of them chosen deliberately
+   * and all of them with a cost that is written down next to them:
+   *
+   *  1. NO THRESHOLD. `force` scales everything from zero up. A car rubbing
+   *     along a barrier at ~0 closing speed still sheds `countBase` sparks per
+   *     contact frame; a square-on slam sheds `countBase + countLin +
+   *     countQuad`. There is deliberately no minimum force, so the curve below
+   *     is the only thing standing between "a trickle" and "a wall of light".
+   *  2. THE SPARKS BOUNCE AND LINGER. A `bounceShare` of them are solved
+   *     against the road plane at spawn time and re-spawned at the bounce, and
+   *     again as a settled ember. That is 2 + `bounces` pool slots for ONE
+   *     visible spark, which is why the budget below is a token bucket rather
+   *     than a per-event count.
+   *  3. THE COLOUR IS RANDOM PER IMPACT, not per track theme. See `hue*`.
+   */
+  sparks: {
+    /**
+     * Closing speed, m/s, that reads as a full-force impact. `wall` force is
+     * the physics' own `severity` (the rate the car closes on the barrier
+     * line); `bump` force is closing speed along the pair normal, which is a
+     * much smaller number for the same drama, hence the separate scale.
+     */
+    wallForceFull: 22,
+    bumpForceFull: 12,
+    /**
+     * Sparks per contact frame at q=1: countBase + countLin*f + countQuad*f^2,
+     * where f is the normalised force. The quadratic term is what makes a slam
+     * a burst without putting a threshold under the trickle.
+     */
+    countBase: 0.55,
+    countLin: 9.0,
+    countQuad: 30.0,
+    /** Hard ceiling on the sparks ONE contact event may ask for. */
+    countPerEvent: 48,
+    /**
+     * THE BUDGET, and the only thing bounding the worst case.
+     *
+     * A token bucket over pool SLOTS (a bouncing spark costs 2 + `bounces`,
+     * a plain one costs 1), both expressed as a fraction of the particle pool
+     * so every quality tier gets the same share. A single slam drains the
+     * bucket and gets its burst; eight cars grinding every frame are throttled
+     * to the refill rate and share it.
+     *
+     * Worst-case live contact particles = bucketFrac*pool + refillFrac*pool*L,
+     * where L is the longest slot lifetime (flight + bounce + ember).
+     */
+    bucketFrac: 0.13,
+    refillFrac: 0.09,
+    /** Share of sparks that get the full arc -> bounce -> settle treatment. */
+    bounceShare: 0.34,
+    /** Road bounces before the spark settles. Clamped to 2 in the renderer. */
+    bounces: 1,
+    /** Normal-direction restitution and along-road friction at each bounce. */
+    restitution: 0.42,
+    friction: 0.55,
+    /**
+     * m/s^2 along the racer's up. Far heavier than the sim's own -34, and on
+     * purpose: a spark that falls at the car's gravity travels the length of a
+     * bus before it lands and the whole burst is a thin sheet across the road
+     * rather than a strike at a point. This is the number that decides how big
+     * the effect is in space, and it is the first one to reach for.
+     */
+    gravity: -62,
+    /**
+     * Launch speed, m/s: base + span*f, before per-spark scatter.
+     *
+     * MEASURED, not guessed. At the first values tried (5 + 30*f) a full-force
+     * spark left at 16-45 m/s and its solved air-time came out at 0.88 s --
+     * past `flightMax` -- so almost nothing qualified to bounce and the whole
+     * "bounce and linger" brief silently degraded to ordinary sparks. The
+     * headless probe caught it (1 settled ember out of 56 particles); no
+     * screenshot would have.
+     */
+    speedBase: 3.2,
+    speedSpan: 11.0,
+    /**
+     * Air-time cap on the first leg, seconds. A spark whose solved flight is
+     * longer than this is demoted to a plain non-bouncing spark rather than
+     * being given a lower arc it did not earn: a two-second hang time means
+     * the spark is heading somewhere the road plane is no longer the road.
+     */
+    flightMax: 0.85,
+    /** Seconds the settled ember glows before it is gone. */
+    emberLife: 0.85,
+    /** Quad size, metres: spark streak, settled ember. */
+    sparkSize: 0.190,
+    emberSize: 0.105,
+    /**
+     * Scene-linear luminance. `lum` is a THIN stretched streak, so it may sit
+     * well over the bloom threshold (0.78 on high) exactly as the drift
+     * scrape's 2.30 does. `emberLum` is a FILLED gaussian sitting still on the
+     * road, so it is held far lower -- the sprite curve peaks at ~1.6x its
+     * colour, which puts one ember's core just over the threshold and its
+     * body under: it glows, and a hundred of them cannot become a second road
+     * surface.
+     *
+     * BOTH WERE RAISED AFTER MEASURING, not before. At 2.30/0.50 a full-force
+     * slam photographed in Chromium clipped 0.008% of the frame and 0.03% of
+     * the road band, against 0.86% for a held tier-3 drift and 3.28% for the
+     * road under a plain full boost -- two orders of magnitude of unused
+     * headroom, and an effect nobody could see. See tools/probe-sparkshots.mjs.
+     */
+    lum: 3.20,
+    emberLum: 0.75,
+    /**
+     * RANDOM COLOUR PER IMPACT.
+     *
+     * A base hue is drawn once per contact event from the renderer's own RNG
+     * and every spark in that burst jitters around it by +-`hueJitter`. Per
+     * burst rather than per spark because a burst whose every spark is a
+     * different hue reads as grey confetti at 60 m/s, while a burst that is
+     * "mostly one colour" reads as a colour and still varies impact to impact.
+     *
+     * Luminance is NORMALISED away from the hue (see writeHsvLum), so a random
+     * yellow cannot arrive three times brighter than a random blue.
+     */
+    hueJitter: 0.055,
+    satMin: 0.45,
+    satMax: 0.95,
+    /**
+     * Seconds a contact may lapse before the next one counts as a NEW impact
+     * and draws a new hue.
+     *
+     * "Per impact" is not "per frame". A scrape down a barrier is one impact
+     * that happens to last two seconds, and re-drawing the hue on each of its
+     * 120 contact frames made the stream cycle the whole colour wheel at 60Hz
+     * -- measured as all twelve hue buckets alive in a single photographed
+     * frame. That is a strobe, it is the exact thing the reduced-motion path
+     * exists to suppress, and it is not what "randomised colouring on impact"
+     * asks for. The hue is held for the length of the contact and re-drawn
+     * when a new one starts, which is also what stops eight cars in a pack
+     * from each being a rainbow instead of each being a colour.
+     */
+    hueHold: 0.12,
+    /** Multipliers applied under prefers-reduced-motion / the RM toggle. Less
+     *  litter and fewer settled embers; the impact itself is NOT removed. */
+    rmCount: 0.60,
+    rmBounce: 0.45,
+    rmEmberLife: 0.50,
+  },
 } as const
 
 export type Tuning = typeof TUNING

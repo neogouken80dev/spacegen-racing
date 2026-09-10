@@ -298,7 +298,28 @@ export type RacerEvent =
   | { t: 'charge' }
   | { t: 'lap'; lap: number; time: number }
   | { t: 'land'; clean: boolean }
-  | { t: 'wall'; force: number }
+  /**
+   * A barrier contact, fired on EVERY contact frame -- so a scrape is a stream
+   * of small ones and a crash is a single large one, which is what lets the
+   * art scale itself without a second threshold.
+   *
+   * `force` is the same `severity` the physics prices the impact on: the rate
+   * the car is closing on the barrier line, NOT `into`. A car holding a drift
+   * against the outside of a corner reads ~0 here even though its velocity
+   * points 30 degrees into the wall.
+   *
+   * p is the car's position at the moment of contact -- already clamped onto
+   * the barrier line by the block above, so the visible contact is p offset
+   * along -n by the car's half-width. n is the wall's INWARD normal.
+   */
+  | { t: 'wall'; force: number; px: number; py: number; pz: number; nx: number; ny: number; nz: number }
+  /**
+   * Car-to-car contact. Fired for the pair, on both racers, with the same
+   * contact point and the normal pointing from each racer toward the other, so
+   * either one can throw sparks away from the seam without knowing who it hit.
+   * `force` is the closing speed along the normal.
+   */
+  | { t: 'bump'; force: number; px: number; py: number; pz: number; nx: number; ny: number; nz: number }
   | { t: 'beamFire' }
   | { t: 'beamHit'; targetId: number; lethal: boolean }
   | { t: 'ramp'; power: number }

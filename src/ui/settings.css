@@ -1160,3 +1160,15 @@
   .sg-tools__btn { width: 38px; height: 38px; border-radius: 10px; }
   .sg-tools__btn svg { width: 18px; height: 18px; }
 }
+
+/* A row whose control cannot act on this platform -- currently only
+   Fullscreen, on iPhone Safari, which has no Fullscreen API for anything that
+   is not a <video>. Dimmed rather than hidden ON PURPOSE: a player looking for
+   a fullscreen button needs to find the answer to "where is it", and the row's
+   own description is that answer (Add to Home Screen). A hidden row just reads
+   as a missing feature. The switch stays in the tab order and keeps its
+   description, so a screen reader gets the explanation too. */
+.sgset-row.is-locked .sgset-row__k,
+.sgset-row.is-locked .sgset-row__sub { opacity: 0.62; }
+.sgset-row.is-locked .sgset-sw { opacity: 0.4; cursor: not-allowed; }
+.sgset-row.is-locked .sgset-sw:hover { filter: none; }

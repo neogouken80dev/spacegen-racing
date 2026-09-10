@@ -2269,6 +2269,54 @@ await page.keyboard.press('ArrowLeft')
 await page.waitForTimeout(400)
 fx.afterArrowLeft = await readFx()
 
+// --- the reduced-motion toggle has to reach the VFX pass -------------------
+//
+// THE BUG THIS EXISTS FOR: the panel's Reduced motion switch sets
+// `Game.reduceMotion`, which the chase camera and the crosswind debris both
+// read -- and the VFX pass used to read `prefers-reduced-motion` for itself
+// instead, so a player who turned the switch ON with the OS preference OFF got
+// a calm camera and the full strobing effect set. The two flags are the same
+// value here or they are not, and only being that player can settle it.
+//
+// The switch is pressed, then pressed back, so a run leaves the game in the
+// state it found it in and every check after this one is unaffected. Focus is
+// then dropped, because the pad walk below starts from wherever focus is and a
+// switch left focused is not where it starts on a normal run.
+const rmState = () => page.evaluate(() => {
+  const g = window.__GAME__
+  return {
+    game: g.reduceMotion,
+    vfx: g.vfx ? g.vfx.reduced : null,
+    // What the OS says, which is what the pass fell back to before.
+    os: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    // The VFX pass's own clock, which only advances when update() runs. It is
+    // what makes "the flag has not arrived yet" and "the flag never arrives"
+    // distinguishable: the pass resolves the flag inside update(), and this
+    // renderer delivers between one and five frames a second, so a fixed
+    // timeout here is the same mistake waitSim() exists to stop.
+    frames: g.vfx ? +g.vfx.time.toFixed(2) : null,
+  }
+})
+/** Press, then wait for the VFX pass to AGREE, up to a bound. */
+const rmPress = async (loc) => {
+  const before = await rmState()
+  await activate(loc, 25000)
+  const t0 = Date.now()
+  let st = before
+  while (Date.now() - t0 < 20000) {
+    st = await rmState()
+    if (st.game !== before.game && st.vfx === st.game) break
+    await page.waitForTimeout(250)
+  }
+  return { ...st, settledMs: Date.now() - t0 }
+}
+const rmSwitch = page.locator('.sgset-sw[aria-label="Reduced motion"]').first()
+const rm = { before: await rmState() }
+rm.toggled = await rmPress(rmSwitch)
+rm.restored = await rmPress(rmSwitch)
+await page.evaluate(() => { document.activeElement?.blur?.() })
+await page.waitForTimeout(300)
+
 // --- the pad ---------------------------------------------------------------
 // D-pad down walks the dialog, right/left work the control under focus, A
 // presses it, B closes. Nothing here touches the mouse or the keyboard.
@@ -2343,10 +2391,10 @@ const diag = await page.evaluate(() => {
       } catch { return null }
     })(),
     programs: g.renderer ? g.renderer.info.programs.length : null,
-    // What the VFX pass believes about the OS reduced-motion preference. It
-    // reads matchMedia itself (the Game's own flag never reaches it), and
-    // "the strobe guard is wired to the right signal" is not something a
-    // static read of the source can settle -- only being that user can.
+    // What the VFX pass believes. It is HANDED the Game's own flag now (see
+    // VfxSystem.reduceMotion) and only falls back to matchMedia for a caller
+    // with no settings panel to ask; the `rm` block above presses the switch
+    // and checks the two agree, which a static read of the source cannot.
     vfxReduced: g.vfx ? g.vfx.reduced : null,
     fps: g.fps ? +g.fps.toFixed(1) : null,
     tier: g.tier,
@@ -2468,6 +2516,18 @@ if (lvl(pad.afterA.screenLabel) !== 'OFF') fail.push(`pad A left speed effects a
 if (pad.afterA.uScreen !== 0) fail.push(`pad A left uScreen at ${pad.afterA.uScreen}`)
 if (!pad.closed) fail.push('pad B did not close the settings dialog')
 if (fxClosed.open) fail.push('Escape did not close the settings dialog')
+// The reduced-motion switch has to reach the VFX pass, not just the camera.
+if (rm.before.vfx !== rm.before.game) {
+  fail.push(`at rest the VFX pass has reduced=${rm.before.vfx} and the game has ${rm.before.game}`)
+}
+if (rm.toggled.game === rm.before.game) fail.push('the reduced-motion switch did not move the game flag')
+if (rm.toggled.vfx !== rm.toggled.game) {
+  fail.push(`reduced motion toggled to ${rm.toggled.game} but the VFX pass still reads ${rm.toggled.vfx}` +
+    ` (OS says ${rm.toggled.os})`)
+}
+if (rm.restored.vfx !== rm.restored.game) {
+  fail.push(`toggling reduced motion back left the VFX pass at ${rm.restored.vfx}`)
+}
 if (fxClosed.phase !== 'racing') fail.push(`closing settings left the game in "${fxClosed.phase}"`)
 if (!diag.ok || !diag.hasRace) fail.push('race never started')
 if (diag.trackId !== trackId) fail.push(`raced ${diag.trackId}, asked for ${trackId}`)
@@ -2487,5 +2547,6 @@ if (topLeft.right !== null && topLeft.right > 0.42) {
   fail.push(`the top-left block reaches ${topLeft.right} across the frame`)
 }
 if (pixels && pixels.nonBlackPct < 20) fail.push(`canvas looks blank (${pixels.nonBlackPct}% non-black)`)
+console.log('reduced motion: ' + JSON.stringify(rm))
 if (fail.length) { console.log('\nSMOKE FAILED: ' + fail.join('; ')); process.exit(1) }
 console.log('\nSMOKE PASSED')

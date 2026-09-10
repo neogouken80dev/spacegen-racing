@@ -296,6 +296,54 @@ function writeHue(out: Float32Array, hex: number, lum: number): void {
 const AIR_RGB = new Float32Array(3)
 writeHue(AIR_RGB, 0xdfe9ff, AIR_LUM)
 
+// ---------------------------------------------------------------------------
+// IMPACT SPARKS: the renderer's own RNG, and a random hue at a fixed light.
+//
+// THE RNG IS DELIBERATELY NOT Math.random AND DELIBERATELY NOT THE SIM'S.
+//
+// The sim draws every random decision from a seeded mulberry32 (`sim/rng.ts`)
+// and the determinism gate hashes the result. Nothing in this file may ever
+// reach that stream. This is a private xorshift32 with a fixed seed, which
+// buys two things: it is provably not the sim's generator, and two runs of the
+// same probe photograph the same colours, so a screenshot diff is a diff of
+// the code rather than of the dice.
+// ---------------------------------------------------------------------------
+
+let _sparkSeed = 0x9e3779b9
+/** Uniform [0, 1). */
+function sparkRnd(): number {
+  let x = _sparkSeed
+  x ^= x << 13; x >>>= 0
+  x ^= x >>> 17
+  x ^= x << 5; x >>>= 0
+  _sparkSeed = x
+  return x / 4294967296
+}
+/** Symmetric [-1, 1). */
+const sparkRnd2 = (): number => sparkRnd() * 2 - 1
+
+/**
+ * Write an HSV-ish colour at an EXACT scene-linear luminance.
+ *
+ * The hue/saturation half is the studio head's call -- impact colour is
+ * random, not the track palette. The luminance half is this file's rule, the
+ * same one `writeHue` enforces for the theme tables: a random yellow and a
+ * random blue at the same nominal lightness differ by nearly 3x in luminance,
+ * so without the normalisation "random colour" silently becomes "random
+ * brightness" and the glare budget is decided by a die roll.
+ */
+function writeHsvLum(out: Float32Array, h: number, sat: number, lum: number): void {
+  _hexColor.setHSL(h - Math.floor(h), sat, 0.5, THREE.SRGBColorSpace)
+  const l = 0.2126 * _hexColor.r + 0.7152 * _hexColor.g + 0.0722 * _hexColor.b
+  const k = l > 1e-4 ? lum / l : 0
+  out[0] = _hexColor.r * k
+  out[1] = _hexColor.g * k
+  out[2] = _hexColor.b * k
+}
+
+/** Colour of the burst currently being emitted. */
+const _spkCol = new Float32Array(3)
+
 /**
  * Per-racer basis for the current updateRacer() call. Written once at the top
  * of updateRacer and read by every helper below it, so those helpers take a
@@ -347,6 +395,27 @@ let _axX = 0, _axY = 1, _axZ = 0
 /** World up, for the flat branch of anything that reads a racer's own frame. */
 const UP_Y = { x: 0, y: 1, z: 0 }
 const setAxis = (x: number, y: number, z: number): void => { _axX = x; _axY = y; _axZ = z }
+
+/**
+ * SECONDS INTO THE FUTURE THE NEXT spawn() IS BORN.
+ *
+ * The particle shader already discards anything whose age is negative (`u <
+ * 0.0` takes the same early-out as a dead particle), so a particle written now
+ * with a birth stamp in the future is simply invisible until that moment and
+ * then plays normally. That is the whole mechanism behind a bouncing spark:
+ * the CPU solves the ballistic arc against the road at spawn time, writes the
+ * arc, the bounce and the settled ember as three ordinary particles with
+ * staggered births, and never touches any of them again. No new shader branch,
+ * no per-frame integration, no second particle system.
+ *
+ * THE COST, stated plainly: a delayed particle occupies its ring-buffer slot
+ * from the moment it is written, not from the moment it appears. A bouncing
+ * spark therefore holds a slot for flight + bounce + ember rather than for its
+ * visible life, which is why `TUNING.sparks` budgets in SLOTS.
+ *
+ * Same current-value idiom as `_axX` above, and reset for the same reason.
+ */
+let _delay = 0
 
 /**
  * BODY-FRAME EMITTERS. `f` metres forward, `s` metres toward the racer's right,
@@ -891,6 +960,53 @@ class RacerFx {
    */
   rib: Float32Array
 
+  // --- impact sparks ---------------------------------------------------
+  /**
+   * Fractional spark carry for barrier and car contact.
+   *
+   * The whole point of "any contact, no threshold" is that a car rubbing a
+   * wall at nearly zero closing speed still sheds SOMETHING. At that force the
+   * curve asks for well under one spark per contact frame, and `Math.round`
+   * of that is zero forever -- the trickle the brief asks for only exists if
+   * the fraction is carried, exactly as the drift fan carries its rate.
+   */
+  contactAcc = 0
+  /**
+   * Sparks this racer has already been granted THIS FRAME.
+   *
+   * A racer can take one `wall` event and up to seven `bump` events in a
+   * single sim step (the pair loop in race.ts fires for every closing pair),
+   * so a per-event cap bounds nothing on its own. Reset at the top of each
+   * racer's update.
+   */
+  contactSpent = 0
+  /**
+   * The LOUDEST contact this racer took this frame, latched for one flash.
+   *
+   * The flash, the ring and the transient light are per-IMPACT, not per-event,
+   * and a racer in a pack takes up to eight contact events in a single sim
+   * step. Firing them inside the event loop put eight expanding rings and
+   * eight filled sprites on the same square metre every frame -- measured at
+   * 1,240 of a 4,000 particle pool with the pack grinding, which is the
+   * "additive VFX erases the road" failure this codebase already has a history
+   * of. Latched here and emitted once, after the loop.
+   */
+  contactBest = 0
+  contactX = 0
+  contactY = 0
+  contactZ = 0
+  /**
+   * THIS IMPACT'S COLOUR, and how long it survives a gap in contact.
+   *
+   * Drawn once when a contact STARTS and held while it lasts -- see
+   * TUNING.sparks.hueHold. A scrape is one impact that happens to last two
+   * seconds, not 120 impacts, and drawing a new hue every contact frame turned
+   * it into a 60Hz rainbow.
+   */
+  contactHue = 0
+  contactSat = 0
+  contactHold = 0
+
   // --- pulse gatling ---------------------------------------------------
   /** Barrel angle, advanced one detent per shot. Drives the rotary flash. */
   gatSpin = 0
@@ -976,6 +1092,35 @@ class Vfx implements VfxSystem {
   private readonly motionQ: MediaQueryList | null =
     typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
   private reduced = false
+  /**
+   * The player's own choice, pushed in by the game layer; null = follow the OS.
+   *
+   * The media query above is the DEFAULT, not the answer. The settings panel
+   * lets a player turn reduced motion on with the OS preference off (and off
+   * with it on), and that choice already reached the chase camera and the
+   * crosswind debris while this pass -- the one that throws the most pixels --
+   * went on reading the media query. See VfxSystem.reduceMotion.
+   */
+  reduceMotion: boolean | null = null
+
+  /**
+   * IMPACT-SPARK SLOT BUDGET: a token bucket over pool slots.
+   *
+   * Contact events are unbounded by construction -- every barrier frame and
+   * every closing pair, for every racer -- and a bouncing spark costs three
+   * pool slots for one visible streak. A per-event count cannot bound that; a
+   * bucket can, and it bounds it in the one unit that matters, which is how
+   * much of the shared ring buffer contact is allowed to own.
+   *
+   * A single slam drains the bucket and gets its burst. Eight cars grinding
+   * every frame drain it once and are then throttled to the refill rate, which
+   * they share -- so the worst case is arithmetic rather than a hope:
+   *
+   *   live contact particles <= bucket + refill * (longest slot lifetime)
+   */
+  private slotTokens = 0
+  private readonly slotBucket: number
+  private readonly slotRefill: number
 
   // --- particle pool ---------------------------------------------------
   private readonly pool: number
@@ -1101,6 +1246,12 @@ class Vfx implements VfxSystem {
     const base = POOL_BASE[quality.tier] ?? 1800
     this.pool = Math.max(600, Math.min(8000, Math.round(base * quality.particleScale)))
     this.frameBudget = Math.max(48, this.pool >> 2)
+    // Expressed as a FRACTION of the pool, so every tier gives contact sparks
+    // the same share of the ring buffer rather than the cheapest device giving
+    // them all of it.
+    this.slotBucket = Math.max(24, Math.round(this.pool * TUNING.sparks.bucketFrac))
+    this.slotRefill = Math.max(20, Math.round(this.pool * TUNING.sparks.refillFrac))
+    this.slotTokens = this.slotBucket
 
     // ---- particle pool ------------------------------------------------
     this.aPos = new Float32Array(this.pool * 3)
@@ -1357,7 +1508,7 @@ class Vfx implements VfxSystem {
     p[i3] = x; p[i3 + 1] = y; p[i3 + 2] = z
     v[i3] = vx; v[i3 + 1] = vy; v[i3 + 2] = vz
     c[i3] = r; c[i3 + 1] = g; c[i3 + 2] = b
-    m[i4] = this.time; m[i4 + 1] = life; m[i4 + 2] = size; m[i4 + 3] = growth
+    m[i4] = this.time + _delay; m[i4 + 1] = life; m[i4 + 2] = size; m[i4 + 3] = growth
     m2[i4] = gravity; m2[i4 + 1] = drag; m2[i4 + 2] = kind; m2[i4 + 3] = rnd()
     const a = this.aAxis
     a[i3] = _axX; a[i3 + 1] = _axY; a[i3 + 2] = _axZ
@@ -1501,7 +1652,14 @@ class Vfx implements VfxSystem {
 
     this.spawnStart = this.head
     this.spawnCount = 0
-    this.reduced = this.motionQ !== null && this.motionQ.matches
+    // The player's choice wins; the media query is only the fallback for a
+    // caller that has no settings panel to ask (the probes, the tests).
+    this.reduced = this.reduceMotion !== null
+      ? this.reduceMotion
+      : this.motionQ !== null && this.motionQ.matches
+    // A delayed birth must never leak out of the emitter that set it.
+    _delay = 0
+    this.slotTokens = Math.min(this.slotBucket, this.slotTokens + this.slotRefill * dt)
 
     // Screen-space intensities decay exponentially.
     this.boostIntensity *= Math.pow(0.02, dt)
@@ -1621,6 +1779,11 @@ class Vfx implements VfxSystem {
     _bQ = q; _bLocal = isLocal; _bSide = r.driftSide
 
     if (fx.tierFlash > 0) fx.tierFlash -= dt
+    // The contact allowance is per RACER per FRAME, not per event: one wall
+    // event plus seven bump events is a normal frame in a tight pack.
+    fx.contactSpent = 0
+    // How much longer this impact's colour survives without a contact frame.
+    if (fx.contactHold > 0) fx.contactHold -= dt
 
     // ---- events -------------------------------------------------------
     const ev = r.events
@@ -1715,9 +1878,45 @@ class Vfx implements VfxSystem {
           // whole of the landing treatment, per the brief.
           fx.rampAir = 0
           break
-        case 'wall':
-          this.wallSparks(r, it.force, hx, hy, q, isLocal)
+        case 'wall': {
+          // `p` is the car's centre already clamped ONTO the barrier line, so
+          // the visible contact is a half-width back along -n, and roughly at
+          // flank height rather than at the chassis origin. `n` is the wall's
+          // INWARD normal, which is also the direction the sparks fly — and,
+          // usefully, the direction that keeps them over the road.
+          const cu = _bDrop * 0.5
+          this.contactSparks(
+            r, fx, it.force, TUNING.sparks.wallForceFull,
+            it.px - it.nx * hx - _bUpX * cu,
+            it.py - it.ny * hx - _bUpY * cu,
+            it.pz - it.nz * hx - _bUpZ * cu,
+            it.nx, it.ny, it.nz, isLocal, 1,
+          )
           break
+        }
+        case 'bump': {
+          // The seam, with n pointing at the OTHER car; spray away from it.
+          // The sim publishes a PLANAR normal (ny is always 0), which is not
+          // tangent to the surface on a gravity track, so it is projected into
+          // the racer's own surface plane before anything is thrown along it.
+          let nx = -it.nx, ny = -it.ny, nz = -it.nz
+          if (this.gravity) {
+            const d = nx * _bUpX + ny * _bUpY + nz * _bUpZ
+            nx -= _bUpX * d; ny -= _bUpY * d; nz -= _bUpZ * d
+          }
+          const nl = Math.hypot(nx, ny, nz)
+          if (nl > 1e-4) { nx /= nl; ny /= nl; nz /= nl } else { nx = _bRgtX; ny = _bRgtY; nz = _bRgtZ }
+          // A car-to-car seam is a body-panel scrape, not a barrier strike, so
+          // it is worth half the screen kick of the same force into a wall.
+          this.contactSparks(
+            r, fx, it.force, TUNING.sparks.bumpForceFull,
+            it.px + nx * hx * 0.35 - _bUpX * (_bDrop * 0.35),
+            it.py + ny * hx * 0.35 - _bUpY * (_bDrop * 0.35),
+            it.pz + nz * hx * 0.35 - _bUpZ * (_bDrop * 0.35),
+            nx, ny, nz, isLocal, 0.5,
+          )
+          break
+        }
         case 'lap':
           this.ring(pX(0, 0, 0.6), pY(0, 0, 0.6), pZ(0, 0, 0.6), WHITE_RGB, 1.0, 0.55, 1.6, 11.0, false)
           this.burst(pX(0, 0, 0.6), pY(0, 0, 0.6), pZ(0, 0, 0.6), _bUpX * 0.7, _bUpY * 0.7, _bUpZ * 0.7, Math.round(18 * q), 8, 1.0, WHITE_RGB, 0.8, 0.7, 0.13, K_SPARK, -9, 1.6)
@@ -1732,6 +1931,9 @@ class Vfx implements VfxSystem {
         }
       }
     }
+
+    // One impact flash for however many contact events arrived this frame.
+    this.contactFlash(fx)
 
     // ---- 1. DRIFT: GATHER -> TIER -> RELEASE ---------------------------
     if (r.driftSide !== 0) {
@@ -3624,38 +3826,274 @@ class Vfx implements VfxSystem {
     }
   }
 
-  private wallSparks(
-    r: RacerState, force: number, hx: number, hy: number, q: number, isLocal: boolean,
+  /**
+   * IMPACT SPARKS — barrier contact and car-to-car contact, one code path.
+   *
+   * THE THREE THINGS THIS DOES THAT NOTHING ELSE IN THIS FILE DOES, and the
+   * three places it can go wrong, written down together:
+   *
+   * 1. NO THRESHOLD, EVER. `force` scales the whole effect from zero. The sim
+   *    fires `wall` on every contact frame and `bump` for every closing pair,
+   *    and `force` is already the honest measure — the RATE the car is closing
+   *    on the barrier line, not how far into it the car is — so a drift held
+   *    against the outside of a corner reads ~0 and a slam reads full without
+   *    this file inventing a second opinion. The trickle at f~0 is real: the
+   *    curve asks for a third of a spark per frame and `fx.contactAcc` carries
+   *    the fraction, so a long rub emits a thin continuous stream rather than
+   *    nothing at all.
+   *
+   * 2. THE SPARKS BOUNCE AND SETTLE, and they do it with NO new shader branch
+   *    and NO per-frame CPU integration. The ballistic arc is solved against
+   *    the road plane HERE, at spawn time, in closed form; the arc, the
+   *    bounce and the settled ember are three ordinary pooled particles with
+   *    staggered birth stamps (see `_delay`). The particle shader already
+   *    discards a negative age, so a particle born in the future costs one
+   *    early-out per vertex until its moment arrives.
+   *
+   *    The road plane is the plane through the racer's contact point with the
+   *    racer's own up as its normal — which is the surface the car is standing
+   *    on, so it is correct on a wall-ride and on Aetherion's inverted
+   *    sections, not merely on flat ground. Its LIMITS are real and are not
+   *    papered over: it is a PLANE, so it does not know about the road's
+   *    curvature a few metres away, and it does not know where the road ENDS.
+   *    A spark thrown over the lip of a causeway bounces off thin air at the
+   *    height the road used to be. Bouncing is therefore refused outright for
+   *    an airborne car, and wall sparks are thrown INWARD (along the barrier's
+   *    own inward normal), which is the direction that keeps them on the road.
+   *
+   *    Each leg outlives its own flight by `LEG_OVERRUN` so the streak is
+   *    still bright when it strikes rather than having faded to nothing in the
+   *    air; the overrun is buried under the road and eaten by the depth test,
+   *    which this material has enabled.
+   *
+   * 3. THE COLOUR IS RANDOM PER IMPACT. Not the track theme, not hot white:
+   *    a base hue drawn once per burst from this file's own RNG, jittered per
+   *    spark. Luminance is normalised out of the hue by `writeHsvLum` — see
+   *    the note there for why "random colour" would otherwise silently mean
+   *    "random brightness" and hand the glare budget to a die roll.
+   *
+   * BUDGET. `TUNING.sparks` counts in POOL SLOTS, not sparks, because a
+   * bouncing spark is three of them. The token bucket is drained here and
+   * refilled in update(); see `slotTokens`.
+   *
+   * @param ox,oy,oz  unit direction AWAY from the struck surface: the wall's
+   *                  inward normal for a barrier, away from the seam for a car.
+   */
+  private contactSparks(
+    r: RacerState, fx: RacerFx, force: number, forceFull: number,
+    cx: number, cy: number, cz: number,
+    ox: number, oy: number, oz: number,
+    isLocal: boolean, hitWeight: number,
   ): void {
-    const f = clamp01(force / 22)
-    const side = r.lateral >= 0 ? 1 : -1
-    // The barrier stands perpendicular to the ROAD, so the contact point is
-    // out along the car's right and up off its own deck, and the sparks fly
-    // back off the wall in that same frame.
-    const so = side * hx * 1.14
-    const sx = gX(0, so, hy * 0.5), sy = gY(0, so, hy * 0.5), sz = gZ(0, so, hy * 0.5)
-    const cnt = Math.round((6 + f * 46) * q)
-    for (let i = 0; i < cnt; i++) {
-      const sp = 5 + rnd() * (10 + f * 34)
-      const jit = rnd2() * 0.25
-      const back = -(2 + rnd() * 10)
-      const out = -side * sp * (0.5 + rnd() * 0.7)
-      const rise = 1.5 + rnd() * (2 + f * 5)
+    const q = _bQ
+    if (q <= 0) return
+    const S = TUNING.sparks
+    const f = clamp01(force / forceFull)
+    const rm = this.reduced
+
+    // ---- how many sparks this event is worth ---------------------------
+    let want = (S.countBase + S.countLin * f + S.countQuad * f * f) * q
+    if (rm) want *= S.rmCount
+    if (want > S.countPerEvent) want = S.countPerEvent
+    fx.contactAcc += want
+    let n = Math.floor(fx.contactAcc)
+    fx.contactAcc -= n
+    // A racer takes ONE wall event and up to seven bump events in a single sim
+    // step, so the per-event cap above bounds nothing on its own.
+    const room = S.countPerEvent - fx.contactSpent
+    if (n > room) n = room
+    if (n > 0) fx.contactSpent += n
+
+    // ---- the burst's colour --------------------------------------------
+    // One base hue per IMPACT, jittered per spark. Per burst rather than per
+    // spark because a burst whose every streak is a different hue averages to
+    // grey at speed; "mostly one colour, a different one each time" is what
+    // actually reads as randomised colouring from the driver's seat. And per
+    // impact rather than per contact FRAME, because a scrape is one impact
+    // that lasts two seconds -- see RacerFx.contactHold.
+    if (fx.contactHold <= 0) {
+      fx.contactHue = sparkRnd()
+      fx.contactSat = S.satMin + sparkRnd() * (S.satMax - S.satMin)
+    }
+    fx.contactHold = S.hueHold
+    const hue0 = fx.contactHue
+    const sat = fx.contactSat
+    const lum = S.lum * this.hdr * (0.70 + 0.30 * f)
+
+    // ---- the road plane ------------------------------------------------
+    // Point + normal, in the racer's own frame. `altitude` is the height of
+    // the chassis ORIGIN over the surface; unclamped here (unlike `_bDrop`)
+    // because this wants the road, not a floor under the hull.
+    const upX = _bUpX, upY = _bUpY, upZ = _bUpZ
+    const alt = r.altitude > 0 ? (r.altitude > 2.5 ? 2.5 : r.altitude) : 0
+    const rpX = _bPx - upX * alt, rpY = _bPy - upY * alt, rpZ = _bPz - upZ * alt
+    const G = -S.gravity
+    const bounces = S.bounces > 2 ? 2 : S.bounces < 0 ? 0 : S.bounces
+    const slotCost = 2 + bounces
+    // Bouncing is refused for an airborne car: the plane below it is not a
+    // road, it is wherever the car happens to be, and a spark settling in the
+    // sky is worse than a spark that simply burns out.
+    const mayBounce = r.grounded && G > 1
+    const share = rm ? S.bounceShare * S.rmBounce : S.bounceShare
+    const emberLife = S.emberLife * (rm ? S.rmEmberLife : 1)
+    /** Fraction of a leg's life spent in the air. The rest is under the road. */
+    const LEG_OVERRUN = 1.55
+
+    const speed = S.speedBase + S.speedSpan * f
+    const size = S.sparkSize * (0.85 + f * 0.45)
+
+    for (let i = 0; i < n; i++) {
+      writeHsvLum(_spkCol, hue0 + sparkRnd2() * S.hueJitter, sat, lum)
+      // Off the surface, back along the car and up: a spark that hugs the
+      // ground behind the chassis is occluded by the chassis, and one thrown
+      // straight out sideways leaves the frame before it is read. A CONE, not
+      // a cloud. The first pass scattered speed 0.45-1.3x and
+      // direction over most of a hemisphere, and 40 sparks spread that wide
+      // over ten metres of road is not an impact, it is dust -- the photograph
+      // of it showed the settled embers and no visible strike at all. The
+      // spread is now narrow enough that the sparks stay a recognisable fan
+      // for the first few metres, which is the part anyone sees.
+      const sp = speed * (0.6 + sparkRnd() * 0.55)
+      const out = 0.80 + sparkRnd() * 0.45
+      const back = 0.30 + sparkRnd() * 0.55
+      const rise = 0.24 + sparkRnd() * 0.34
+      const jit = 0.75
+      let vx = (ox * out - _bFwdX * back + upX * rise) * sp + sparkRnd2() * jit
+      let vy = (oy * out - _bFwdY * back + upY * rise) * sp
+      let vz = (oz * out - _bFwdZ * back + upZ * rise) * sp + sparkRnd2() * jit
+      // Born a little off the struck surface so the streak is not inside it.
+      let px = cx + ox * 0.06, py = cy + oy * 0.06, pz = cz + oz * 0.06
+
+      // Height over the road, and the flight time to reach it. Solved with NO
+      // drag, which is why the bouncing legs below are spawned with drag 0:
+      // the closed form and the shader have to be integrating the same motion
+      // or the spark lands somewhere the arc never went.
+      let h = (px - rpX) * upX + (py - rpY) * upY + (pz - rpZ) * upZ
+      if (h < 0.03) h = 0.03
+      const vn0 = vx * upX + vy * upY + vz * upZ
+      const u0 = Math.sqrt(vn0 * vn0 + 2 * G * h)
+      const t0 = (vn0 + u0) / G
+
+      const bouncing = mayBounce && t0 <= S.flightMax
+        && sparkRnd() < share && this.slotTokens >= slotCost
+      if (!bouncing) {
+        // The plain spark: arcs, and burns out in the air. Drag is free here
+        // because nothing downstream has to predict where it goes.
+        if (this.slotTokens < 1) break
+        this.slotTokens -= 1
+        this.spawn(
+          px, py, pz, vx, vy, vz,
+          _spkCol[0], _spkCol[1], _spkCol[2],
+          0.17 + sparkRnd() * 0.24, size, 0, S.gravity, 2.0, K_SPARK,
+        )
+        continue
+      }
+      this.slotTokens -= slotCost
+
+      let delay = 0
+      let hv = h
+      let dim = 1
+      let landed = false
+      for (let leg = 0; leg <= bounces; leg++) {
+        const vn = vx * upX + vy * upY + vz * upZ
+        const u = Math.sqrt(vn * vn + 2 * G * (hv > 0 ? hv : 0))
+        const tl = (vn + u) / G
+        // Unreachable with the launch cone above -- `rise` is always positive
+        // and the barrier normal is tangent to the surface, so the normal
+        // component of the launch is always up. Kept because the alternative
+        // failure is an ember left GLOWING IN MID-AIR at the launch height,
+        // which is the single worst artifact this effect can produce.
+        if (!(tl > 0.004)) break
+        _delay = delay
+        this.spawn(
+          px, py, pz, vx, vy, vz,
+          _spkCol[0] * dim, _spkCol[1] * dim, _spkCol[2] * dim,
+          tl * LEG_OVERRUN, size * (leg === 0 ? 1 : 0.8), 0, S.gravity, 0, K_SPARK,
+        )
+        _delay = 0
+        // Land: exactly on the plane, by construction.
+        const dh = -0.5 * G * tl * tl
+        px += vx * tl + upX * dh
+        py += vy * tl + upY * dh
+        pz += vz * tl + upZ * dh
+        // Reflect. The normal component is returned with `restitution`, the
+        // along-road component pays `friction` — which is what makes the
+        // second hop shorter AND flatter instead of a scaled copy of the first.
+        const vnl = vn - G * tl
+        const tX = vx - upX * vnl, tY = vy - upY * vnl, tZ = vz - upZ * vnl
+        const rb = u * S.restitution
+        vx = tX * S.friction + upX * rb
+        vy = tY * S.friction + upY * rb
+        vz = tZ * S.friction + upZ * rb
+        delay += tl
+        hv = 0
+        dim *= 0.62
+        landed = true
+      }
+      if (!landed) continue
+
+      // WHERE IT LANDS AND STAYS. A K_SPRITE, held small and — deliberately —
+      // just under the bloom threshold (0.78 on high): a settled ember GLOWS,
+      // and a hundred of them scattered down the racing line still cannot add
+      // up to a second road surface. This is the one channel of the effect
+      // that is allowed to outlive the impact, so it is the one held hardest.
+      _delay = delay
+      const eg = S.emberLum * this.hdr * (0.55 + 0.45 * f)
       this.spawn(
-        sx + _bUpX * jit, sy + _bUpY * jit, sz + _bUpZ * jit,
-        dX(back, out, rise) + rnd2() * 2,
-        dY(back, out, rise),
-        dZ(back, out, rise) + rnd2() * 2,
-        2.0, 1.35, 0.35,
-        0.24 + rnd() * 0.3, 0.07 + f * 0.03, 0, -18, 2.2, K_SPARK,
+        px + upX * 0.03, py + upY * 0.03, pz + upZ * 0.03,
+        vx * 0.05, vy * 0.05, vz * 0.05,
+        _spkCol[0] * eg / Math.max(1e-3, lum), _spkCol[1] * eg / Math.max(1e-3, lum), _spkCol[2] * eg / Math.max(1e-3, lum),
+        emberLife * (0.6 + sparkRnd() * 0.7), S.emberSize, -S.emberSize * 0.5,
+        0, 0, K_SPRITE,
       )
+      _delay = 0
     }
-    if (f > 0.25) {
-      this.flash(sx, sy, sz, WHITE_RGB, 1.6 + f * 2.0, 0.14, 0.8 + f * 1.4)
-      this.ring(sx, sy, sz, WHITE_RGB, 1.2, 0.20, 0.4, 12 + f * 20, false)
-      if (f > 0.5) this.claimLight(sx, sy, sz, WHITE_RGB, 2 + f * 4, 0.16)
+
+    // ---- the contact itself, LATCHED ------------------------------------
+    // Continuous in `f` with no cutoff of its own, but recorded rather than
+    // emitted: see RacerFx.contactBest for why eight events in one frame must
+    // not become eight flashes.
+    const fg = f * f
+    if (fg > fx.contactBest) {
+      fx.contactBest = fg
+      fx.contactX = cx; fx.contactY = cy; fx.contactZ = cz
     }
-    if (isLocal) this.hitFlash = Math.max(this.hitFlash, f * 0.5)
+    if (isLocal) this.hitFlash = Math.max(this.hitFlash, f * 0.5 * hitWeight)
+  }
+
+  /**
+   * The latched contact flash, once per racer per frame.
+   *
+   * Charged to the same slot bucket the sparks draw on, so "the pack is
+   * grinding" cannot buy itself extra particles by arriving as flashes instead
+   * of as sparks.
+   */
+  private contactFlash(fx: RacerFx): void {
+    const fg = fx.contactBest
+    if (fg <= 0) return
+    fx.contactBest = 0
+    // A visibility test on a secondary element, not a force threshold on the
+    // sparks: at a rub these are worth a thousandth of a particle, and an
+    // invisible quad still costs a pool slot.
+    if (fg < 0.02) return
+    // DELIBERATELY OUTSIDE THE SLOT BUCKET, and this was measured the wrong way
+    // round first. Charged to the bucket, the flash is last in line behind the
+    // sparks it belongs to, so exactly the frames that matter -- a full-force
+    // slam, where the sparks have already drained the bucket -- are the frames
+    // that lose their bright core. The photograph of that was a scatter of
+    // coloured dots and no impact. It needs no budget of its own: it is two
+    // particles per RACER per FRAME by construction, 24 slots a frame with a
+    // full grid, and it cannot be made to fire more often by hitting harder.
+    const S = TUNING.sparks
+    const x = fx.contactX, y = fx.contactY, z = fx.contactZ
+    writeHsvLum(_spkCol, fx.contactHue, fx.contactSat * 0.5, S.lum * this.hdr * fg * 1.4)
+    this.flash(x, y, z, _spkCol, 1.0, 0.10 + fg * 0.06, 0.35 + fg * 1.1)
+    this.ring(x, y, z, _spkCol, 0.8, 0.18, 0.3, 10 + fg * 20, false)
+    // The LIGHT is gated harder than anything else here, and not because the
+    // effect wants a threshold: there are three transient lights in the whole
+    // game, and eight cars rubbing barriers would thrash all of them every
+    // frame for a glow nobody can see.
+    if (fg > 0.35) this.claimLight(x, y, z, _spkCol, 2 + fg * 4, 0.16)
   }
 
   // -------------------------------------------------------------------------

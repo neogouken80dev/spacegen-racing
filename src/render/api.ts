@@ -63,6 +63,21 @@ export interface VfxSystem {
   /** Set from `Track.hasGravity`. Switches every per-racer effect from a
    *  compass-yaw + world-+Y basis to the racer's own (fwd, up) frame. */
   gravity: boolean
+  /**
+   * THE PLAYER'S REDUCED-MOTION CHOICE, not the OS's.
+   *
+   * `null` means "nobody has told me", and the VFX system falls back to
+   * reading `prefers-reduced-motion` itself -- which is what every caller
+   * that has no settings panel (the probes, the tests) gets.
+   *
+   * It exists because the in-game toggle is NOT the media query: a player may
+   * turn reduced motion on with the OS preference off, and that choice already
+   * reaches the chase camera (`Game.reduceMotion`) and the crosswind debris
+   * (`CrosswindFrame.reduceMotion`) and used to stop dead at the VFX pass. One
+   * toggle, three consumers, and the one that throws the most pixels was the
+   * one not listening.
+   */
+  reduceMotion: boolean | null
   /** Per-frame update. Reads race state to spawn effects from racer events. */
   update(dt: number, state: RaceState, cameraPos: Vec3, localId: number): void
   /** Screen-space intensity 0..1 the renderer maps to bloom / shake / blur. */

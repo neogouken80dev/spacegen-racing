@@ -18,6 +18,7 @@
  *   and embedded contexts.
  */
 import './styles.css'
+import { fullscreenMode, isFullscreen, setFullscreen, onFullscreenChange, type FullscreenMode } from '../game/fullscreen'
 import './settings.css'
 import {
   DEFAULT_KEYMAP,
@@ -683,6 +684,9 @@ class SettingsPanelImpl implements SettingsPanel {
   private diagramMode: DiagramId | 'auto' = 'auto'
   private preview: TouchScheme = 'tilt'
   private quality: QualityTier
+  private swFull!: SwitchRow
+  private fsMode: FullscreenMode = 'unsupported'
+  private offFsChange: (() => void) | null = null
   private reducedMotion: boolean
   private tiltInvert: boolean
   private oneHandedSide: Side
@@ -975,6 +979,47 @@ class SettingsPanelImpl implements SettingsPanel {
     // --- Graphics ---------------------------------------------------------
     const secGfx = el('div', 'sgset-sec', grid)
     el('div', 'sgset-sec__title', secGfx, 'Graphics')
+
+    /**
+     * FULLSCREEN. Lives here, above Quality, because it is the first thing a
+     * player on a phone wants and the last thing they think to look for.
+     *
+     * THE ROW SAYS SOMETHING DIFFERENT ON EACH PLATFORM, and that is the whole
+     * point of it being three states rather than a switch that sometimes does
+     * nothing. iPhone Safari has no Fullscreen API for anything that is not a
+     * <video> -- see the header of game/fullscreen.ts -- so on an iPhone the
+     * honest answer is Add to Home Screen, which our manifest already answers
+     * with "display": "fullscreen". Telling the player that beats a dead
+     * switch, and beats the scroll-the-toolbar-away trick, which is not
+     * fullscreen and cannot be turned off again.
+     */
+    this.fsMode = fullscreenMode()
+    this.swFull = makeSwitchRow(
+      secGfx,
+      'Fullscreen',
+      this.fsMode === 'available'
+        ? 'Fills the screen and hides the browser bars. Works during a race too.'
+        : this.fsMode === 'standalone'
+          ? 'Already fullscreen: SpaceGen is installed and running without browser bars.'
+          : 'Safari on iPhone cannot do this from a web page. Share \u2192 Add to Home '
+            + 'Screen, then open SpaceGen from the icon and it runs fullscreen.',
+      (on) => {
+        if (this.fsMode !== 'available') return
+        // The API can refuse -- it wants a real user gesture and a browser may
+        // decide this one is too far removed. setFullscreen reports what the
+        // state ACTUALLY became, so the switch follows reality rather than
+        // the request. sync() re-reads it either way.
+        void setFullscreen(on).then(() => this.sync())
+      },
+    )
+    if (this.fsMode !== 'available') {
+      this.swFull.input.disabled = true
+      this.swFull.row.classList.add('is-locked')
+    }
+    // Escape, F11, the Android back gesture and the OS can all end fullscreen
+    // without going through the switch. Without this the toggle would sit
+    // there saying ON while the browser bars are plainly back.
+    this.offFsChange = onFullscreenChange(() => this.sync())
 
     const qRow = el('div', 'sgset-row', secGfx)
     const qTxt = el('div', 'sgset-row__txt', qRow)
@@ -1405,6 +1450,7 @@ class SettingsPanelImpl implements SettingsPanel {
 
     // --- accessibility ----------------------------------------------------
     this.swRM.set(this.reducedMotion)
+    this.swFull.set(this.fsMode === 'standalone' ? true : isFullscreen())
     this.swOne.set(input.oneHanded)
     this.sideSeg.set(this.oneHandedSide)
     this.sideRow.classList.toggle('is-off', !input.oneHanded)
@@ -1872,6 +1918,8 @@ class SettingsPanelImpl implements SettingsPanel {
     this.disposed = true
     this.endCapture()
     this.padStop()
+    this.offFsChange?.()
+    this.offFsChange = null
     this.dialog.removeEventListener('keydown', this.onKeyDown)
     if (this.root.parentNode === this.container) this.container.removeChild(this.root)
     this.openFlag = false

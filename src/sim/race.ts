@@ -416,6 +416,22 @@ export class Race {
               if (r.driftSide !== 0) { r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0 }
             }
           }
+          // THE CONTACT, PUBLISHED FOR THE ART. Fired on every frame the pair
+          // is closing, with `force` as the closing speed along the normal --
+          // so rubbing side by side is a trickle and a real slam is a burst,
+          // with no second threshold to keep in sync with this one. The seam
+          // is the midpoint of the two centres, and each racer gets the normal
+          // pointing at the OTHER car, so either can spray away from the seam
+          // without knowing who it hit.
+          //
+          // `sep` is negative here (the branch is gated on closing), hence the
+          // minus. Nothing about the physics above depends on this block: it is
+          // published state, and removing it changes no trajectory.
+          const cx = (a.pos.x + b.pos.x) * 0.5
+          const cy = (a.pos.y + b.pos.y) * 0.5
+          const cz = (a.pos.z + b.pos.z) * 0.5
+          a.events.push({ t: 'bump', force: -sep, px: cx, py: cy, pz: cz, nx, ny: 0, nz })
+          b.events.push({ t: 'bump', force: -sep, px: cx, py: cy, pz: cz, nx: -nx, ny: 0, nz: -nz })
         }
       }
     }
