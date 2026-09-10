@@ -24,7 +24,7 @@ export const RUSTFALL: TrackDef = {
     { p: [0, 0, 0], w: 19.5, surface: 'tarmac', tag: 'start' },
     { p: [0, 0, 105], w: 19.5, surface: 'tarmac', ramp: 32, tag: 'ramp-main' },
     { p: [0, 1.5, 210], w: 19.5, surface: 'tarmac' },
-    { p: [0, 3, 315], w: 18.75, surface: 'tarmac' },
+    { p: [0, 3, 315], w: 18.75, surface: 'gravel' },
     // THE OIL SLICK WAS TRIED HERE AND PUT BACK. Recorded because the result
     // is the finding, not the change.
     //
@@ -53,12 +53,12 @@ export const RUSTFALL: TrackDef = {
     // a flat-out Class A. So the low-grip work went to gravel in the bounce
     // corridor instead (see beat 6 below), and the crane-drop oil stays as what
     // it has always been: an art beat, and 0.00s a lap.
-    { p: [0, 4, 415], w: 18, surface: 'tarmac', tag: 'straight-end' },
+    { p: [0, 4, 415], w: 18, surface: 'gravel', tag: 'straight-end' },
     { p: [-14, 4, 468], w: 16.5, bank: 4, surface: 'tarmac' },
     { p: [-44, 3.5, 486], w: 15.75, bank: 9, surface: 'tarmac', tag: 'hairpin' },
     { p: [-74, 3, 468], w: 15.75, bank: 9, surface: 'tarmac' },
     { p: [-88, 2.5, 424], w: 16.5, bank: 4, surface: 'tarmac' },
-    { p: [-90, 2, 350], w: 18, surface: 'oil', tag: 'crane-drop' },
+    { p: [-90, 2, 350], w: 18, surface: 'tarmac', tag: 'crane-drop' },
     { p: [-90, 1, 285], w: 18, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
     { p: [-92, 0, 220], w: 18.75, surface: 'tarmac' },
     { p: [-104, 0, 150], w: 19.5, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
@@ -69,8 +69,8 @@ export const RUSTFALL: TrackDef = {
     { p: [-346, 4, 132], w: 18.75, bank: 5, surface: 'metal' },
     { p: [-362, 6, 190], w: 18, boost: true, ramp: 34, surface: 'metal', tag: 'ramp-chasm' },
     { p: [-366, 9, 232], w: 16.5, open: true, surface: 'metal' },
-    { p: [-368, 5, 300], w: 18, open: true, surface: 'metal', tag: 'landing' },
-    { p: [-368, 3, 352], w: 18.75, surface: 'tarmac' },
+    { p: [-368, 5, 300], w: 18, open: true, surface: 'gravel', tag: 'landing' },
+    { p: [-368, 3, 352], w: 18.75, surface: 'oil' },
     // GRAVEL AT THE CARGO RING -- where Rustfall's low-grip work ended up, and
     // the extent is a measurement, not a taste.
     //
@@ -101,11 +101,11 @@ export const RUSTFALL: TrackDef = {
     { p: [-330, 1.5, 444], w: 12, bounce: true, surface: 'tarmac' },
     { p: [-292, 1, 470], w: 12, bounce: true, surface: 'tarmac' },
     { p: [-250, 1, 480], w: 12.75, bounce: true, surface: 'tarmac' },
-    { p: [-210, 1, 468], w: 15, surface: 'gravel' },
-    { p: [-176, 1.5, 436], w: 16.5, bank: 22, surface: 'gravel', tag: 'ring' },
+    { p: [-210, 1, 468], w: 15, surface: 'tarmac' },
+    { p: [-176, 1.5, 436], w: 16.5, bank: 22, surface: 'tarmac', tag: 'ring' },
     { p: [-158, 3.5, 392], w: 16.5, bank: 34, surface: 'metal' },
     { p: [-160, 5.5, 344], w: 16.5, bank: 34, surface: 'metal' },
-    { p: [-182, 6, 306], w: 16.5, bank: 22, surface: 'gravel' },
+    { p: [-182, 6, 306], w: 16.5, bank: 22, surface: 'metal' },
     { p: [-218, 5, 288], w: 18, bank: 8, surface: 'metal' },
     { p: [-256, 4, 268], w: 18, bank: -8, surface: 'tarmac', tag: 'esses' },
     { p: [-268, 3, 216], w: 18, bank: -12, surface: 'tarmac' },

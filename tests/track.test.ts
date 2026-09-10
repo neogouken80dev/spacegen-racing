@@ -555,14 +555,41 @@ describe.each([
     const derived = getDerived('solaire')
     const loco = getLocomotion('solaire')
     const top = derived.topSpeed
+    /**
+     * THE BRAKING PASS, added after a player reported that a slick inside a
+     * corner is no challenge. He was right, and this metric was half the
+     * reason the obvious fix did not work: it integrated CORNERING speed only.
+     * An approach is not tight enough for the lateral budget to bite, so a
+     * patch moved out of a corner scored ~0 here -- and braking was flatly
+     * grip-immune in the sim besides (measured 32.5m to stop from 61 m/s on
+     * tarmac, gravel and ice alike, to three figures). Both are fixed: the
+     * brake now scales with the budget above TUNING.grip.brakeFloor, and this walks
+     * the lap BACKWARDS so a corner's speed limit reaches back up its own
+     * approach at the braking rate available THERE. A slick before a corner
+     * now costs what it should, and the floors below can mean something again.
+     */
     const idealLap = (real: boolean): number => {
-      let t = 0
+      const brakeRate = (top / Math.max(0.3, derived.timeToTop)) * TUNING.derive.accelCurveGain * 1.5
+      const gripAt = (i: number) => {
+        const surface = real ? track.samples[i].surface : 'tarmac'
+        return lerp(1, SURFACE_GRIP[surface], loco.surfaceFrictionInfluence)
+      }
+      const v = new Array<number>(m)
       for (let i = 0; i < m; i++) {
         const s = (i / m) * track.length
-        const surface = real ? track.samples[i].surface : 'tarmac'
-        const grip = lerp(1, SURFACE_GRIP[surface], loco.surfaceFrictionInfluence)
-        t += ds / Math.min(top, cornerSpeedAt(lateralBudget(derived, loco, grip), 1 / radiusAt(s)))
+        v[i] = Math.min(top, cornerSpeedAt(lateralBudget(derived, loco, gripAt(i)), 1 / radiusAt(s)))
       }
+      // Two laps of backward relaxation so the limit propagates around the
+      // wrap, which one pass cannot do on a closed circuit.
+      for (let pass = 0; pass < 2; pass++) {
+        for (let n = m - 1; n >= 0; n--) {
+          const i = n, j = (n + 1) % m
+          const a = brakeRate * Math.max(TUNING.grip.brakeFloor, gripAt(i))
+          v[i] = Math.min(v[i], Math.sqrt(v[j] * v[j] + 2 * a * ds))
+        }
+      }
+      let t = 0
+      for (let i = 0; i < m; i++) t += ds / v[i]
       return t
     }
     // Aetherion's floor is a tenth of Cryostatic's on purpose. Its hook is not
@@ -570,10 +597,61 @@ describe.each([
     // across Keystone Plaza and the first corner of the descent, and what that
     // has to earn is the plaza sweeper itself -- 132m and 65m of radius that
     // would both be flat out on clean stone. Measured 0.326s/lap.
-    const floor: Record<string, number> = { rustfall: 0.35, cryostatic: 1.75, aetherion: 0.25 }
+    // FLOORS LOWERED, DELIBERATELY, AND THE REASON MATTERS MORE THAN THE
+    // NUMBERS. Measured before this pass / after: Rustfall 0.645s / 0.313s,
+    // Cryostatic 1.990s / 0.624s. The surfaces did not get weaker -- they
+    // MOVED, out of the corners and onto the approaches, on a play report that
+    // a slick inside a corner "really offers no challenge".
+    //
+    // An in-corner slick costs IDEAL LAP TIME: the corner binds, the budget is
+    // smaller, the lap is slower, and no decision was ever offered. An
+    // approach slick costs ERROR MARGIN: you brake earlier and still make the
+    // corner, so an ideal lap barely notices -- and an ideal lap is by
+    // definition driven by someone who never arrives too fast. The quantity
+    // this metric measures is the quantity the new design deliberately stopped
+    // spending. Adding the braking pass above recovered some of it (0.267 ->
+    // 0.313, 0.566 -> 0.624) and could not recover the rest, because there is
+    // nothing there to recover.
+    //
+    // So the floor keeps the part that still means something -- the surface
+    // layer is not decorative -- and the PLACEMENT assertion below is what now
+    // carries the design rule the old floor was standing in for.
+    const floor: Record<string, number> = { rustfall: 0.25, cryostatic: 0.55, aetherion: 0.25 }
     const tax = idealLap(true) - idealLap(false)
     expect(tax, `${name} surface tax per lap under the friction budget`)
       .toBeGreaterThan(floor[def.id])
+
+    /**
+     * THE PLACEMENT RULE, which the old floor was a proxy for and which is now
+     * asserted directly: a low-grip run either hands the car into road that is
+     * MEANINGFULLY TIGHTER than the road it sits on -- an approach, where it
+     * is a braking decision -- or it is authored terrain, a whole beat
+     * surfaced that way on purpose rather than a slick dropped in a corner.
+     *
+     * The exemptions are named rather than inferred, because "is this a slick
+     * or is this terrain" is a judgement a test cannot make: Aetherion's
+     * Keystone Plaza and its descent are 698m of banked, art-matched dust with
+     * balance measured across several passes, and the Hollow Choir's Antechoir
+     * is gravel at 0.70 rather than ice at 0.45 specifically so the corner
+     * stays chargeable. Both were reviewed and kept.
+     */
+    const TERRAIN: Record<string, [number, number][]> = {
+      aetherion: [[1700, 2420], [3040, 3170]],
+      hollowchoir: [[580, 760]],
+    }
+    const exempt = (s: number) =>
+      (TERRAIN[def.id] ?? []).some(([a, b]) => s >= a && s <= b)
+    for (let i = 0; i < m; i++) {
+      const s = (i / m) * track.length
+      if (SURFACE_GRIP[track.samples[i].surface] >= 0.999) continue
+      if (SURFACE_GRIP[track.samples[i].surface] > 0.9) continue  // 0.95 metal is flavour
+      if (exempt(s)) continue
+      const kOn = Math.abs(track.curvatureAt(s, 20))
+      let kAhead = 0
+      for (let d = 10; d <= 230; d += 10) kAhead = Math.max(kAhead, Math.abs(track.curvatureAt(s + d, 20)))
+      expect(kAhead, `${name}: low-grip at s=${s.toFixed(0)}m must feed tighter road`)
+        .toBeGreaterThan(kOn * 1.15)
+    }
 
     // ...and at least one stretch where the surface is what makes the corner,
     // rather than a rounding error on a corner that already binds.

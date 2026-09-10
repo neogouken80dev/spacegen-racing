@@ -536,7 +536,41 @@ export function stepVehicle(
     // Front-loaded curve: strong at low speed, asymptotic near the top.
     const headroom = clamp01(Math.abs(gap) / Math.max(1, boostedTop))
     dv = sign(gap) * accelRate * headroom * DT
-    if (eff.brake > 0 && longSpeed > 0) dv = -Math.min(longSpeed, accelRate * 1.5 * DT)
+    if (eff.brake > 0 && longSpeed > 0) {
+      // -----------------------------------------------------------------------
+      // BRAKING IS GRIP-SENSITIVE, WITH A FLOOR.
+      //
+      // It used to be flatly immune, and the comment in the traction block
+      // below still explains WHY that was right at the time: "on a surface
+      // this slick the brake is the player's way OUT of a slide, and a brake
+      // that fails exactly when the car is sliding turns a mistake the player
+      // can answer into one they cannot." That argument is sound and the floor
+      // below is what keeps it true.
+      //
+      // But immunity had a consequence nobody had measured. Reported from
+      // play: a slick INSIDE a corner "really offers no challenge as opposed
+      // to having oil slicks before entry into corners" -- correct, and the
+      // fix he asked for could not work. Measured, full brake from 61.2 m/s:
+      // tarmac 32.5m, gravel 32.5m, ice 32.5m, to three figures, 1.03s in
+      // every case. A slick on an approach cost NOTHING, because an approach
+      // is not tight enough for the lateral budget to bite and braking did not
+      // care what was under the car. Moving a patch out of a corner would have
+      // deleted its only remaining cost and delivered a decision that was not
+      // there.
+      //
+      // Scaled by the budget the car actually has against the budget it would
+      // have on clean tarmac, so it is exactly 1.0 on every metre of every
+      // circuit that authors no low-grip surface -- Rustfall's tarmac, the
+      // whole of the Hollow Choir's superstructure -- and nothing there moves.
+      // Taking it from `gripAccel` rather than from SURFACE_GRIP means the
+      // vacuum, going off-track and leaving the ground all reach the brake
+      // too, which is the same property the crosswind cap gained and for the
+      // same reason: one number, and the next mechanic gets it free.
+      // -----------------------------------------------------------------------
+      const fullGrip = lateralBudget(derived, loco, 1)
+      const brakeGrip = Math.max(T.grip.brakeFloor, Math.min(1, gripAccel / Math.max(1e-3, fullGrip)))
+      dv = -Math.min(longSpeed, accelRate * 1.5 * brakeGrip * DT)
+    }
     if (eff.throttle === 0 && eff.brake === 0) dv = -Math.min(Math.abs(longSpeed), boostedTop * 0.45 * DT) * sign(longSpeed)
   } else {
     dv = gap * 0.12 * DT

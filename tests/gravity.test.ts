@@ -272,6 +272,11 @@ describe('the AI', () => {
     //   56.85s  the barrier pass -- hard deck floor, orientation-aware barrier
     //           inset (the usable road is genuinely narrower in a slide now),
     //           and impacts priced on closing rate. See tests/barriers.test.ts.
+    //   57.78s  the slick pass: low-grip surfaces moved out of the corners and
+    //           onto the approaches, and braking became grip-sensitive above
+    //           T.grip.brakeFloor. Rustfall's tarmac is untouched by the brake
+    //           change (the scale is exactly 1.0 at full grip); this 0.04s is
+    //           its oil and gravel changing places.
     //   57.47s  locomotion.flight.gripMult 1.01 -> 0.98, the re-trim the
     //           crosswind cap forced. Rustfall has no wind, so this is the
     //           flight class alone: reverting gripMult reproduces the previous
@@ -287,7 +292,7 @@ describe('the AI', () => {
     //           was measured, not predicted -- the pin above was left behind by
     //           the change that introduced it and this test was already failing
     //           before Aetherion's dust pass touched anything.
-    expect(avg).toBeCloseTo(57.47, 2)
+    expect(avg).toBeCloseTo(57.78, 2)
   })
 })
 

@@ -477,6 +477,23 @@ export const TUNING = {
      */
     tractionRatio: 1.30,
     /**
+     * THE SHARE OF ITS BRAKING A CAR KEEPS ON THE WORST SURFACE IN THE GAME.
+     *
+     * Braking scales with the friction budget like everything else, but never
+     * below this. The floor is not a fudge -- it is the whole of the original
+     * argument for making the brake immune, kept: on a slick the brake is the
+     * player's way out of a slide, and a brake that fails exactly when the car
+     * is sliding turns a mistake the player can answer into one they cannot.
+     *
+     * At 0.55 the harshest surface in the game (oil, 0.30) still leaves 55% of
+     * the stopping power, which is about 1.8x the braking distance -- enough
+     * that a slick on a corner approach is a braking decision, which is the
+     * entire reason to put one there, and far from a brake that has stopped
+     * answering. Exactly 1.0 on clean tarmac, so no full-grip road anywhere in
+     * the game moves.
+     */
+    brakeFloor: 0.55,
+    /**
      * Floor under the ellipse, as a fraction of the straight-line cap. Pinned
      * at the lateral limit the ellipse gives exactly zero drive, which reads as
      * the throttle being disconnected; this leaves a sixth of it so the car

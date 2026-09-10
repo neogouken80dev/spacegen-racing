@@ -77,9 +77,14 @@ function spawn(track: Track, chassisId: string, s: number, speed: number): Racer
 
 /**
  * Cryostatic's Tier-4 ice sweeper, taken FLAT OUT with no brake at all, on a
- * nose-pursuit line. This is the corner the AI slows for; the sweeper is about
- * 195 m of radius, which a Solaire holds to 84 m/s on snow (i.e. flat out) and
- * only 57 m/s on ice, against a 61.4 m/s top speed.
+ * nose-pursuit line. This is the corner the AI slows for, about 195 m of
+ * radius.
+ *
+ * THE SWEEPER ITSELF IS NO LONGER ICE. On a play report that a slick inside a
+ * corner offers no challenge, Cryostatic's ice moved onto the APPROACHES: the
+ * 500 m this walks now runs ice (276-464 m) into clean snow through the
+ * sweeper and back onto ice at 723 m. That is deliberate, and it is why road
+ * use stopped being monotonic in grip -- see the note on maxEdge below.
  */
 function flatOutThroughTheSweeper(chassisId: string) {
   const track = new Track(CRYOSTATIC)
@@ -132,6 +137,7 @@ describe('surface grip in the physics', () => {
     })
     const [dry, authored, glass] = runs
 
+    // (retargeted: see the header note on where the ice now is.)
     // The trajectories DIVERGE. They used to agree to under a millimetre across
     // a 6.7x span of grip; a metre is now a low bar for a 200 m corner.
     const worst = (a: number[], b: number[]) => {
@@ -148,8 +154,21 @@ describe('surface grip in the physics', () => {
     expect(dry.maxSlip * 180 / Math.PI).toBeLessThan(2)
     expect(authored.maxSlip).toBeGreaterThan(dry.maxSlip * 3)
     expect(glass.maxSlip).toBeGreaterThan(authored.maxSlip)
-    expect(authored.maxEdge).toBeGreaterThan(dry.maxEdge)
-    expect(glass.maxEdge).toBeGreaterThan(authored.maxEdge)
+    // ROAD USE IS NOT MONOTONIC IN GRIP HERE, and that is the placement change
+    // rather than a wobble. The ice used to sit IN this sweeper, where less
+    // grip means one thing only: the car slides wider. It now sits on the
+    // APPROACH, so less grip also means arriving slower -- and the two effects
+    // cancel at the authored value. Measured maxEdge: dry 0.8668, authored
+    // (0.45) 0.8657, glass (0.15) 0.9086. At 0.45 it is a wash to a tenth of a
+    // percent; only at 0.15 does sliding win outright.
+    //
+    // So road use is asserted where it still means something -- glass against
+    // dry -- and what carries the authored case is slip and time, which ARE
+    // monotonic: slip 0.90 -> 4.48 -> 55.80 degrees, time 8.717 -> 8.750 ->
+    // 13.217s. A five-fold slip increase for a tenth of a percent of line is
+    // exactly what an approach slick should read as: the car is working much
+    // harder to hold the same road.
+    expect(glass.maxEdge).toBeGreaterThan(dry.maxEdge)
     expect(authored.seconds).toBeGreaterThan(dry.seconds)
     expect(glass.seconds).toBeGreaterThan(authored.seconds)
     // The slowest point of the corner falls too: scrubbing off slip costs speed.

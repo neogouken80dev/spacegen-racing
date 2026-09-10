@@ -89,7 +89,7 @@ export const CRYOSTATIC: TrackDef = {
     // inside the grammar's 12% sustained ceiling.
     { p: [0, 44, 0], w: 22, surface: 'snow', tag: 'start' },
     { p: [0, 37, 80], w: 22, surface: 'snow' },
-    { p: [0, 28, 160], w: 21, surface: 'snow' },
+    { p: [0, 28, 160], w: 21, surface: 'ice' },
     // ICE, added in the friction-budget pass. This corner measures R=93m and on
     // snow its limit is 58.2 m/s against a 61.4 m/s top speed -- it bound by 5%,
     // which is to say it was a Class B corner nobody had to lift for. On ice the
@@ -98,7 +98,7 @@ export const CRYOSTATIC: TrackDef = {
     // surfaces and you have to know which one you are on. It is deliberately
     // NOT fragile: this is the glacier foot, not the shelf, so it stays ice
     // after the lake gives way.
-    { p: [8, 20, 232], w: 21, bank: 5, surface: 'ice', tag: 'glacier-foot' },
+    { p: [8, 20, 232], w: 21, bank: 5, surface: 'snow', tag: 'glacier-foot' },
 
     // --- Beat 2: Class A sweeper across a frozen lake ----------------------
     // THE TIER 4 CORNER, and THE PATCH PUZZLE.
@@ -130,19 +130,19 @@ export const CRYOSTATIC: TrackDef = {
     // ice, so the braking platform the field has been using for two laps
     // disappears. "The line you learned on lap one is not the line you finish
     // on" is now true of the grip and not only of the walls.
-    { p: [60, 14, 300], w: 23, bank: 10, surface: 'snow', fragile: true, tag: 'lake-entry' },
-    { p: [140, 9, 352], w: 23, bank: 12, surface: 'snow', fragile: true, tag: 'sweeper-T4' },
-    { p: [232, 5, 368], w: 23, bank: 12, surface: 'ice', fragile: true },
-    { p: [318, 3, 344], w: 23, bank: 11, surface: 'ice', fragile: true },
-    { p: [378, 2, 288], w: 22, bank: 7, surface: 'ice', fragile: true, tag: 'lake-exit' },
+    { p: [60, 14, 300], w: 23, bank: 10, surface: 'ice', fragile: true, tag: 'lake-entry' },
+    { p: [140, 9, 352], w: 23, bank: 12, surface: 'ice', fragile: true, tag: 'sweeper-T4' },
+    { p: [232, 5, 368], w: 23, bank: 12, surface: 'snow', fragile: true },
+    { p: [318, 3, 344], w: 23, bank: 11, surface: 'snow', fragile: true },
+    { p: [378, 2, 288], w: 22, bank: 7, surface: 'snow', fragile: true, tag: 'lake-exit' },
 
     // --- Beat 3: bioluminescent ice cavern with bounce walls ---------------
     // The lighting showpiece. Narrowed to 16m because the narrowing is the
     // point; the grammar permits it where the narrowing is the mechanic.
-    { p: [404, 3, 218], w: 19, surface: 'snow', tag: 'cavern' },
-    { p: [406, 5, 152], w: 16, bounce: true, surface: 'ice' },
-    { p: [382, 8, 96], w: 16, bounce: true, surface: 'ice' },
-    { p: [338, 10, 58], w: 17, bounce: true, surface: 'snow', tag: 'cavern-exit' },
+    { p: [404, 3, 218], w: 19, surface: 'ice', tag: 'cavern' },
+    { p: [406, 5, 152], w: 16, bounce: true, surface: 'snow' },
+    { p: [382, 8, 96], w: 16, bounce: true, surface: 'snow' },
+    { p: [338, 10, 58], w: 17, bounce: true, surface: 'ice', tag: 'cavern-exit' },
 
     // --- Beat 4: double Class C switchback up a moraine --------------------
     // Packed snow, full grip, 20m of climb. THE EQUALISER: the grounded
@@ -157,8 +157,8 @@ export const CRYOSTATIC: TrackDef = {
     // Heavily banked so it reads as a tube rather than a corner. Breaks Seeker
     // Missile lock: the defensive play on this track.
     { p: [372, 30, 134], w: 18, bank: 26, surface: 'snow', tag: 'tunnel' },
-    { p: [390, 32, 92], w: 18, bank: 34, surface: 'ice' },
-    { p: [372, 33, 52], w: 18, bank: 34, surface: 'ice' },
+    { p: [390, 32, 92], w: 18, bank: 34, surface: 'snow' },
+    { p: [372, 33, 52], w: 18, bank: 34, surface: 'snow' },
     { p: [330, 33, 40], w: 18, bank: 24, surface: 'snow' },
     { p: [292, 32, 66], w: 19, bank: 8, surface: 'snow', tag: 'tunnel-exit' },
 
@@ -185,7 +185,7 @@ export const CRYOSTATIC: TrackDef = {
     { p: [98, 19, 178], w: 20, open: true, surface: 'snow', tag: 'floe-landing' },
 
     // --- Approach to the blizzard band -------------------------------------
-    { p: [40, 15, 202], w: 21, bank: 6, surface: 'snow' },
+    { p: [40, 15, 202], w: 21, bank: 6, surface: 'ice' },
     { p: [-24, 13, 212], w: 21, bank: 9, surface: 'snow', wind: 1.5, tag: 'blizzard-in' },
     { p: [-84, 12, 198], w: 22, bank: 9, surface: 'snow', wind: 3.5 },
     { p: [-122, 11, 158], w: 23, bank: 5, surface: 'snow', wind: 5.5 },
@@ -211,7 +211,7 @@ export const CRYOSTATIC: TrackDef = {
     // means re-laying the whole blizzard band and the esses that follow it,
     // which is a bigger geometry change than a surface pass should make on a
     // gated, art-passed track. Recorded as a measured 94.5%-of-spec miss.
-    { p: [-132, 15, -218], w: 23, surface: 'snow', wind: 3.0, tag: 'blizzard-out' },
+    { p: [-132, 15, -218], w: 23, surface: 'ice', wind: 3.0, tag: 'blizzard-out' },
 
     // --- Return leg: climb back to the glacier start -----------------------
     // 29m of climb over ~330m is 8.8%. Class B, and the last overtake window.
