@@ -97,6 +97,202 @@ function releaseSequence(chassisId: string, opts: { reduceMotion?: boolean; hold
   }
 }
 
+/**
+ * Drive the flat ring through a speed RANGE -- accelerate to top speed, lift,
+ * brake, accelerate again -- and hand every frame to a chase camera. The
+ * distance lock is a claim about a camera chasing a car whose speed keeps
+ * changing, so a constant-speed sample would prove nothing.
+ */
+function speedSweep(chassisId: string, frames = 60 * 26) {
+  resetAI()
+  const race = new Race(new Track(TEST_PLAIN), cfg(chassisId))
+  const r = race.state.racers[0]
+  while (race.state.phase === 'countdown') race.step()
+  const top = getDerived(chassisId).topSpeed
+  const cam = new ChaseCamera(16 / 9)
+  cam.reset(r)
+
+  const out: { ground: number; dist: number; speed: number; dolly: number }[] = []
+  for (let f = 0; f < frames; f++) {
+    const phase = Math.floor(f / (60 * 3.2)) % 4
+    const inp: InputFrame = {
+      ...emptyInput(),
+      throttle: phase === 2 ? 0 : 1,
+      brake: phase === 3 ? 1 : 0,
+      steer: phase === 1 ? 0.5 : 0,
+    }
+    race.setInput(0, inp)
+    race.step()
+    cam.update(r, RDT, top, false, false)
+    const p = cam.camera.position
+    out.push({
+      // The lock pins the component PERPENDICULAR to the camera's up, which on
+      // this flat ring is the XZ plane.
+      ground: Math.hypot(p.x - r.pos.x, p.z - r.pos.z),
+      dist: Math.hypot(p.x - r.pos.x, p.y - r.pos.y, p.z - r.pos.z),
+      speed: Math.hypot(r.vel.x, r.vel.z),
+      dolly: cam.dollyLevel,
+    })
+  }
+  return out
+}
+
+describe('the rig holds a set distance from the car', () => {
+  // The complaint this answers: "the camera keeps changing distance". Two
+  // things were doing it and only one was visible in the source -- a 14% target
+  // term worth 1.26m, and the position damping, worth v * posHalfLife / ln 2,
+  // which is 13.2m at 76 m/s. The lock corrects the LENGTH of the damped offset
+  // and leaves its DIRECTION alone, so the corner trail survives.
+  for (const c of CHASSIS) {
+    it(`${c.id}: the ground distance does not move with speed`, () => {
+      const rows = speedSweep(c.id).filter((x) => x.dolly === 0)
+      expect(rows.length, 'the sweep must produce un-dollied frames').toBeGreaterThan(600)
+      const speeds = rows.map((x) => x.speed)
+      expect(Math.max(...speeds) - Math.min(...speeds),
+        'the sweep must actually change speed, or it proves nothing')
+        .toBeGreaterThan(20)
+      for (const x of rows) {
+        expect(Math.abs(x.ground - C.distance),
+          `ground distance ${x.ground.toFixed(3)}m at ${x.speed.toFixed(1)} m/s`)
+          .toBeLessThan(1e-6)
+      }
+    })
+  }
+
+  it('...and turning the lock off puts the old rubber band straight back', () => {
+    const rows = speedSweep('solaire').filter((x) => x.dolly === 0)
+    const lock = C.distanceLock
+    const gain = C.distanceSpeedGain
+    try {
+      // Cast: TUNING is a const object, and this reaches past that on purpose --
+      // the point of the test is that the behaviour is a TUNABLE and not a
+      // deletion, so the dial has to be provably still connected.
+      const w = C as unknown as { distanceLock: number; distanceSpeedGain: number }
+      w.distanceLock = 0
+      w.distanceSpeedGain = 0.14
+      const loose = speedSweep('solaire').filter((x) => x.dolly === 0)
+      const spread = (a: typeof rows) =>
+        Math.max(...a.map((x) => x.ground)) - Math.min(...a.map((x) => x.ground))
+      expect(spread(loose), 'unlocked, the distance must vary with speed again')
+        .toBeGreaterThan(4)
+      expect(spread(rows), 'locked, it must not').toBeLessThan(1e-5)
+    } finally {
+      const w = C as unknown as { distanceLock: number; distanceSpeedGain: number }
+      w.distanceLock = lock
+      w.distanceSpeedGain = gain
+    }
+  })
+})
+
+describe('the vertigo shot fires on a boost, not only on a drift release', () => {
+  /**
+   * A racer at a stated speed with a stated boost, built the way the existing
+   * one-shot test builds one. `boostMag` is a STEP function in the sim -- set on
+   * the grant, held, zeroed when the timer expires -- which is why the camera
+   * can pick a boost up from its rise without a new event.
+   */
+  const fake = (speed: number): RacerState => ({
+    pos: { x: 0, y: 1, z: 0 }, vel: { x: 0, y: 0, z: speed }, yaw: 0, yawRate: 0,
+    driftSide: 0, driftInward: 0, boostMag: 0, boostSource: 'none',
+  } as unknown as RacerState)
+
+  it('a pad boost fires it; the same boost held on does not fire it again', () => {
+    const cam = new ChaseCamera(16 / 9)
+    const r = fake(60)
+    cam.reset(r)
+    cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel).toBe(0)
+
+    r.boostMag = T.boost.padMag
+    r.boostSource = 'pad'
+    cam.update(r, RDT, 60, false, false)
+    const fired = cam.dollyLevel
+    expect(fired, 'a pad boost must fire the shot').toBeGreaterThan(0.4)
+
+    // A strip calls applyBoost on every frame a wheel is on it. Only the first
+    // raises boostMag, so only the first may punch -- otherwise crossing a
+    // 50m strip is 65 vertigo shots.
+    for (let i = 0; i < 40; i++) cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel, 'a held boost must not re-fire').toBeLessThan(fired)
+  })
+
+  it('a second grant inside the cooldown does not punch again', () => {
+    const cam = new ChaseCamera(16 / 9)
+    const r = fake(60)
+    cam.reset(r)
+    r.boostMag = T.boost.padMag; r.boostSource = 'pad'
+    cam.update(r, RDT, 60, false, false)
+    // Hand over a second, BIGGER grant well inside the refractory period. The
+    // impulse must keep decaying rather than jump: three punches in a second
+    // is the shape of effect that makes people ill. See
+    // TUNING.camera.boostDollyCooldown.
+    for (let i = 0; i < 40; i++) cam.update(r, RDT, 60, false, false)
+    const decayed = cam.dollyLevel
+    r.boostMag = 0.9; r.boostSource = 'item'
+    cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel, 'inside the cooldown, no second punch')
+      .toBeLessThan(decayed)
+
+    // ...and once it has expired, the next grant does punch. `boostMag` has to
+    // fall first: a rise is a rise from wherever it currently is, which is how
+    // a sustained strip is prevented from re-firing.
+    for (let i = 0; i < Math.round(C.boostDollyCooldown * 60) + 4; i++) {
+      cam.update(r, RDT, 60, false, false)
+    }
+    const quiet = cam.dollyLevel
+    r.boostMag = 0
+    cam.update(r, RDT, 60, false, false)
+    r.boostMag = 0.9
+    cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel, 'after the cooldown it fires again').toBeGreaterThan(0.4)
+    expect(quiet, 'and it had genuinely gone quiet first').toBeLessThan(0.02)
+  })
+
+  it('a stationary car gets no shot, so the rocket start does not warp', () => {
+    const cam = new ChaseCamera(16 / 9)
+    const r = fake(0.4)
+    cam.reset(r)
+    r.boostMag = T.drift.tierBoost[T.boost.rocketStartTier]
+    r.boostSource = 'start'
+    cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel, 'no background to stretch, no shot').toBe(0)
+  })
+
+  it('reduced motion suppresses it before a single frame of it is placed', () => {
+    const calm = new ChaseCamera(16 / 9)
+    const plain = new ChaseCamera(16 / 9)
+    const r = fake(60)
+    calm.reset(r); plain.reset(r)
+    calm.update(r, RDT, 60, false, true); plain.update(r, RDT, 60, false, true)
+    r.boostMag = T.boost.padMag
+    r.boostSource = 'pad'
+    // Not "small". Zero, on the frame the boost lands and on every frame after,
+    // in the impulse AND in what the composite pass is handed. The distance
+    // block used to run before the suppression and leaked a frame of movement.
+    for (let f = 0; f < 90; f++) {
+      calm.update(r, RDT, 60, false, true)
+      expect(calm.dollyLevel, `frame ${f}`).toBe(0)
+      plain.update(r, RDT, 60, false, true)
+      expect(calm.camera.position.distanceTo(plain.camera.position)).toBeLessThan(1e-9)
+      expect(calm.camera.fov).toBeCloseTo(plain.camera.fov, 9)
+    }
+  })
+
+  it('a drift release is left to its own tuned ladder, not flattened by this', () => {
+    // main.ts fires drift releases off the VFX pass's sim-frame-guarded
+    // dollyRequest with dollyPerTier; if the rise detector also claimed them, a
+    // Tier-0 release would punch with the flat boost impulse instead of 0.30.
+    const cam = new ChaseCamera(16 / 9)
+    const r = fake(60)
+    cam.reset(r)
+    cam.update(r, RDT, 60, false, false)
+    r.boostMag = T.drift.tierBoost[3]
+    r.boostSource = 'drift'
+    cam.update(r, RDT, 60, false, false)
+    expect(cam.dollyLevel, 'the rise detector must ignore drift-sourced boosts').toBe(0)
+  })
+})
+
 describe('vertigo shot: the CAR stays put while the world stretches', () => {
   // A plain FOV spike is a zoom: the car shrinks with everything else, which
   // reads as the camera backing off at the exact moment the car is supposed to

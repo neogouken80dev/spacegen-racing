@@ -912,6 +912,73 @@ export const TUNING = {
     // rear bumper and the car filled the lower third of the frame.
     distance: 9.0, height: 3.6, lookAhead: 13.0,
     /**
+     * A SET DISTANCE FROM THE VEHICLE.
+     *
+     * Two separate things used to move the camera away from the car with
+     * speed, and only one of them was visible in the source:
+     *
+     *  1. THE TARGET TERM, written inline as `distance * (1 + speed01 * 0.14)`.
+     *     Worth 1.26m at top speed -- real, but the small half of the problem.
+     *  2. THE POSITION DAMPING. `posHalfLife` is 0.12s, so a camera chasing a
+     *     car doing 76 m/s settles a further v * posHalfLife / ln 2 = 13.2m
+     *     behind it. That is where the inconsistency actually lived: the rig
+     *     asked for 9m and delivered anything from 9m at a standstill to 23m
+     *     on the back straight, and every corner, every lift and every hit
+     *     moved it somewhere new in between.
+     *
+     * distanceLock is the fix for (2) and these two gains are the fix for (1).
+     * The lock re-projects the DAMPED camera onto the rig's own radius each
+     * frame: the direction the damping produced is kept -- which is the whole
+     * of the corner trail, the camera swinging wide and catching up -- and only
+     * its LENGTH is corrected. 1 = an exactly constant distance; 0 = the old
+     * rubber band; anything between splits the difference.
+     *
+     * The two gains are kept rather than deleted so the speed term can be
+     * dialled back in without re-deriving it. At 0 the rig offset is a
+     * constant 9.0m back and 3.6m up, i.e. 9.69m of true distance, at every
+     * speed on every chassis.
+     *
+     * MEASURED, one AI lap of Rustfall, camera-to-car distance every sim step
+     * (tools/probe-camdist.ts):
+     *   before  4.22 .. 21.08m   mean 17.46   sd 2.56
+     *   after   9.04 .. 12.17m   mean  9.74   sd 0.38   (vertigo suppressed)
+     *           8.55 .. 12.19m   mean  9.67   sd 0.42   (as shipped)
+     * The along-the-road distance is now EXACTLY 9.00m on every frame of the
+     * lap. Every metre of the residual above is the vertical -- see
+     * heightLock -- and the 8.55m floor is the vertigo shot doing its job.
+     */
+    distanceSpeedGain: 0,
+    heightSpeedGain: 0,
+    distanceLock: 1,
+    /**
+     * The same lock on the HEIGHT component, and 0 on purpose.
+     *
+     * The distance lock works in the rig's own frame -- height along the
+     * camera's up, ground distance perpendicular to it -- so the vertical is a
+     * separate decision. Locking it too would give a rigidly constant offset in
+     * all three axes and weld the car to the centre of the frame over a ramp:
+     * the jump then reads as the WORLD dropping away rather than the CAR going
+     * up, which is the one place the vertical lag is doing something the FOV
+     * cannot do instead. Left damped, the height still SETTLES on 3.6m -- it
+     * only departs from it while the car is climbing or falling, which is
+     * exactly when a chase camera should float.
+     *
+     * It is a real cost and it is the whole of what is left: over one AI lap
+     * of Rustfall the height runs 0.90 .. 8.19m against a nominal 3.60, and
+     * that alone is the 9.04 .. 12.17m in the distance figures above. Swept,
+     * with distanceLock at 1 (tools/probe-camdist.ts):
+     *   0.00   distance spread 3.12m   height 0.90 .. 8.19   (shipping)
+     *   0.05                   2.19m          0.91 .. 6.73
+     *   0.10                   1.65m          1.58 .. 5.95
+     *   0.20                   1.01m          2.32 .. 5.01
+     *   0.50                   0.33m          3.17 .. 4.06
+     *   1.00                   0.00m          3.60 .. 3.60   (welded)
+     * 0 ships because nobody complained about the vertical and a ramp is the
+     * one place a chase camera earns its lag; 0.10 is the knee if the float
+     * ever does need reining in.
+     */
+    heightLock: 0,
+    /**
      * FRAMING ON A SCREEN THAT IS NOT 16:9.
      *
      * fovRest/fovBoost are VERTICAL fields of view, and a PerspectiveCamera
@@ -972,6 +1039,39 @@ export const TUNING = {
     dollyHalfLife: 0.26,
     /** Impulse per drift tier cashed in. Tier 0 barely registers by design. */
     dollyPerTier: [0.30, 0.55, 0.80, 1.0],
+    /**
+     * THE SAME SHOT, ON EVERY OTHER KIND OF BOOST.
+     *
+     * A drift release is not the only thing in this game that fires the car
+     * down the road -- boost strips, nitro, an overdrive core, a clean trick
+     * landing and a slipstream all do -- and until now only the drift got the
+     * vertigo. The other sources cannot be picked up the way the drift is,
+     * off `{ t: 'boost' }`, because most of them never push one: a strip calls
+     * applyBoost 65 times as you cross it and an item calls it from race.ts.
+     * What they all DO is raise `boostMag`, which is a step function -- set on
+     * the grant, held, zeroed when the timer runs out -- so the camera watches
+     * that instead and fires on the RISE. One grant, one punch, at any display
+     * refresh rate, with no sim change and no new event.
+     *
+     * `boostDollyGain` is the impulse at a rise of `boostDollyFullRise` or
+     * more; below that it scales down, so topping a slipstream up by 0.04
+     * cannot punch like a nitro. Deliberately under the drift ladder's top
+     * (1.0): cashing a Tier-3 slide is the biggest thing a player can do and
+     * must stay the biggest thing the camera does.
+     *
+     * MOTION COMFORT lives in the last two. `boostDollyCooldown` is a
+     * refractory period -- a pad into a nitro into a trick landing is three
+     * grants in a second and would otherwise be one continuous warp rather
+     * than three punches, which is the shape of effect that makes people ill.
+     * `boostDollyMinSpeed` keeps it off the start line: a vertigo shot on a
+     * stationary car has no background to stretch, and the rocket start would
+     * otherwise fire one at the green light of every single race.
+     */
+    boostDollyGain: 0.55,
+    boostDollyMinRise: 0.05,
+    boostDollyFullRise: 0.30,
+    boostDollyCooldown: 1.10,
+    boostDollyMinSpeed: 0.25,
     /**
      * Camera bank at full lock, radians. Scaled by how far the stick is
      * committed, so counter-steering visibly levels the frame back out.
@@ -1663,6 +1763,32 @@ export const TUNING = {
      * the randomised colour that was the point. 4.0 with a higher saturation
      * floor keeps the streak hot and lets the colour survive in the core --
      * brightness and hue pull against each other here, and the ask was colour.
+     *
+     * THEN THE CHARACTER CHANGED, WHICH IS WHY THE NUMBERS BELOW MOVED AGAIN.
+     * The scaled-up streak was photographed at a realistic chase distance and
+     * it did not read as a spark at all: a K_SPARK is stretched along its own
+     * screen-space velocity, so at 25 m/s a 0.62 m quad is a 1.8 m pale BEAM,
+     * and forty of them fanning down the road is a light rig, not an impact.
+     * The note back was "more like particle effects that explode out and onto
+     * the ground like many little shiny glowing marbles of various colors".
+     *
+     * So the shape changed, not just the scale. Impact particles are now
+     * K_BEAD -- a round filled disc with a rim, an off-centre specular and no
+     * velocity stretch -- and every number here was re-derived for a BALL:
+     *
+     *   lum 4.00 -> 2.10   A streak is a few pixels wide and may sit at 7.6
+     *                      linear for nothing. A filled 0.6 m disc at 7.6 is a
+     *                      hole in the image, and ACES walks it to white --
+     *                      which is the exact colour-deleting failure the
+     *                      paragraph above describes, arriving by area instead
+     *                      of by luminance. The bead's BODY now lands at ~1.3
+     *                      linear (over the 0.78 bloom threshold, so it glows;
+     *                      well under the knee, so it stays the colour it was
+     *                      drawn) and the only part allowed to clip is the
+     *                      specular highlight, which is six pixels wide. The
+     *                      brightness moved OFF the hue and ONTO the shine.
+     *   count 2.4x         "Many little marbles" is a count brief.
+     *   spread + hueSpread new; see below.
      */
     wallForceFull: 22,
     bumpForceFull: 12,
@@ -1671,11 +1797,11 @@ export const TUNING = {
      * where f is the normalised force. The quadratic term is what makes a slam
      * a burst without putting a threshold under the trickle.
      */
-    countBase: 0.95,
-    countLin: 17.0,
-    countQuad: 54.0,
+    countBase: 1.30,
+    countLin: 24.0,
+    countQuad: 78.0,
     /** Hard ceiling on the sparks ONE contact event may ask for. */
-    countPerEvent: 112,
+    countPerEvent: 168,
     /**
      * THE BUDGET, and the only thing bounding the worst case.
      *
@@ -1687,11 +1813,28 @@ export const TUNING = {
      *
      * Worst-case live contact particles = bucketFrac*pool + refillFrac*pool*L,
      * where L is the longest slot lifetime (flight + bounce + ember).
+     *
+     * BOTH CAME DOWN WITH THE MARBLE PASS, and the reason is area rather than
+     * count. A slot used to buy a thin stretched streak; it now buys a filled
+     * 0.7 m disc, which is several times the pixels for the same token. The
+     * budget was measured against the STREAK, so leaving it alone would have
+     * silently multiplied the sustained cost by whatever that ratio is --
+     * photographed as an eight-car pack laying a carpet of marbles thick
+     * enough to drop the road's luminance gradient from 3.5 to 2.5, which is
+     * the same "the road is gone" signal the glare probe watches for.
+     *
+     * A single slam is untouched by this: it draws ~220 slots against a bucket
+     * of 880 on high. What it throttles is the case that was never a moment --
+     * eight cars grinding the barrier for a second and a half.
      */
-    bucketFrac: 0.26,
-    refillFrac: 0.17,
-    /** Share of sparks that get the full arc -> bounce -> settle treatment. */
-    bounceShare: 0.46,
+    bucketFrac: 0.22,
+    refillFrac: 0.12,
+    /** Share of sparks that get the full arc -> bounce -> settle treatment.
+     *  Raised with the marble pass: "explode out and ONTO THE GROUND" is a
+     *  brief about where they end up, and a bead that burns out in the air
+     *  never gets there. Costs 3 pool slots against 1, which the token bucket
+     *  below already prices. */
+    bounceShare: 0.55,
     /** Road bounces before the spark settles. Clamped to 2 in the renderer. */
     bounces: 1,
     /** Normal-direction restitution and along-road friction at each bounce. */
@@ -1715,8 +1858,31 @@ export const TUNING = {
      * headless probe caught it (1 settled ember out of 56 particles); no
      * screenshot would have.
      */
-    speedBase: 5.6,
-    speedSpan: 19.0,
+    speedBase: 6.4,
+    speedSpan: 21.0,
+    /**
+     * HOW WIDE THE BURST OPENS, as a tangential fraction of the launch speed.
+     *
+     * 0 is the old narrow cone hugging the barrier; 1 throws as much sideways
+     * along the struck surface as outward from it. The first pass at this
+     * effect spread over most of a hemisphere and photographed as dust, and
+     * the fix then was to narrow it -- but that was a fix for STREAKS, which
+     * lose all coherence once they stop pointing the same way. A bead has a
+     * silhouette of its own and does not need its neighbours to be legible, so
+     * the arc can open back up, which is what "explode out" asks for.
+     *
+     * The tangent is taken in the SURFACE plane (up x out), so a burst off a
+     * wall-ride fans across the wall instead of standing on its edge.
+     */
+    spread: 0.55,
+    /**
+     * Per-bead size scatter about `sparkSize`: 1 - sizeVar .. 1 + sizeVar.
+     *
+     * "Many little marbles" is not a uniform grid of identical balls. The
+     * large ones carry the read at 60 m/s and the small ones give the burst
+     * its texture, and one dial that produces both is cheaper than two sizes.
+     */
+    sizeVar: 0.42,
     /**
      * Air-time cap on the first leg, seconds. A spark whose solved flight is
      * longer than this is demoted to a plain non-bouncing spark rather than
@@ -1726,26 +1892,36 @@ export const TUNING = {
     flightMax: 1.15,
     /** Seconds the settled ember glows before it is gone. */
     emberLife: 1.50,
-    /** Quad size, metres: spark streak, settled ember. */
-    sparkSize: 0.620,
-    emberSize: 0.450,
+    /** Quad size, metres: the flying bead, the settled one. Diameters now,
+     *  not streak lengths -- a K_BEAD is not stretched by its velocity, so
+     *  this number is the whole of the marble instead of its short axis. */
+    sparkSize: 0.660,
+    emberSize: 0.520,
     /**
-     * Scene-linear luminance. `lum` is a THIN stretched streak, so it may sit
-     * well over the bloom threshold (0.78 on high) exactly as the drift
-     * scrape's 2.30 does. `emberLum` is a FILLED gaussian sitting still on the
-     * road, so it is held far lower -- the sprite curve peaks at ~1.6x its
-     * colour, which puts one ember's core just over the threshold and its
-     * body under: it glows, and a hundred of them cannot become a second road
-     * surface.
+     * Scene-linear luminance of the bead's COLOUR. Both numbers came DOWN when
+     * the shape became a ball, and the reason is area, not taste.
      *
-     * BOTH WERE RAISED AFTER MEASURING, not before. At 2.30/0.50 a full-force
-     * slam photographed in Chromium clipped 0.008% of the frame and 0.03% of
-     * the road band, against 0.86% for a held tier-3 drift and 3.28% for the
-     * road under a plain full boost -- two orders of magnitude of unused
-     * headroom, and an effect nobody could see. See tools/probe-sparkshots.mjs.
+     * The K_BEAD profile peaks at ~0.83 of its colour across the body and
+     * ~2.25 in the specular highlight (see PARTICLE_FRAG). So:
+     *
+     *   lum 2.10       body ~1.3 linear   over 0.78, so every bead BLOOMS
+     *                  spec ~4.7 linear   clips -- and is six pixels wide
+     *   emberLum 1.05  body ~0.87         only just over the threshold, which
+     *                  spec ~2.4          is the rule the old sprite ember was
+     *                                     held to and is why a hundred settled
+     *                                     beads cannot become a second road
+     *
+     * This is the whole answer to "brightness and hue pull against each other".
+     * They do -- if the brightness is carried by the same pixels as the hue.
+     * Splitting the bead into a large coloured body and a tiny white shine
+     * lets the burst be hotter AND more saturated than the streak it replaced.
+     *
+     * The streak ran at 4.00 and could, because it was a few pixels wide. A
+     * 0.66 m filled disc at 4.00 measured as a white marble, every time,
+     * whatever hue it was drawn with.
      */
-    lum: 4.00,
-    emberLum: 1.28,
+    lum: 2.10,
+    emberLum: 1.05,
     /**
      * RANDOM COLOUR PER IMPACT.
      *
@@ -1757,10 +1933,36 @@ export const TUNING = {
      *
      * Luminance is NORMALISED away from the hue (see writeHsvLum), so a random
      * yellow cannot arrive three times brighter than a random blue.
+     *
+     * "VARIOUS COLORS" -- THE THIRD OPTION, AND WHY.
+     *
+     * The note back asked for "many little shiny glowing marbles of various
+     * colors", which is in direct tension with the paragraph above. There were
+     * three ways to answer it and only one of them survives both failure modes
+     * already recorded in this file:
+     *
+     *   a) one hue per burst        what shipped. Reads as a colour, but ONE
+     *                               colour, and that is not "various".
+     *   b) a free hue per bead      grey confetti at 60 m/s. Measured once
+     *                               already, on the streaks, and rejected.
+     *   c) a TRIAD per burst        three fixed offsets -- base, base +-
+     *                               `hueSpread` -- drawn from once per bead.
+     *
+     * (c) ships. Three hues 58 degrees apart is unmistakably several colours
+     * in one burst, and because there are only three of them and they arrive
+     * in quantity, each one still reads as a colour rather than averaging into
+     * the others. It also keeps every guarantee the hue-hold buys: only the
+     * BASE is redrawn per impact, the offsets are fixed, so a two-second
+     * scrape is still three stable colours and not a 60 Hz rainbow.
+     *
+     * `hueJitter` drops to a micro-jitter on top of the triad -- its old job
+     * (making a burst look varied) now belongs to `hueSpread`, and stacking
+     * both at the old width smeared the three families back into one band.
      */
-    hueJitter: 0.055,
-    satMin: 0.62,
-    satMax: 0.95,
+    hueJitter: 0.030,
+    hueSpread: 0.16,
+    satMin: 0.72,
+    satMax: 1.00,
     /**
      * Seconds a contact may lapse before the next one counts as a NEW impact
      * and draws a new hue.
@@ -1771,7 +1973,15 @@ export const TUNING = {
      * -- measured as all twelve hue buckets alive in a single photographed
      * frame. That is a strobe, it is the exact thing the reduced-motion path
      * exists to suppress, and it is not what "randomised colouring on impact"
-     * asks for. The hue is held for the length of the contact and re-drawn
+     * asks for.
+     *
+     * READ THAT METRIC CAREFULLY NOW THAT `hueSpread` EXISTS. The probe again
+     * reports ten to twelve live hue buckets in one frame, and this time it is
+     * the right answer rather than the bug: the buckets come from three fixed
+     * families PER BURST plus the different base hues of two or three separate
+     * impacts still lying on the road. The failure it originally caught was
+     * TEMPORAL -- one contact's colour changing every frame -- and the hue
+     * hold below still prevents exactly that. The hue is held for the length of the contact and re-drawn
      * when a new one starts, which is also what stops eight cars in a pack
      * from each being a rainbow instead of each being a colour.
      */
@@ -1781,6 +1991,130 @@ export const TUNING = {
     rmCount: 0.60,
     rmBounce: 0.45,
     rmEmberLife: 0.50,
+  },
+
+  /**
+   * THE DRIFT SNAP — the hard accent on drift ENTRY and on every TIER-UP.
+   *
+   * Read by `render/vfx.ts` ONLY, like `sparks` above, and for the same
+   * reason: nothing here may reach the sim or the determinism gate is a lie.
+   *
+   * WHAT THIS IS FOR. The drift already had a large signature — ribbons,
+   * spray, struck sparks, a four-tier hue-and-geometry ladder — and it is a
+   * SUSTAINED one. What it did not have was a punctuation mark, and the two
+   * moments that most need one (entry, and each tier landing) were being
+   * spoken in the same vocabulary as a boost: a flash, a camera-facing ring,
+   * a radial spark sphere. Three events, one grammar, so a glance could not
+   * tell them apart.
+   *
+   * THE GRAMMAR THIS BLOCK ADDS IS DELIBERATELY THE ONE NOTHING ELSE USES:
+   *
+   *   LATERAL, not axial.   Two blades fired straight out of the OUTSIDE of
+   *                         the arc, flat along the road. A boost plume is
+   *                         axial (down the exhaust), a tier ejection is
+   *                         spherical, a landing is vertical. Nothing else in
+   *                         this game throws anything sideways, and sideways
+   *                         is the one thing a drift unambiguously is.
+   *   ASYMMETRIC.           The ground front is offset to the outside, so it
+   *                         is visibly not centred on the car. Every other
+   *                         front in the game is concentric.
+   *   TWO BEATS.            A second, smaller crack ~75 ms behind the first.
+   *                         A boost is one hit; a tier-up's deferred front is
+   *                         a ring. A double crack is unclaimed.
+   *   SHORT.                Everything here dies inside 0.2 s. "Sharp" is an
+   *                         envelope before it is anything else, and the rest
+   *                         of the drift signature is all sustain.
+   */
+  driftSnap: {
+    /** Metres of flank the second beat's comb is spread down. Shorter than the
+     *  first crack's, which runs the whole wheelbase. */
+    beatSpan: 2.2,
+    /**
+     * Blades in the comb, at q = 1, before the tier bonus.
+     *
+     * THIS NUMBER WENT UP AND THEN BACK DOWN, and both moves were measured.
+     *
+     * At 13 per axle a drift entry spawned 38 particles of 0.115 m, which from
+     * the chase camera at 62 m/s is a 40-pixel smudge beside a car 90 pixels
+     * tall: the probe counted the blades, the frame did not show them. At 26
+     * per axle it spawned 93, and the frame showed a soft white WASH -- a
+     * K_SPARK points along its own velocity, so ninety of them leaving two
+     * points inside a narrow cone overlap almost perfectly, and ninety
+     * additive overlaps under bloom is a glow with no edges in it.
+     *
+     * Count was never the lever. GEOMETRY was: eleven streaks spread down the
+     * whole flank, with road visible between them, read as the side of the car
+     * letting go. Ninety in a cone read as a lens flare.
+     */
+    bladeCount: 20,
+    /** Extra blades per tier index, so a tier-3 landing is a bigger crack. */
+    bladePerTier: 4,
+    /** Launch speed, m/s. High on purpose: K_SPARK stretches along its own
+     *  screen-space velocity, so speed IS the hardness of the slash -- at 42
+     *  the stretch factor is 4.6 and a 0.26 m quad draws as a 1.2 m slash. */
+    bladeSpeed: 50,
+    /**
+     * Cone half-width about the outward normal, as a fraction of speed.
+     *
+     * NARROW, and narrowed AFTER LOOKING. At 0.26 the two fans photographed as
+     * a pair of asterisks stuck to the car: a K_SPARK points along its own
+     * velocity, so a wide fan of them is a starburst -- which is a shape that
+     * says "explosion", not "this car is sliding sideways". At 0.16 they are
+     * near-parallel and read as a comb of slashes leaving the car in one
+     * direction, which is the whole point of the channel.
+     */
+    bladeSpread: 0.16,
+    /**
+     * Life and quad size, and BOTH had to grow once the shape settled.
+     *
+     * A K_SPARK's alpha is pow(1 - u, 1.7), so at 0.15 s a blade is down to 8%
+     * of its brightness 115 ms in -- which is exactly when the comb has
+     * finally cleared the bodywork and is worth looking at. It was arriving
+     * and dying in the same two frames. 0.22 s puts the visible part of the
+     * life where the visible part of the geometry is, and the alpha curve
+     * still does the "sharp" work: a blade is at half brightness by a third of
+     * its life whatever that life is.
+     *
+     * 1.05 m of quad against the 0.115 m first tried. The streak is stretched
+     * 4.8x by its own launch speed, so this draws as a 5 m slash 0.76 m wide.
+     * That sounds enormous written down and it is not: it is a THIN diagonal
+     * two car-lengths long, and photographed at a realistic chase distance a
+     * drift entry measures 0.001% of the frame blown against 0.86% for a held
+     * tier-3 drift and 3.28% for the road under a plain boost. The size was
+     * raised three times and the glare number never became the constraint --
+     * at every step the constraint was legibility, and every step that failed
+     * failed because the streaks OVERLAPPED, not because they were small.
+     */
+    bladeLife: 0.220,
+    bladeSize: 1.05,
+    /** Gain on the tier colour. NOT normalised by DRIFT_BODY_GAIN: a blade is
+     *  a thin stretched streak, which is the one shape this file's own rule
+     *  allows real HDR headroom. */
+    bladeGain: 2.10,
+    /** Seconds to the second beat. 0 disables it. */
+    beat: 0.075,
+    /** How much of the first beat the second one is. */
+    beatScale: 0.55,
+    /** Ground front: metres to the outside of the chassis, final quad size,
+     *  life, gain. Offset is what makes it read as directional. */
+    arcOffset: 1.60,
+    arcSize: 10.0,
+    arcLife: 0.185,
+    arcGain: 1.15,
+    /** The tick of light at the outside rear corner. A filled sprite, so it is
+     *  held tiny and BRIEF — this is the one channel that could erase the car,
+     *  and 60 ms is short enough that it cannot. */
+    snapLife: 0.065,
+    snapSize: 0.62,
+    snapGain: 1.90,
+    /** Seconds one racer must wait between snaps, so entry and an immediate
+     *  tier-0 landing cannot stack into one mush. */
+    hold: 0.22,
+    /** Reduced motion: thinner, and the second beat is dropped entirely —
+     *  a repeated crack 75 ms apart is exactly the flicker RM exists to
+     *  suppress. The accent itself is NOT removed. */
+    rmCount: 0.55,
+    rmBeat: false,
   },
 } as const
 

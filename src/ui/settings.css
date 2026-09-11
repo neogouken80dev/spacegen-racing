@@ -776,10 +776,13 @@
   overflow: hidden;
 }
 
+/* Outer column: DRIFT, ITEM, BACK. Inner column: BRAKE with GAS above it — the
+   pedals. The inner offset belongs to the row, not the pad, because it clears
+   whichever outer pad that row carries. Mirrors touchControls.ts. */
 .sgset-z--drift  { height: 22.1%; bottom: var(--r1); right: var(--pr); --z: var(--sg-pink); }
-.sgset-z--gas    { height: 19.0%; bottom: var(--r1); right: 13.5%; --z: var(--sg-green); }
+.sgset-z--brake  { height: 18.5%; bottom: var(--r1); right: 13.5%; --z: var(--sg-red); }
 .sgset-z--item   { height: 19.5%; bottom: var(--r2); right: var(--pr); --z: var(--sg-gold); }
-.sgset-z--brake  { height: 16.4%; bottom: var(--r2); right: 12.3%; --z: var(--sg-red); }
+.sgset-z--gas    { height: 19.0%; bottom: var(--r2); right: 12.3%; --z: var(--sg-green); }
 .sgset-z--back   { height: 13.3%; bottom: var(--r3); right: var(--pr); --z: var(--sg-orange); }
 .sgset-z--look   { height: 13.3%; bottom: var(--r3); right: 9.5%; --z: var(--sg-violet); }
 .sgset-z--lift   { height: 13.3%; bottom: var(--r3); right: 17.1%; --z: var(--sg-blue);
@@ -906,9 +909,10 @@
   text-transform: uppercase;
 }
 
-/* scheme-driven visibility — mirrors the rules in touchControls.ts */
+/* scheme-driven visibility — mirrors the rules in touchControls.ts.
+   BRAKE is absent from both lists on purpose: it is on screen in every scheme
+   and in both throttle modes, so the diagram must always show it. */
 .sgset-phone .sgset-z--gas,
-.sgset-phone .sgset-z--brake,
 .sgset-phone .sgset-z--arrowL,
 .sgset-phone .sgset-z--arrowR,
 .sgset-phone .sgset-z--cal,
@@ -919,9 +923,7 @@
 }
 
 .sgset-phone[data-accel='manual'] .sgset-z--gas,
-.sgset-phone[data-accel='manual'] .sgset-z--brake,
 .sgset-phone[data-scheme='buttons'] .sgset-z--gas,
-.sgset-phone[data-scheme='buttons'] .sgset-z--brake,
 .sgset-phone[data-scheme='buttons'] .sgset-z--arrowL,
 .sgset-phone[data-scheme='buttons'] .sgset-z--arrowR,
 .sgset-phone[data-scheme='tilt'] .sgset-z--cal {

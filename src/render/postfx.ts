@@ -78,6 +78,43 @@
  *
  * `quality.tier === 'low'` builds no composer whatsoever, renders straight to
  * the screen and leaves the renderer's own tone mapping alone.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BOOST WARP
+ * ---------------------------------------------------------------------------
+ *
+ * `uBoost` is a LEVEL: it is up for as long as the boost is, so anything keyed
+ * to it is a state of the picture, not an event in it. `uWarp` is the other
+ * kind — the chase camera's live vertigo impulse, a punch with a 0.26s
+ * half-life, handed straight over rather than re-derived here. Everything the
+ * warp drives is therefore over in about half a second whether the boost is or
+ * not, which is the difference between a moment and a fog.
+ *
+ * It buys four things, all inside the pass that was already running and none
+ * of them a new tap:
+ *
+ *   1. A SECOND LINE LAYER at a finer angular pitch and a different phase
+ *      rate, so the streak count roughly doubles at the punch instead of the
+ *      same lines simply getting brighter.
+ *   2. LENGTH. Both layers drop their falloff exponent, so a 26-power dash
+ *      becomes a 9-power streak — the single biggest part of reading as warp
+ *      rather than as noise.
+ *   3. REACH. The radial mask opens inward from 0.34 to 0.16, so the streaks
+ *      come past the corners and into the frame instead of decorating its rim.
+ *   4. THE TUNNEL. The vignette's inner radius closes and its strength rises,
+ *      which is the "tunnel vision" half of the shot.
+ *
+ * (4) IS ALSO THE COMFORT MEASURE, and that is not a coincidence: occluding
+ * the periphery is the standard mitigation for vection sickness, because the
+ * periphery is where the sense of self-motion is read from. The warp darkens
+ * exactly the part of the frame that would otherwise be doing the most to make
+ * a susceptible player queasy.
+ *
+ * WHAT THE WARP DELIBERATELY DOES NOT TOUCH is the forward zoom at the top of
+ * the shader. That term scales the sampling coordinate, which changes the
+ * on-screen size of everything including the car, and the entire contract of
+ * the dolly zoom driving `uWarp` is that the car does NOT change size. Adding
+ * warp there would have the shader quietly undo the camera's work.
  */
 import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
@@ -89,11 +126,41 @@ import type { RenderQuality } from './api'
 export interface PostFx {
   /**
    * @param dt        frame delta, seconds
-   * @param boost     0..1, VfxSystem.boostIntensity
+   * @param boost     0..1, VfxSystem.boostIntensity -- a sustained LEVEL, held
+   *                  for as long as the boost lasts
    * @param hit       0..1, VfxSystem.hitFlash
    * @param speed01   0..1, local racer speed over top speed
+   * @param warp      0..1, ChaseCamera.dollyLevel -- the live vertigo IMPULSE,
+   *                  a punch that decays over about half a second. Taken from
+   *                  the camera rather than re-derived from the boost state so
+   *                  the screen warp and the camera move cannot fall out of
+   *                  step, and -- the part that matters -- so the reduced-motion
+   *                  suppression that zeroes the camera's impulse zeroes this
+   *                  too, through one code path instead of two. This game has
+   *                  already shipped a reduced-motion toggle that reached the
+   *                  camera and not the effects.
+   * @param calm      true = the player's reduced-motion setting is ON.
+   *
+   *                  `warp` arrives already suppressed, so everything the punch
+   *                  drives is handled. This flag exists for the ONE new term
+   *                  the punch does not carry: the sustained streak escalation,
+   *                  which keys off `boost` and would otherwise hand a
+   *                  reduced-motion player longer and brighter radial streaks
+   *                  for the whole of every boost -- a strong vection cue,
+   *                  arriving through a channel the toggle never touched.
+   *
+   *                  It suppresses the ESCALATION ONLY. The speed blur, the
+   *                  lines at their shipped length, the aberration and the
+   *                  vignette all behave exactly as they did before this
+   *                  parameter existed; those are governed by the player's
+   *                  Speed-effects control, which reduced motion already starts
+   *                  at "Minimal", and quietly switching them off here would be
+   *                  a behaviour change nobody asked for.
    */
-  render(dt: number, boost: number, hit: number, speed01: number): void
+  render(
+    dt: number, boost: number, hit: number, speed01: number,
+    warp?: number, calm?: boolean,
+  ): void
   /** Pass the same logical width/height you pass to renderer.setSize(). */
   resize(w: number, h: number): void
   /**
@@ -104,9 +171,13 @@ export interface PostFx {
    *                at all, not a small amount: this is the setting a player
    *                reaches for when a boost at speed has erased the road.
    * @param screen  the full-screen composite effects -- speed blur, speed
-   *                lines, chromatic aberration, impact tear, vignette. Separate
-   *                from glare because they fail differently: glare hides the
-   *                track behind light, screen effects smear it.
+   *                lines, chromatic aberration, impact tear, vignette, and the
+   *                boost warp. Separate from glare because they fail
+   *                differently: glare hides the track behind light, screen
+   *                effects smear it. 0 means NONE OF IT, warp included: the
+   *                warp term is multiplied by this before it reaches a single
+   *                line, radius or blur tap, so "Speed effects: Off" cannot
+   *                produce speed lines on a boost.
    *
    * Independent of `RenderQuality`, which is about what the DEVICE can afford.
    * A high-end machine can still want the glare turned down.
@@ -156,6 +227,18 @@ const GLARE_KNEE_HI = 1.10
  */
 const GLARE_FLOOR = 0.10
 
+/**
+ * Shaping on the warp impulse before anything reads it.
+ *
+ * The camera's dolly is a straight exponential with a 0.26s half-life, which is
+ * the right envelope for a camera MOVE and slightly too eager for a picture
+ * effect: the streaks vanish while the car is still being shoved. A fractional
+ * power keeps the peak where it is and fattens the tail — 0.65 leaves 63% of
+ * the effect at one half-life instead of 50% — without ever making it non-zero
+ * where the impulse is zero, which is the property reduced motion depends on.
+ */
+const WARP_SHAPE = 0.65
+
 const COMPOSITE_VERT = `
 varying vec2 vUv;
 void main() {
@@ -173,6 +256,8 @@ uniform float uBoost;
 uniform float uHit;
 uniform float uExposure;
 uniform float uScreen;
+uniform float uWarp;
+uniform float uCalm;
 
 #ifdef GLARE
 uniform sampler2D tGlare;
@@ -234,6 +319,11 @@ void main() {
   vec2 c = uv - 0.5;
 
   // Boost punch: a touch of forward zoom.
+  //
+  // uWarp is NOT in here, on purpose. This scales the sampling coordinate,
+  // which resizes everything in the frame including the car, and the whole
+  // contract of the dolly zoom that drives uWarp is that the car holds its
+  // on-screen size while the world stretches behind it. See the header.
   c *= 1.0 - uBoost * 0.024 * uScreen;
   uv = c + 0.5;
 
@@ -253,8 +343,29 @@ void main() {
   float over = clamp((uSpeed - 0.72) * 3.6, 0.0, 1.0);
   float rush = clamp(over * 0.45 + uBoost * 0.95, 0.0, 1.15) * uScreen;
 
+  // THE WARP IMPULSE, with the player's screen-effect intensity already spent
+  // on it. Every use below reads THIS and never uWarp, so one multiply is the
+  // whole of "Speed effects: Off means no warp".
+  float warp = pow(clamp(uWarp, 0.0, 1.0), WARP_SHAPE) * uScreen;
+  // How stylised the streaks get: the sustained boost carries most of it and
+  // the punch takes it the rest of the way, so a boost is always streakier
+  // than cruising and the moment it lands is streakier still.
+  //
+  // uScreen is spent on the boost half here as well as on the amplitude below,
+  // so the player's control scales the SHAPE and not only the brightness -- at
+  // "Minimal" the streaks are short again, rather than full-length and dim.
+  // warp already carries it.
+  //
+  // uCalm is 0 under reduced motion and it is here and nowhere else. warp is
+  // already zero for those players, so the punch needs no guard; the BOOST
+  // half does, because uBoost is a channel the toggle has never reached and
+  // this is the only new thing hanging off it. At 0 the streaks are exactly
+  // the shipped ones -- the escalation goes away, nothing else does.
+  float streak = clamp(uBoost * 0.55 * uScreen * uCalm + warp * 0.85, 0.0, 1.0);
+
   // Radial chromatic aberration, strongest at the edges and on impact.
-  float ca = (0.0008 + uBoost * 0.0038 + uHit * 0.0080) * (0.15 + r * 1.7) * uScreen;
+  float ca = ((0.0008 + uBoost * 0.0038 + uHit * 0.0080) * uScreen + warp * 0.0052)
+    * (0.15 + r * 1.7);
   vec2 caOff = rdir * ca;
 
   col.r = texture2D(tDiffuse, uv + caOff).r;
@@ -263,7 +374,7 @@ void main() {
 
   // Radial speed blur. Edge-weighted, so the middle third of the frame — the
   // vehicle, the apex, the drift sparks — stays readable at any speed.
-  float blur = rush * rush * 0.34;
+  float blur = (rush * rush + warp * warp * 0.55) * 0.34;
   if (blur > 0.012) {
     float edge = smoothstep(0.10, 0.62, r);
     float wsum = 1.0;
@@ -315,17 +426,43 @@ void main() {
 #ifdef FX_FULL
   // Radial speed lines streaming outward from the centre. Sparse (a quarter of
   // the sectors carry a line at cruise, all of them under full boost), thin,
-  // and confined to the outer ring.
-  if (rush > 0.03) {
+  // and confined to the outer ring -- until a boost, which lengthens them,
+  // brings them inward, brightens them and lays a second, finer layer over the
+  // top. See THE BOOST WARP in the header for why each of those four and not
+  // "more of the same, harder".
+  if (rush > 0.03 || warp > 0.02) {
     float ang = atan(c.y, c.x);
+    // Streaks, not dashes: 26 is a hard little tick and 9 is a line with a
+    // length you can read a direction off. This one exponent is most of what
+    // separates "there are lines on the screen" from "the world is warping".
+    float falloff = mix(26.0, 9.0, streak);
+    // ...and they come in off the rim as the punch lands, so the tunnel has
+    // walls rather than a decorated border.
+    float inner = mix(0.34, 0.16, streak);
+    // The lines still need SOMETHING to ride on -- at a standstill under a
+    // warp there is no rush at all -- so the punch supplies its own.
+    float amp = clamp(max(rush, warp * 0.9), 0.0, 1.0);
     float sector = floor(ang * 34.0);
     float seed = hash11(sector + 11.0);
-    float gate = step(hash11(sector + 71.0), 0.18 + 0.82 * clamp(rush, 0.0, 1.0));
-    float ph = fract(r * 1.7 - uTime * (1.1 + 3.2 * rush) + seed * 9.0);
-    float line = pow(max(0.0, 1.0 - abs(ph * 2.0 - 1.0)), 26.0);
-    float mask = smoothstep(0.34, 0.92, r) * clamp(rush, 0.0, 1.0);
+    float gate = step(hash11(sector + 71.0), 0.18 + 0.82 * amp);
+    float ph = fract(r * 1.7 - uTime * (1.1 + 3.2 * amp) + seed * 9.0);
+    float line = pow(max(0.0, 1.0 - abs(ph * 2.0 - 1.0)), falloff);
+    float mask = smoothstep(inner, 0.92, r) * amp;
     vec3 lineCol = mix(vec3(0.72, 0.86, 1.0), vec3(1.0, 0.88, 0.58), clamp(uBoost, 0.0, 1.0));
-    col += lineCol * line * gate * mask * 0.42;
+    col += lineCol * line * gate * mask * (0.42 + 0.55 * streak);
+
+    // THE SECOND LAYER. Costs two hashes, a fract and a pow -- no texture
+    // fetch, no pass -- and it is what actually makes the count go up. A
+    // deliberately non-multiple pitch (61 against 34) and a faster phase rate
+    // so the two never beat against each other into a visible moire.
+    if (streak > 0.02) {
+      float s2 = floor(ang * 61.0);
+      float sd2 = hash11(s2 + 5.0);
+      float g2 = step(hash11(s2 + 29.0), 0.10 + 0.90 * streak);
+      float p2 = fract(r * 2.6 - uTime * (2.2 + 5.4 * streak) + sd2 * 7.0);
+      float l2 = pow(max(0.0, 1.0 - abs(p2 * 2.0 - 1.0)), mix(20.0, 7.0, streak));
+      col += lineCol * l2 * g2 * smoothstep(inner * 0.8, 1.0, r) * streak * 0.46;
+    }
   }
 
   // EMP / impact static. Deliberately restrained: the item that hit you is
@@ -340,9 +477,11 @@ void main() {
     col = mix(col, vec3(lum) * vec3(0.80, 0.93, 1.16), hit * 0.16);
   }
 
-  // Vignette, tightening under boost.
-  float vig = 1.0 - smoothstep(0.32, 1.08, r);
-  col *= mix(1.0, vig, (0.34 + uBoost * 0.24) * uScreen);
+  // Vignette, tightening under boost -- and CLOSING under a warp punch, which
+  // is the tunnel-vision half of the shot. Both ends of the ramp move, so the
+  // dark does not merely get darker at the rim, it walks inward.
+  float vig = 1.0 - smoothstep(0.32 - 0.15 * warp, 1.08 - 0.24 * warp, r);
+  col *= mix(1.0, vig, (0.34 + uBoost * 0.24) * uScreen + warp * 0.30);
 #endif
 
   gl_FragColor = vec4(acesFilmic(max(col, 0.0)), 1.0);
@@ -425,6 +564,9 @@ class PostFxImpl implements PostFx {
     if (this.full) {
       defines.FX_FULL = ''
       defines.TAPS = quality.tier === 'high' ? '6' : '4'
+      // A define rather than a uniform: it never changes at runtime, and a
+      // constant exponent is one the compiler can fold.
+      defines.WARP_SHAPE = WARP_SHAPE.toFixed(3)
     }
 
     const mat = new THREE.ShaderMaterial({
@@ -444,6 +586,8 @@ class PostFxImpl implements PostFx {
         uExposure: { value: renderer.toneMappingExposure },
         uGlare: { value: lastGlare },
         uScreen: { value: lastScreen },
+        uWarp: { value: 0 },
+        uCalm: { value: 1 },
         uGlareCeil: { value: GLARE_CEIL },
         uGlareKneeLo: { value: GLARE_KNEE_LO },
         uGlareKneeHi: { value: GLARE_KNEE_HI },
@@ -465,7 +609,10 @@ class PostFxImpl implements PostFx {
     this.setIntensity(lastGlare, lastScreen)
   }
 
-  render(dt: number, boost: number, hit: number, speed01: number): void {
+  render(
+    dt: number, boost: number, hit: number, speed01: number,
+    warp = 0, calm = false,
+  ): void {
     if (this.disposed) return
     const d = dt > 0.1 ? 0.1 : dt < 0 ? 0 : dt
     this.time += d
@@ -488,6 +635,14 @@ class PostFxImpl implements PostFx {
       mat.uniforms.uSpeed.value = this.speedSmooth
       mat.uniforms.uBoost.value = boost < 0 ? 0 : boost > 1 ? 1 : boost
       mat.uniforms.uHit.value = hit < 0 ? 0 : hit > 1 ? 1 : hit
+      // NOT smoothed on this side. A CPU-side tail would keep running for its
+      // own half-life after the source went to zero, which is a leak of exactly
+      // the motion reduced motion exists to remove -- the caller's value is
+      // already suppressed at source, so passing it straight through is what
+      // makes "toggle on, effect gone, this frame" true. The tail is shaped in
+      // the shader instead, by WARP_SHAPE, which is zero at zero.
+      mat.uniforms.uWarp.value = warp < 0 ? 0 : warp > 1 ? 1 : warp
+      mat.uniforms.uCalm.value = calm ? 0 : 1
       mat.uniforms.uExposure.value = this.renderer.toneMappingExposure
     }
 

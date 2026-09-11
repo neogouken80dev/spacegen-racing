@@ -28,6 +28,14 @@ export class ChaseCamera {
   /** Drift-release dolly-zoom impulse, 0-1, decaying. */
   private dolly = 0
   /**
+   * `boostMag` as of last frame, so a boost can be picked up from its RISE.
+   * See TUNING.camera.boostDollyGain: most boost sources never push an event
+   * the camera could read, but every one of them steps this value up.
+   */
+  private prevBoostMag = 0
+  /** Seconds left of the refractory period between boost vertigo punches. */
+  private boostDollyLock = 0
+  /**
    * The FOV the rig would be running with NO vertigo shot -- the speed and
    * boost terms alone, damped exactly as `fov` is. The dolly compensation is
    * measured against this, never against `fovRest`: the shot's job is to stop
@@ -107,6 +115,11 @@ export class ChaseCamera {
     this.driftYaw = 0
     this.shake = 0
     this.dolly = 0
+    // The grid is a boost the camera must not react to: a rocket start is
+    // resolved during the countdown, and a reset that left this at 0 would see
+    // the whole of `boostMag` arrive as a rise on the first frame of the race.
+    this.prevBoostMag = r.boostMag
+    this.boostDollyLock = 0
     this.cineT = -1
     this._anchor.set(r.pos.x, r.pos.y, r.pos.z)
     // A reset has no history to ease from, so the frame SNAPS: the grid is
@@ -214,6 +227,17 @@ export class ChaseCamera {
     this.dolly = Math.max(this.dolly, Math.min(1, amount))
   }
 
+  /**
+   * The live vertigo impulse, 0-1, for anything that wants to punch in time
+   * with the shot -- currently the composite pass's warp (render/postfx.ts).
+   *
+   * Read from HERE rather than re-derived from the boost state on the other
+   * side, so the screen effect and the camera move cannot drift apart, and so
+   * the reduced-motion suppression in update() covers both. The last time a
+   * toggle reached the camera and not the effect it shipped.
+   */
+  get dollyLevel(): number { return this.dolly }
+
   update(r: RacerState, dt: number, topSpeed: number, lookBack: boolean, reduceMotion: boolean): void {
     const speed = this.gravity
       ? Math.hypot(r.vel.x, r.vel.y, r.vel.z)
@@ -258,23 +282,62 @@ export class ChaseCamera {
     // decayed -- or zeroed for reduced motion -- before anything reads it.
     const boost01 = clamp01(r.boostMag / 0.52)
     const speedFov = C.fovRest + (C.fovBoost - C.fovRest) * clamp01(speed01 * 0.55 + boost01 * 0.75)
+
+    // THE VERTIGO SHOT, ON A BOOST. `boostMag` is a step function -- set on
+    // the grant, held, zeroed when the timer expires -- so a rise in it is a
+    // new boost, and that is the one signal every source shares. A strip calls
+    // applyBoost on all 65 frames you are on it and only the first raises the
+    // value, so this cannot ratchet; a display running at 144Hz sees the rise
+    // on exactly one frame, so it cannot multi-fire either.
+    //
+    // Drift releases are EXCLUDED and keep their own path: main.ts fires those
+    // off the VFX pass's sim-frame-guarded `dollyRequest` with the tuned
+    // per-tier ladder, and picking them up here as well would hand a Tier-0
+    // release the flat boost impulse instead of the 0.30 it is meant to get.
+    //
+    // The tracker is updated whether or not the shot fires -- reduced motion,
+    // the cooldown and the speed gate must not leave a stale value that turns
+    // into a phantom rise the next time one of them opens.
+    const boostRise = r.boostMag - this.prevBoostMag
+    this.prevBoostMag = r.boostMag
+    if (this.boostDollyLock > 0) this.boostDollyLock = Math.max(0, this.boostDollyLock - dt)
+    if (
+      boostRise > C.boostDollyMinRise
+      && r.boostSource !== 'drift'
+      && this.boostDollyLock === 0
+      && speed01 > C.boostDollyMinSpeed
+    ) {
+      this.addDolly(clamp01(boostRise / C.boostDollyFullRise) * C.boostDollyGain)
+      this.boostDollyLock = C.boostDollyCooldown
+    }
     // Reduced-motion users get the speed FOV they would have had and no
     // vertigo at all, because a rig that moves and zooms in opposite
     // directions is exactly the thing that setting exists to switch off.
     // Zeroing it AFTER the camera has been placed leaves one frame of pull-in
     // -- measured at 0.18m of camera travel -- which is precisely the motion
     // the setting is there to remove.
+    //
+    // THIS LINE IS ALSO WHY THE BOOST IMPULSE ABOVE IS RAISED ABOVE IT rather
+    // than below: whatever that block put into `this.dolly` is wiped here,
+    // before the placement, the pull-in in apply() or the composite's warp can
+    // read a single frame of it. The same ordering bug -- a block that moved
+    // the camera running BEFORE the suppression -- has shipped once already.
     this.dolly = reduceMotion ? 0 : this.dolly * Math.pow(2, -dt / C.dollyHalfLife)
     if (this.dolly < 0.002) this.dolly = 0
     this.fovBase = damp(this.fovBase, speedFov, C.fovHalfLife, dt)
     this.fov = damp(this.fov, speedFov + C.dollyFov * this.dolly, C.fovHalfLife, dt)
 
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw)
-    // Pull back and drop slightly with speed for a widening sense of scale.
-    // The dolly does NOT belong here: this is the rig's TARGET distance, and
-    // at racing speed the camera never gets to it -- see apply().
-    const dist = C.distance * (1 + speed01 * 0.14)
-    const height = C.height * (1 + speed01 * 0.06)
+    // The rig's TARGET offset. Both speed gains ship at 0 -- see
+    // TUNING.camera.distanceSpeedGain -- so this is a constant 9.0m back and
+    // 3.6m up, and they are here rather than deleted so the old widening can
+    // be dialled back in without re-deriving it.
+    //
+    // The dolly does NOT belong here: this is the distance the rig is AIMING
+    // for, and even with the lock below it is not the distance the camera is
+    // at on the frame the shot fires -- see apply().
+    const dist = C.distance * (1 + speed01 * C.distanceSpeedGain)
+    const height = C.height * (1 + speed01 * C.heightSpeedGain)
 
     // Same rig, same numbers, taken along the racer's frame rather than along
     // the world axes: back along the heading, up along `_up`.
@@ -288,6 +351,46 @@ export class ChaseCamera {
     }
     const f = Math.pow(2, -dt / C.posHalfLife)
     this.pos.lerp(this._desired, 1 - f)
+
+    // ---- THE DISTANCE LOCK -------------------------------------------------
+    //
+    // The damping above is what makes a corner read as rotation: the camera
+    // swings wide and catches up, and the car leads the frame. But a lerp
+    // toward a moving target lags in EVERY direction, not just the one that
+    // buys the trail, and the radial part of that lag is pure speed
+    // dependence -- 13.2m of extra distance at 76 m/s against a 9m rig, more
+    // under acceleration, less on the brakes. That is the "the camera keeps
+    // changing distance" the shot is being asked to stop doing.
+    //
+    // So the DIRECTION the damping produced is kept and only its LENGTH is
+    // corrected, worked in the rig's own frame: the component along the
+    // camera's up (the height, which on a gravity track is the only direction
+    // "up" means anything in) and the component perpendicular to it (the
+    // ground distance). Locking the ground distance and leaving the height
+    // damped is deliberate -- see TUNING.camera.heightLock.
+    //
+    // This runs BEFORE the floor below, not after, so the clamp still has the
+    // last word on where the camera ends up.
+    if (C.distanceLock > 0 || C.heightLock > 0) {
+      this._tmp.copy(this.pos).sub(this._car)
+      const h = this._tmp.dot(this._up)
+      // `_tmp` becomes the ground-plane part: what the damping has made of
+      // "behind", including the corner swing this is here to preserve.
+      this._tmp.addScaledVector(this._up, -h)
+      const gnd = this._tmp.length()
+      const wantH = h + (height - h) * C.heightLock
+      // Degenerate only if the camera is exactly above the car, which the
+      // floor and the 9m rig make unreachable; fall back to the rig's own
+      // heading rather than dividing by zero.
+      if (gnd > 1e-4) {
+        this._tmp.multiplyScalar(1 + (dist / gnd - 1) * C.distanceLock)
+      } else if (this.gravity) {
+        this._tmp.copy(this._fwd).multiplyScalar(-dist)
+      } else {
+        this._tmp.set(-fx * dist, 0, -fz * dist)
+      }
+      this.pos.copy(this._car).addScaledVector(this._up, wantH).add(this._tmp)
+    }
 
     // Never let the camera sink below the vehicle -- along the camera's own up,
     // which on a wall-ride is the only direction "below" means anything in.

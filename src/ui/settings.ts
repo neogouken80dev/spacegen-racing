@@ -299,13 +299,13 @@ const PHONE_NOTE: Record<TouchScheme, string> = {
   tilt:
     'Held in landscape. Steering is the device itself — roll it. RE-CENTRE, bottom left, ' +
     'takes whatever angle you happen to be holding and calls that straight ahead. ' +
-    'The right thumb keeps drift and items.',
+    'The right thumb keeps drift, brake and items.',
   stick:
     'Held in landscape. Touch down anywhere in the left zone and a stick appears under your ' +
     'thumb — it is placed where you land, so you never have to find it mid-corner. ' +
-    'The right thumb keeps drift and items.',
+    'The right thumb keeps drift, brake and items.',
   buttons:
-    'Held in landscape. Discrete ◀ ▶ pads steer from the bottom left, GAS and BRAKE join the ' +
+    'Held in landscape. Discrete ◀ ▶ pads steer from the bottom left, GAS joins BRAKE in the ' +
     'right cluster, and drift and items stay under the right thumb.',
 }
 

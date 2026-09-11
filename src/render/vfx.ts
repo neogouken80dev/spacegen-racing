@@ -37,6 +37,23 @@ const K_GROUND = 3 // ground-aligned expanding annulus
 const K_SHELL = 4 // bright annulus with a punched-out dark core
 const K_SMOKE = 5 // soft low-contrast puff
 const K_BEAM = 6 // world-Y aligned light column
+/**
+ * A SHINY GLOWING MARBLE: a filled round body with a rim and an off-centre
+ * specular highlight, billboarded, and — the whole point — NOT stretched along
+ * its velocity the way K_SPARK is.
+ *
+ * K_SPARK's stretch is `1 + min(|v_view| * 0.085, 6)`, so a 0.62 m quad thrown
+ * at 25 m/s draws as a 1.8 m beam. That is correct for a struck spark grinding
+ * off a floor pan and it is exactly wrong for an impact that is supposed to
+ * scatter beads across the road: photographed at a real chase distance, forty
+ * of them fanning out read as a light rig, not as an impact.
+ *
+ * The profile is split on purpose (see PARTICLE_FRAG): a LARGE body at modest
+ * luminance carries the colour, a TINY specular carries the brightness. That
+ * is the only way this file has found to obey "make it brighter" and "make it
+ * more colourful" at once — put them in different pixels.
+ */
+const K_BEAD = 7
 
 const MAX_RACERS = 12
 /**
@@ -67,6 +84,13 @@ const D_DRIFT_SHOCK = 3
 const D_DRIFT_BLOW = 4
 /** The ramp's column of light, one frame behind the ground shock. */
 const D_RAMP_KICK = 5
+/**
+ * SECOND BEAT of a drift snap, ~75ms behind the first. `defDir` carries the
+ * OUTWARD direction of the slide at the moment the first crack fired, so the
+ * echo stays aimed at the outside of the arc even though the car has turned
+ * since — the same trick D_DRIFT_BLOW uses to keep a blowout down the pipe.
+ */
+const D_DRIFT_SNAP = 6
 
 const TAU = Math.PI * 2
 
@@ -161,7 +185,15 @@ const DUST_RGB = new Float32Array([0.26, 0.22, 0.17])
 const WHITE_RGB = new Float32Array([1.4, 1.4, 1.4])
 
 // ---------------------------------------------------------------------------
-// DRIFT SIGNATURE: trails, surface spray, struck sparks.
+// DRIFT SIGNATURE: trails, surface spray, struck sparks — and, on entry and on
+// every tier, THE SNAP (see driftSnap(), and TUNING.driftSnap).
+//
+// The three channels below are all SUSTAIN. That was the gap: a state whose
+// entire vocabulary is sustain has no way to say "now", and the two moments a
+// player most needs to read — the slide starting and a tier landing — were
+// being spoken in the boost's grammar (a flash, a camera-facing ring, a radial
+// ejection). The snap is the attack this section was missing, and it is
+// deliberately built out of the one geometry nothing else here uses: lateral.
 //
 // Three channels, one rule, and the rule is the reason the file reads the way
 // it does. The tier ladder escalates through SHAPE, MOTION, DENSITY and HUE —
@@ -264,6 +296,10 @@ const _rgb2 = new Float32Array(3)
  *  across a call that clobbers _rgb or _rgb2. */
 const _dcol = new Float32Array(3)
 const _dcol2 = new Float32Array(3)
+/** The drift SNAP's colour. Its own scratch because driftSnap() is called from
+ *  inside driftTierUp(), which already owns _dcol2, and from the driftStart
+ *  event handler, which runs before the frame's _dcol has been resolved. */
+const _scol = new Float32Array(3)
 /** The surface palette for the racer being drawn, resolved once per frame. */
 const _spBulk = new Float32Array(3)
 const _spGlint = new Float32Array(3)
@@ -538,8 +574,17 @@ void main() {
     a = pow(1.0 - u, 1.3) * smoothstep(0.0, 0.05, u);
   } else if (kind < 5.5) {       // smoke
     a = sin(u * 3.14159265) * 0.8;
-  } else {                       // beam
+  } else if (kind < 6.5) {       // beam
     a = sin(u * 3.14159265);
+  } else {                       // bead
+    // A marble does not fade the moment it is thrown. ^1.25 rather than the
+    // spark's ^1.7 keeps the mean bead at 55% of its brightness across its
+    // life instead of 37%, which is what lets one that lands and settles still
+    // be worth looking at a second later. The sine is a slow TWINKLE, not a
+    // flicker: half the spark's rate and a fifth of its depth, so it reads as
+    // a highlight catching the light rather than as a strobe.
+    a = smoothstep(0.0, 0.035, u) * pow(1.0 - u, 1.25)
+      * (0.88 + 0.12 * sin(vSeed * 61.0 + age * 31.0));
   }
 
   // Far fade, and a NEAR fade. The chase camera sits nine metres directly
@@ -558,10 +603,31 @@ void main() {
   // corner. Fading from 9.5 m instead of 4.2 m dissolves the plume as the
   // camera arrives while leaving it at full strength where it is made — the
   // spray at the wheels is 9 m out, so it loses nothing at all.
+  //
+  // BEADS GET A THIRD WINDOW, and it was MEASURED, not assumed. An impact
+  // bead is a FILLED disc up to 0.9 m across thrown backwards down the road,
+  // and the chase camera is nine metres behind the car: solid angle goes as
+  // (size/distance)^2, so the same bead that is 70 px tall where it is made is
+  // 260 px tall at 2.5 m. Photographed at the default 1.1-4.2 window, a slam
+  // put a dozen of those over the lens and the frame went flat magenta --
+  // additive, so it tinted the sky and the horizon too.
+  //
+  // 2.4-8.5, which is very nearly the SMOKE window, and for the same reason
+  // smoke has one: a bead is the only other kind that is both large and left
+  // BEHIND the car, so it is the only other kind the camera genuinely flies
+  // through rather than past. Every settled marble on the road passes within a
+  // couple of metres of a lens that is nine metres behind the car. Measured at
+  // 1.8-5.6 a slam photographed 0.82% of the frame and 3.52% of the ROAD BAND
+  // blown a quarter-second in -- a boost's numbers, for an impact -- and
+  // almost all of it came from four beads close enough to fill a sixth of the
+  // frame each. At 2.4-8.5 the burst where it is MADE is untouched: the
+  // contact point is eleven metres from the lens.
   float dcam = distance(wp, uCamPos);
   float near = (kind > 4.5 && kind < 5.5)
     ? smoothstep(2.6, 9.5, dcam)
-    : smoothstep(1.1, 4.2, dcam);
+    : (kind > 6.5)
+      ? smoothstep(2.4, 8.5, dcam)
+      : smoothstep(1.1, 4.2, dcam);
   vA = a * near * (1.0 - smoothstep(230.0, 420.0, dcam));
 
   vec4 mv;
@@ -576,7 +642,7 @@ void main() {
     vec3 gb = cross(gt, aAxis);
     vec3 wo = wp + gt * (position.x * size) + gb * (position.y * size);
     mv = modelViewMatrix * vec4(wo, 1.0);
-  } else if (kind > 5.5) {
+  } else if (kind > 5.5 && kind < 6.5) {
     // Light column along aAxis, billboarded around it. cross(aAxis, f) with
     // aAxis = +Y is exactly (f.z, 0, -f.x), the vector this replaces.
     vec3 f = uCamPos - wp;
@@ -633,9 +699,38 @@ void main() {
     a += exp(-d * d * 1.4) * 0.05;
   } else if (vKind < 5.5) {      // smoke
     a = exp(-d * d * 2.0) * 0.55;
-  } else {                       // beam
+  } else if (vKind < 6.5) {      // beam
     float w = 1.0 - smoothstep(0.0, 1.0, abs(q.x));
     a = w * w * (1.0 - smoothstep(-0.3, 1.0, q.y)) * 0.85;
+  } else {                       // bead: a shiny glowing marble
+    // FOUR TERMS, AND THEY ARE FOUR DIFFERENT JOBS.
+    //
+    // body   a filled disc with an EDGE. This is the whole reason the kind
+    //        exists: a gaussian puff has no silhouette, and a thing without a
+    //        silhouette is not an object, it is a glow. 0.62 alpha, which at
+    //        TUNING.sparks.lum puts the body just over the bloom threshold and
+    //        a long way under the point ACES flattens every hue to white.
+    // shade  a sphere, not a coin. Cheap Lambert-ish falloff toward the rim.
+    // spec   THE SHINE, and the only part of a bead allowed to clip. It is
+    //        about six pixels across at a realistic chase distance, so it can
+    //        carry 2.25x the colour -- and 2.25x a SATURATED colour still
+    //        blooms white, which is what "shiny" looks like -- without taking
+    //        the hue of the other nine hundred pixels with it.
+    // rim    a thin bright edge. This is what stops a bead 40 m away, where
+    //        the specular is sub-pixel, from collapsing into a flat dot.
+    // halo   a little light bleeding past the silhouette, so it GLOWS instead
+    //        of merely being bright. Held to 0.09 and tight, and that number
+    //        was MEASURED down from 0.20: this is the only term that covers
+    //        the whole quad, so it is the only one whose cost scales with the
+    //        square of the bead's screen size, and at 0.20 a slam's worth of
+    //        near-camera beads laid a flat additive wash over the sky.
+    float body = 1.0 - smoothstep(0.62, 0.96, d);
+    float shade = 0.62 + 0.38 * (1.0 - d * d);
+    vec2 hp = q - vec2(-0.30, 0.32);
+    float spec = exp(-dot(hp, hp) * 30.0);
+    float rim = exp(-(d - 0.80) * (d - 0.80) * 60.0) * 0.42;
+    float halo = exp(-d * d * 3.4) * 0.13;
+    a = body * (shade * 0.70 + rim) + spec * 1.55 + halo;
   }
 
   a *= vA;
@@ -922,6 +1017,15 @@ class RacerFx {
   tierFlash = 0
   /** Tier that fired the wash, so its magnitude escalates with the ladder. */
   tierFlashT = 0
+  /**
+   * Seconds until this racer may fire another drift SNAP.
+   *
+   * Entry and the tier-0 landing are ~0.65 charge-seconds apart on a normal
+   * chassis, which is a rhythm; on a fast-charging one under a chain multiplier
+   * they can arrive close enough together to read as one smeared event instead
+   * of two cracks. TUNING.driftSnap.hold is the floor under that.
+   */
+  snapHold = 0
 
   // --- drift signature: spray, sparks, arc ribbons ----------------------
   /** Bulk surface material torn off the contact patches. */
@@ -1779,6 +1883,7 @@ class Vfx implements VfxSystem {
     _bQ = q; _bLocal = isLocal; _bSide = r.driftSide
 
     if (fx.tierFlash > 0) fx.tierFlash -= dt
+    if (fx.snapHold > 0) fx.snapHold -= dt
     // The contact allowance is per RACER per FRAME, not per event: one wall
     // event plus seven bump events is a normal frame in a tight pack.
     fx.contactSpent = 0
@@ -1805,6 +1910,11 @@ class Vfx implements VfxSystem {
           this.ring(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06), SMOKE_RGB, 6.0, 0.30, 1.2, 5.0, true)
           fx.gatherAcc = 0; fx.gatherRing = 0; fx.coreAcc = 0
           fx.underAcc = 0; fx.thrustAcc = 0; fx.strainAcc = 0
+          // ENTRY IS THE MOMENT THAT MATTERS MOST and it used to be one smoke
+          // ring — the quietest one-shot in this whole switch, for the state
+          // change a player most needs to feel. See driftSnap() for what a
+          // crack is made of and why it is made of THAT and not of a flash.
+          this.driftSnap(fx, 0, true, 1)
           break
         case 'driftEnd': {
           if (it.tier >= 0) {
@@ -2467,6 +2577,13 @@ class Vfx implements VfxSystem {
     fx.tierFlash = 0.20 + t * 0.045
     fx.tierFlashT = t
 
+    // 0. THE CRACK. Fired FIRST so it is on screen in the same frame as the
+    //    transition and not one behind it. Everything below this line is the
+    //    tier-up's own vocabulary — flashes, rings, a radial ejection — which
+    //    is the vocabulary a boost also speaks; driftSnap is what says
+    //    "drifting" rather than "something happened".
+    this.driftSnap(fx, t, false, 1)
+
     // Base tier colour, deliberately NOT washed: this burst is the moment the
     // new hue arrives, so it must not be flattened by its own transition.
     const ti = t * 3
@@ -2560,6 +2677,204 @@ class Vfx implements VfxSystem {
     // Also feeds the composite's zoom, chromatic aberration and vignette, all
     // of which compound the whiteout, so it is cut alongside the particles.
     if (_bLocal) this.boostIntensity = Math.max(this.boostIntensity, 0.14 + t * 0.09)
+  }
+
+  /**
+   * THE DRIFT SNAP — the hard accent on ENTRY and on every TIER-UP.
+   *
+   * WHAT WAS ACTUALLY MISSING. The drift signature above is large and it is
+   * careful, and every one of its channels is a SUSTAIN: ribbons that stream,
+   * a plume that builds, a spark rate that climbs, a hue ladder that walks.
+   * The two moments a player most needs to read — "I am now drifting" and "it
+   * just went up a tier" — were being announced in the same grammar as a
+   * boost: a flash, a camera-facing ring, a radial ejection. Three different
+   * events, one vocabulary. At a glance they were the same event.
+   *
+   * SO THIS DELIBERATELY SPEAKS THE ONE GRAMMAR NOTHING ELSE IN THE GAME USES.
+   *
+   *   1. TWO LATERAL BLADES, from the front and rear OUTSIDE contact patches,
+   *      fired flat along the road, straight out of the arc. Together they
+   *      draw the car's slip vector. Every other impulse in this file is
+   *      axial (a boost plume, down the exhaust), spherical (a tier ejection,
+   *      going nowhere in particular yet) or vertical (a landing). Nothing
+   *      else throws anything sideways, and sideways is what a drift IS.
+   *      They are K_SPARK on purpose: the stretch that ruined the impact
+   *      marbles is exactly what makes these read as hard slashes, and thin
+   *      streaks are the shape this file's own rule allows HDR headroom.
+   *   2. AN OFF-CENTRE GROUND FRONT. Offset to the outside by `arcOffset`, so
+   *      it is visibly not concentric with the car. Every other front in the
+   *      game is. Asymmetry is the cheapest possible "that car is sliding,
+   *      and it is sliding THAT way".
+   *   3. A SECOND BEAT, ~75ms later, at a bit over half strength. A boost is
+   *      one hit. A tier-up's deferred front is a ring. A double crack is
+   *      unclaimed, and rhythm is the cue that survives peripheral vision —
+   *      the same argument the scrape STRIKE already makes for itself.
+   *   4. SHORT. Nothing here outlives 0.2 s. "Sharp" is an envelope before it
+   *      is anything else, and every other drift channel is sustain.
+   *
+   * WHAT IT IS NOT ALLOWED TO BE: a filled flash scaled with the tier. That
+   * mistake is written up twice already in this file (it erased the car, the
+   * road and the horizon for a third of a second). The tick of light at the
+   * outside rear corner is held at 60 ms and 0.42 m and does not grow with
+   * anything; the escalation lives in the blade COUNT and the front RADIUS.
+   *
+   * @param tier  0-3. Entry fires at 0 with `entry` set.
+   * @param beat  1 for the first crack, `beatScale` for the echo.
+   */
+  private driftSnap(fx: RacerFx, tier: number, entry: boolean, beat: number): void {
+    const q = _bQ
+    if (q <= 0) return
+    const D = TUNING.driftSnap
+    if (beat >= 1) {
+      if (fx.snapHold > 0) return
+      fx.snapHold = D.hold
+    }
+    const t = Math.max(0, Math.min(3, tier))
+    const rm = this.reduced
+    const cnt = rm ? D.rmCount : 1
+
+    // ENTRY has no tier yet and must still be the loudest single moment of the
+    // slide — it is the one the player has to feel to know the state changed.
+    // It borrows tier 0's hue (the slide genuinely is tier 0) and tier 2's
+    // weight, so "I am drifting" lands harder than "I am now one tier better".
+    const ti = t * 3
+    // ...AND IT IS WASHED TOWARD WHITE, which is not decoration. Tier 0's hue
+    // is ice cyan and Rustfall's road is lit by ice-cyan strips: photographed
+    // there, the entry crack was the same colour as the thing it was supposed
+    // to stand out from and simply disappeared into it. A white-hot crack
+    // resolving into the tier hue is also the grammar the tier WASH already
+    // uses (see driftColor), so this is the existing rule applied one level
+    // out, not a new one. Entry takes more of it than a tier-up because entry
+    // has no hue change of its own to carry the moment.
+    const ww = entry ? 0.55 : 0.25
+    const iw = 1 - ww
+    _scol[0] = DRIFT_RGB[ti] * iw + WHITE_RGB[0] * ww * 1.9
+    _scol[1] = DRIFT_RGB[ti + 1] * iw + WHITE_RGB[1] * ww * 1.9
+    _scol[2] = DRIFT_RGB[ti + 2] * iw + WHITE_RGB[2] * ww * 1.9
+    const w = (entry ? 1.35 : 1.0) * beat
+
+    // The OUTSIDE of the arc. `_bSide` is the drift side and +driftSide is its
+    // INSIDE, so the outside is -_bSide; the driftEnd puff resolves the same
+    // way. Zero only if this is called with no slide, which cannot happen.
+    const side = _bSide !== 0 ? -_bSide : 1
+    const hx = _bHx, hz = _bHz
+
+    // ---- 1. THE BLADES -------------------------------------------------
+    //
+    // A COMB DOWN THE WHOLE FLANK, not two fans off the axles, and this was
+    // the difference between an effect and a smudge. Two cones of ~45 streaks
+    // each photographed as a soft white wash beside the car: a K_SPARK points
+    // along its own velocity, so ninety of them leaving two points inside a
+    // narrow cone overlap almost perfectly, and ninety additive overlaps under
+    // bloom is a glow with no edges in it. A DOZEN streaks spread along the
+    // sill, each one separately visible with road between them, reads as the
+    // whole side of the car letting go at once — which is the image.
+    //
+    // Born 1.35 half-widths out, clear of the bodywork: this material
+    // depth-tests, so a streak starting under the sill spends its first frames
+    // behind the car, and that is most of a 150 ms life.
+    const n = Math.max(3, Math.round((D.bladeCount + t * D.bladePerTier) * q * cnt * w))
+    const sp = D.bladeSpeed * (0.75 + t * 0.09) * (0.6 + beat * 0.4)
+    const eS = side * hx * 1.35
+    const oX = _bRgtX * side, oY = _bRgtY * side, oZ = _bRgtZ * side
+    // The comb runs front-to-back along the flank, which from a chase camera
+    // directly behind the car is the FORESHORTENED axis -- a four-metre line
+    // of emitters projects to a couple of hundred pixels of depth and the row
+    // reads as a point. Kept shorter than the wheelbase for that reason: the
+    // spread that does the work on screen is the throw, not the row.
+    const f0 = hz * 0.62, f1 = -hz * 0.94
+    this.blade(
+      gX(f0, eS, 0.08), gY(f0, eS, 0.08), gZ(f0, eS, 0.08),
+      oX, oY, oZ, f1 - f0, n, sp, _scol, D.bladeGain * w,
+    )
+
+    // ---- 4. THE SECOND BEAT --------------------------------------------
+    // One deferred entry at the MIDDLE of the flank, carrying the outward
+    // direction of the slide at the moment the first crack fired, so the echo
+    // stays aimed at the outside of the arc even though the car has turned.
+    // Dropped entirely under reduced motion: two cracks 75 ms apart is exactly
+    // the flicker the RM path exists to suppress. The first one still fires,
+    // so the STATE is still announced — RM asks for no strobing, not for no
+    // effect, which is the rule the rest of this file follows.
+    if (beat >= 1 && D.beat > 0 && (D.rmBeat || !rm)) {
+      const fm = (f0 + f1) * 0.5
+      this.defer(
+        D.beat, gX(fm, eS, 0.08), gY(fm, eS, 0.08), gZ(fm, eS, 0.08),
+        _scol, D_DRIFT_SNAP, t, oX, oY, oZ,
+      )
+    }
+
+    // ---- 2. THE OFF-CENTRE GROUND FRONT --------------------------------
+    // Normalised by DRIFT_BODY_GAIN like every other front in this file: the
+    // tier read here is the OFFSET and the RADIUS, never the luminance.
+    const aF = -hz * 0.25, aS = side * D.arcOffset
+    this.shockRing(
+      gX(aF, aS, 0.05), gY(aF, aS, 0.05), gZ(aF, aS, 0.05),
+      _scol, D.arcGain * DRIFT_BODY_GAIN[t] * w, D.arcLife,
+      0.8, D.arcSize + t * 1.6, true,
+    )
+
+    // ---- 3. THE TICK ---------------------------------------------------
+    // One small, very brief filled sprite at the outside rear corner: the
+    // moment of the break, and nothing more. Fixed size on purpose.
+    const kF = -hz * 0.94, kS = side * hx * 1.06
+    this.flash(
+      gX(kF, kS, 0.12), gY(kF, kS, 0.12), gZ(kF, kS, 0.12),
+      _scol, D.snapGain * DRIFT_BODY_GAIN[t] * w, D.snapLife, D.snapSize,
+    )
+  }
+
+  /**
+   * THE COMB: `n` hard streaks fired along `o`, spaced down a line `span`
+   * metres long. `o` must be a unit vector lying IN the surface the car is
+   * standing on; the line runs along up x o, which on a flat track is the
+   * racer's own forward and on a wall-ride is forward along the wall — the
+   * same construction the impact burst uses to fan across a struck surface.
+   *
+   * Written against (o, span, the current spawn axis) rather than against the
+   * racer basis, because the deferred second beat fires long after
+   * `updateRacer` has moved on to another car and has no basis left to read.
+   *
+   * The streaks are DELIBERATELY SPARSE and deliberately spread along a line
+   * rather than fanned from a point. Overlapping additive streaks average into
+   * a glow; separated ones stay countable, and a countable row of slashes
+   * leaving one side of the car is the read this whole channel exists for.
+   */
+  private blade(
+    x: number, y: number, z: number,
+    ox: number, oy: number, oz: number,
+    span: number, n: number, speed: number, col: Float32Array, gain: number,
+  ): void {
+    const D = TUNING.driftSnap
+    let aX = _axY * oz - _axZ * oy
+    let aY = _axZ * ox - _axX * oz
+    let aZ = _axX * oy - _axY * ox
+    const al = Math.sqrt(aX * aX + aY * aY + aZ * aZ)
+    if (al > 1e-4) { aX /= al; aY /= al; aZ /= al } else { aX = 1; aY = 0; aZ = 0 }
+    const m = Math.min(n, this.frameBudget - this.spawnCount)
+    for (let i = 0; i < m; i++) {
+      // Walked down the flank front to back, with a small jitter so the row is
+      // a row and not a picket fence.
+      const u = m > 1 ? i / (m - 1) : 0.5
+      const off = span * (u + (rnd() - 0.5) * 0.6 / m)
+      // A FLAT throw: almost all of it in the road plane. The vertical term is
+      // a fraction of the lateral one, which is what keeps a blade a blade
+      // rather than a cone that could have come off anything.
+      const lat = 0.88 + rnd() * 0.30
+      const along = rnd2() * D.bladeSpread
+      const up = 0.04 + rnd() * 0.10
+      // Ragged leading edge: the outer tips do not arrive in a straight line.
+      const s = speed * (0.72 + rnd() * 0.56)
+      this.spawn(
+        x + aX * off, y + aY * off, z + aZ * off,
+        (ox * lat + aX * along + _axX * up) * s,
+        (oy * lat + aY * along + _axY * up) * s,
+        (oz * lat + aZ * along + _axZ * up) * s,
+        col[0] * gain, col[1] * gain, col[2] * gain,
+        D.bladeLife * (0.78 + rnd() * 0.44), D.bladeSize * (0.85 + rnd() * 0.45), 0,
+        -26, 1.2, K_SPARK,
+      )
+    }
   }
 
   /**
@@ -3866,11 +4181,22 @@ class Vfx implements VfxSystem {
    *    air; the overrun is buried under the road and eaten by the depth test,
    *    which this material has enabled.
    *
-   * 3. THE COLOUR IS RANDOM PER IMPACT. Not the track theme, not hot white:
-   *    a base hue drawn once per burst from this file's own RNG, jittered per
-   *    spark. Luminance is normalised out of the hue by `writeHsvLum` — see
-   *    the note there for why "random colour" would otherwise silently mean
-   *    "random brightness" and hand the glare budget to a die roll.
+   * 3. THE COLOUR IS RANDOM PER IMPACT, AND THERE ARE THREE OF THEM. Not the
+   *    track theme, not hot white: a base hue drawn once per burst from this
+   *    file's own RNG, then a TRIAD — base and base ± `hueSpread` — drawn from
+   *    per bead, with a micro-jitter on top. Luminance is normalised out of
+   *    the hue by `writeHsvLum` — see the note there for why "random colour"
+   *    would otherwise silently mean "random brightness" and hand the glare
+   *    budget to a die roll. See TUNING.sparks.hueSpread for why three fixed
+   *    hues and not one, and not a free hue per bead.
+   *
+   * 4. THE PARTICLE IS A MARBLE, NOT A STREAK. K_BEAD, not K_SPARK. The
+   *    difference is not cosmetic: K_SPARK is stretched along its own
+   *    screen-space velocity, so scaling it up to be visible turned every
+   *    impact into a fan of two-metre beams. A bead has a silhouette, which is
+   *    what lets the burst be wide (see `spread`) without dissolving into
+   *    dust, and it puts its brightness in a six-pixel specular instead of
+   *    across its whole body, which is what lets it be hot AND coloured.
    *
    * BUDGET. `TUNING.sparks` counts in POOL SLOTS, not sparks, because a
    * bouncing spark is three of them. The token bucket is drained here and
@@ -3940,28 +4266,53 @@ class Vfx implements VfxSystem {
     const LEG_OVERRUN = 1.55
 
     const speed = S.speedBase + S.speedSpan * f
-    const size = S.sparkSize * (0.85 + f * 0.45)
+    const size0 = S.sparkSize * (0.85 + f * 0.45)
+
+    // THE TANGENT OF THE STRUCK SURFACE, in the surface's own plane: up x out.
+    // The old cone scattered along world X and Z, which is only the surface
+    // plane on a flat track -- on a wall-ride it threw half the burst into the
+    // wall and half into the sky. This is the axis the burst FANS across.
+    let tgX = upY * oz - upZ * oy
+    let tgY = upZ * ox - upX * oz
+    let tgZ = upX * oy - upY * ox
+    const tgL = Math.sqrt(tgX * tgX + tgY * tgY + tgZ * tgZ)
+    if (tgL > 1e-4) { tgX /= tgL; tgY /= tgL; tgZ /= tgL } else { tgX = _bFwdX; tgY = _bFwdY; tgZ = _bFwdZ }
 
     for (let i = 0; i < n; i++) {
-      writeHsvLum(_spkCol, hue0 + sparkRnd2() * S.hueJitter, sat, lum)
-      // Off the surface, back along the car and up: a spark that hugs the
-      // ground behind the chassis is occluded by the chassis, and one thrown
-      // straight out sideways leaves the frame before it is read. A CONE, not
-      // a cloud. The first pass scattered speed 0.45-1.3x and
-      // direction over most of a hemisphere, and 40 sparks spread that wide
-      // over ten metres of road is not an impact, it is dust -- the photograph
-      // of it showed the settled embers and no visible strike at all. The
-      // spread is now narrow enough that the sparks stay a recognisable fan
-      // for the first few metres, which is the part anyone sees.
-      const sp = speed * (0.6 + sparkRnd() * 0.55)
-      const out = 0.80 + sparkRnd() * 0.45
-      const back = 0.30 + sparkRnd() * 0.55
-      const rise = 0.24 + sparkRnd() * 0.34
-      const jit = 0.75
-      let vx = (ox * out - _bFwdX * back + upX * rise) * sp + sparkRnd2() * jit
-      let vy = (oy * out - _bFwdY * back + upY * rise) * sp
-      let vz = (oz * out - _bFwdZ * back + upZ * rise) * sp + sparkRnd2() * jit
-      // Born a little off the struck surface so the streak is not inside it.
+      // THE TRIAD. One base hue per impact, three fixed offsets drawn from per
+      // bead, a micro-jitter on top. See TUNING.sparks.hueSpread for the whole
+      // argument; the short version is that one hue per burst is not "various
+      // colors" and a free hue per bead is grey confetti, and this is the only
+      // third option that keeps the hue-hold's anti-strobe guarantee.
+      const fam = (sparkRnd() * 3) | 0
+      const hue = hue0 + (fam - 1) * S.hueSpread + sparkRnd2() * S.hueJitter
+      // Saturation and brightness vary per bead too. A pile of identical balls
+      // reads as one object; a pile of slightly different ones reads as many.
+      const satB = clamp01(sat * (0.86 + sparkRnd() * 0.20))
+      const lumB = lum * (0.80 + sparkRnd() * 0.42)
+      writeHsvLum(_spkCol, hue, satB, lumB)
+      const size = size0 * (1 - S.sizeVar + sparkRnd() * S.sizeVar * 2)
+      // AN EXPLOSION, NOT A SPRAY. Out of the surface, fanned wide ACROSS it,
+      // and with enough vertical spread that the burst has a shape in the air
+      // before it lands. The first pass at this was a hemisphere and read as
+      // dust; the second was narrowed to a tight fan, which was the right fix
+      // for STREAKS -- they only cohere when they point the same way -- and is
+      // the wrong one for beads, which have silhouettes of their own. `back`
+      // is allowed to go slightly negative so a few beads lead the car instead
+      // of every one of them trailing it.
+      const sp = speed * (0.55 + sparkRnd() * 0.70)
+      const out = 0.55 + sparkRnd() * 0.85
+      const back = -0.10 + sparkRnd() * 0.85
+      // Capped at 0.95: `rise` sets the normal component of the launch, which
+      // sets the solved air-time, and past this the arc runs over `flightMax`
+      // and the bead is demoted to one that never lands. That is a silent
+      // failure -- it looks like fewer marbles on the road, not like a bug.
+      const rise = 0.10 + sparkRnd() * 0.85
+      const tang = sparkRnd2() * S.spread
+      let vx = (ox * out - _bFwdX * back + upX * rise + tgX * tang) * sp
+      let vy = (oy * out - _bFwdY * back + upY * rise + tgY * tang) * sp
+      let vz = (oz * out - _bFwdZ * back + upZ * rise + tgZ * tang) * sp
+      // Born a little off the struck surface so the bead is not inside it.
       let px = cx + ox * 0.06, py = cy + oy * 0.06, pz = cz + oz * 0.06
 
       // Height over the road, and the flight time to reach it. Solved with NO
@@ -3977,14 +4328,16 @@ class Vfx implements VfxSystem {
       const bouncing = mayBounce && t0 <= S.flightMax
         && sparkRnd() < share && this.slotTokens >= slotCost
       if (!bouncing) {
-        // The plain spark: arcs, and burns out in the air. Drag is free here
-        // because nothing downstream has to predict where it goes.
+        // The plain bead: arcs, and burns out in the air. Drag is free here
+        // because nothing downstream has to predict where it goes. Lived
+        // longer than the streak it replaced -- a streak is legible in two
+        // frames because it is 2 m long, a bead needs to be watched.
         if (this.slotTokens < 1) break
         this.slotTokens -= 1
         this.spawn(
           px, py, pz, vx, vy, vz,
           _spkCol[0], _spkCol[1], _spkCol[2],
-          0.17 + sparkRnd() * 0.24, size, 0, S.gravity, 2.0, K_SPARK,
+          0.26 + sparkRnd() * 0.34, size, 0, S.gravity, 2.0, K_BEAD,
         )
         continue
       }
@@ -4008,7 +4361,7 @@ class Vfx implements VfxSystem {
         this.spawn(
           px, py, pz, vx, vy, vz,
           _spkCol[0] * dim, _spkCol[1] * dim, _spkCol[2] * dim,
-          tl * LEG_OVERRUN, size * (leg === 0 ? 1 : 0.8), 0, S.gravity, 0, K_SPARK,
+          tl * LEG_OVERRUN, size * (leg === 0 ? 1 : 0.8), 0, S.gravity, 0, K_BEAD,
         )
         _delay = 0
         // Land: exactly on the plane, by construction.
@@ -4032,19 +4385,27 @@ class Vfx implements VfxSystem {
       }
       if (!landed) continue
 
-      // WHERE IT LANDS AND STAYS. A K_SPRITE, held small and — deliberately —
-      // just under the bloom threshold (0.78 on high): a settled ember GLOWS,
-      // and a hundred of them scattered down the racing line still cannot add
-      // up to a second road surface. This is the one channel of the effect
-      // that is allowed to outlive the impact, so it is the one held hardest.
+      // WHERE IT LANDS AND STAYS. Also a K_BEAD, and that is the point of the
+      // whole pass: the thing that settles on the road is the SAME marble that
+      // was thrown, resting and still catching the light, rather than a soft
+      // gaussian ember that has nothing to do with the object that made it.
+      //
+      // Held to `emberLum` and no higher for exactly the reason the sprite
+      // version was: this is the one channel allowed to outlive the impact, so
+      // a hundred of them scattered down the racing line must not add up to a
+      // second road surface. The bead body peaks at 0.83x its colour, so 1.05
+      // puts it at ~0.87 -- barely over the 0.78 bloom threshold -- and leaves
+      // the shine to do the work. Radius follows the bead's OWN size, so a big
+      // marble settles as a big marble.
       _delay = delay
-      const eg = S.emberLum * this.hdr * (0.55 + 0.45 * f)
+      const eg = S.emberLum * this.hdr * (0.55 + 0.45 * f) / Math.max(1e-3, lumB)
+      const es = S.emberSize * (size / Math.max(1e-3, size0))
       this.spawn(
         px + upX * 0.03, py + upY * 0.03, pz + upZ * 0.03,
         vx * 0.05, vy * 0.05, vz * 0.05,
-        _spkCol[0] * eg / Math.max(1e-3, lum), _spkCol[1] * eg / Math.max(1e-3, lum), _spkCol[2] * eg / Math.max(1e-3, lum),
-        emberLife * (0.6 + sparkRnd() * 0.7), S.emberSize, -S.emberSize * 0.5,
-        0, 0, K_SPRITE,
+        _spkCol[0] * eg, _spkCol[1] * eg, _spkCol[2] * eg,
+        emberLife * (0.6 + sparkRnd() * 0.7), es, -es * 0.30,
+        0, 0, K_BEAD,
       )
       _delay = 0
     }
@@ -4086,7 +4447,12 @@ class Vfx implements VfxSystem {
     // full grid, and it cannot be made to fire more often by hitting harder.
     const S = TUNING.sparks
     const x = fx.contactX, y = fx.contactY, z = fx.contactZ
-    writeHsvLum(_spkCol, fx.contactHue, fx.contactSat * 0.5, S.lum * this.hdr * fg * 1.4)
+    // 2.2, not 1.4: `S.lum` fell from 4.00 to 2.10 when the sparks became
+    // beads and that number is now sized for a FILLED disc, while this flash
+    // is the same small sprite it always was. Re-multiplied so the pop at the
+    // point of contact lands within a fifth of where it was measured, rather
+    // than silently halving because a different channel changed shape.
+    writeHsvLum(_spkCol, fx.contactHue, fx.contactSat * 0.5, S.lum * this.hdr * fg * 2.2)
     this.flash(x, y, z, _spkCol, 1.0, 0.10 + fg * 0.06, 0.35 + fg * 1.1)
     this.ring(x, y, z, _spkCol, 0.8, 0.18, 0.3, 10 + fg * 20, false)
     // The LIGHT is gated harder than anything else here, and not because the
@@ -4538,6 +4904,29 @@ class Vfx implements VfxSystem {
           this.burst(
             x, y, z, dx, dy, dz, Math.round((6 + s * 7) * qs), 9 + s * 6, 0.55,
             _rgb2, 0.26, 0.46, 0.26 + s * 0.09, K_SPRITE, 0.4, 3.0,
+          )
+          break
+        }
+        case D_DRIFT_SNAP: {
+          // The echo of a drift crack, ~75ms behind it. `s` is the tier and
+          // the deferred direction is the OUTSIDE of the arc at the moment the
+          // first one fired, so the pair reads as one two-beat event even
+          // though the car has turned in between. Blades only: the front and
+          // the tick are single statements and repeating them would be a
+          // stutter rather than a rhythm.
+          const D = TUNING.driftSnap
+          const dx = this.defDir[i3], dy = this.defDir[i3 + 1], dz = this.defDir[i3 + 2]
+          const n = Math.max(3, Math.round(
+            (D.bladeCount + s * D.bladePerTier) * this.qScale * D.beatScale,
+          ))
+          // The echo spans a shorter line than the first crack and is centred
+          // on the flank, so it reads as the same event happening again rather
+          // than as a second, different one.
+          const half = TUNING.driftSnap.beatSpan
+          this.blade(
+            x, y, z, dx, dy, dz, half, n,
+            D.bladeSpeed * (0.75 + s * 0.09) * (0.6 + D.beatScale * 0.4),
+            _rgb2, D.bladeGain * D.beatScale,
           )
           break
         }

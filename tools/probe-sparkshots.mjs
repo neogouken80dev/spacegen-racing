@@ -131,17 +131,31 @@ async function waitSim(seconds, capMs = 90000) {
  * What is ACTUALLY in the pool at the shutter.
  *
  * Contact particles are identified the way the headless probe identifies them:
- * a spark or sprite whose birth is in the FUTURE is a bounce leg or a settled
- * ember, because nothing else in this file writes a delayed birth. `hues`
- * counts distinct 30-degree hue buckets among live sparks, which is the whole
- * claim of "randomised colouring" reduced to a number.
+ * a particle whose birth is in the FUTURE is a bounce leg or a settled marble,
+ * because nothing else in this file writes a delayed birth. `hues` counts
+ * distinct 30-degree hue buckets among live BEADS, which is the whole claim of
+ * "randomised colouring" reduced to a number.
+ *
+ * KIND 7 IS THE IMPACT PARTICLE NOW. It used to be kind 1 (K_SPARK, a
+ * velocity-stretched streak) and is now kind 7 (K_BEAD, a round marble) --
+ * this counter was silently reporting `sparks: 2` on a frame with a hundred
+ * beads in it until it was told. `sparks` is kept and now means what it says:
+ * the DRIFT's struck sparks and the weapon/boost streaks, which are a
+ * different channel and deliberately still streaks.
+ *
+ * `nearBeads` is the one that catches the failure this effect actually has:
+ * beads within 6 m of the lens, each of which covers a large solid angle. A
+ * frame with thirty of those is a flat additive wash whatever `blownPct` says.
  */
 async function poolStats() {
   return page.evaluate(() => {
     const v = window.__GAME__.vfx
     if (!v || !v.aMisc) return null
     const t = v.time
-    let live = 0, pending = 0, sparks = 0, embers = 0
+    const cam = window.__GAME__.camera ?? window.__GAME__.chase?.camera
+    const cp = cam ? cam.position : null
+    let live = 0, pending = 0, sparks = 0, beads = 0, embers = 0, nearBeads = 0
+    let beadArea = 0
     const hue = new Set()
     for (let i = 0; i < v.pool; i++) {
       const i4 = i * 4, i3 = i * 3
@@ -152,8 +166,12 @@ async function poolStats() {
       if (age >= life) continue
       live++
       const kind = Math.round(v.aMisc2[i4 + 2])
-      if (kind === 1) {
-        sparks++
+      if (kind === 1) sparks++
+      else if (kind === 7) {
+        beads++
+        // The delayed-birth marbles are the ones that landed; a settled one
+        // has zero growth headroom left and drifts at 5% of its impact speed.
+        if (v.aMisc[i4 + 3] < 0) embers++
         const r = v.aCol[i3], g = v.aCol[i3 + 1], b = v.aCol[i3 + 2]
         const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
         if (mx > 0.05 && mx - mn > mx * 0.10) {
@@ -163,11 +181,26 @@ async function poolStats() {
           else h = (4 + (r - g) / (mx - mn)) / 6
           hue.add(Math.floor(((h % 1) + 1) % 1 * 12))
         }
-      } else if (kind === 0) embers++
+        if (cp) {
+          // Position at this instant: the same analytic drag + gravity arc the
+          // vertex shader integrates, so this is where the quad actually is.
+          const k = v.aMisc2[i4 + 1]
+          const integ = k > 0.001 ? (1 - Math.exp(-k * age)) / k : age
+          const gg = 0.5 * v.aMisc2[i4] * age * age
+          const px = v.aPos[i3] + v.aVel[i3] * integ + v.aAxis[i3] * gg
+          const py = v.aPos[i3 + 1] + v.aVel[i3 + 1] * integ + v.aAxis[i3 + 1] * gg
+          const pz = v.aPos[i3 + 2] + v.aVel[i3 + 2] * integ + v.aAxis[i3 + 2] * gg
+          const d = Math.hypot(px - cp.x, py - cp.y, pz - cp.z)
+          const size = v.aMisc[i4 + 2] + v.aMisc[i4 + 3] * age
+          if (d < 6) nearBeads++
+          if (d > 0.2) beadArea += (size / d) * (size / d)
+        }
+      }
     }
     const r0 = window.__GAME__.race.state.racers.find((r) => r.isLocal) ?? window.__GAME__.race.state.racers[0]
     return {
-      live, pending, sparks, embers, hueBuckets: hue.size,
+      live, pending, sparks, beads, embers, nearBeads,
+      beadSteradian: +beadArea.toFixed(3), hueBuckets: hue.size,
       wallTime: +r0.wallTime.toFixed(3),
       speed: +Math.hypot(r0.vel.x, r0.vel.y, r0.vel.z).toFixed(1),
       reduced: v.reduced, tokens: Math.round(v.slotTokens),
@@ -225,7 +258,7 @@ await page.evaluate(() => {
   const track = g.track
   const st = race.state
   const r = st.racers.find((x) => x.isLocal) ?? st.racers[0]
-  const P = { mode: 'off', s: 0, closing: 0, speed: 45, drift: false }
+  const P = { mode: 'off', s: 0, closing: 0, speed: 45, drift: false, inset: 0 }
   window.__RAIL__ = P
   const orig = race.step.bind(race)
   race.step = function () {
@@ -235,7 +268,13 @@ await page.evaluate(() => {
       // Just inside the barrier, pointed into it. `severity` is the rate the
       // car closes on the barrier LINE, so the angle is what sets the force:
       // the sim measures it, this only supplies it.
-      const lat = -(smp.width - 1.4)
+      // `inset` backs the car off the barrier line without moving it out of
+      // frame. The settle before the one-shot needs the camera alongside the
+      // wall AND the token bucket full, and at inset 0 the car is still in
+      // contact every frame -- which spends tokens, so the "single slam" was
+      // photographed on a bucket holding 31 of 880 and measured as an effect
+      // that was not there. Nothing else uses it; the slam rows still run at 0.
+      const lat = -(smp.width - 1.4 - (P.inset || 0))
       const p = track.surfacePoint(P.s, lat)
       r.pos.x = p.x; r.pos.y = p.y + 0.55; r.pos.z = p.z
       r.splineS = P.s; r.totalS = P.s; r.lateral = lat
@@ -349,12 +388,37 @@ await page.evaluate(() => {
   // `hits` is how many contact FRAMES to let through before the clock stops. A
   // real slam is two to four frames of closing, not one, so freezing on the
   // first event photographs a quarter of the impact.
-  window.__SHUT__ = { armed: false, since: -1, at: 0.05, hits: 0, want: 3 }
+  window.__SHUT__ = { armed: false, since: -1, at: 0.05, hits: 0, want: 3, primed: false }
+  //
+  // THE SHUTTER IS CLAMPED, and it was not always: accumulating the real frame
+  // dt gives a shutter whose precision is one FRAME (250 ms under SwiftShader),
+  // so "freeze 50 ms after the impact" really froze a quarter of a second
+  // after it, with the burst already spread down the road. Passing the
+  // REMAINDER through advances the VFX clock by exactly `at` and then stops.
+  //
+  // AND IT PRIMES ONE UPDATE FIRST, which is the whole difference between a
+  // photograph of a burst and a photograph of the instant before one.
+  //
+  // The events are consumed by the FIRST vfx.update after the sim step that
+  // pushed them, and the particles are born during that update -- at its END,
+  // with `age` exactly 0. A shutter that spends its whole offset on that same
+  // update therefore freezes the clock at the moment of birth every time,
+  // whatever the offset says: every fan is still a single point, every arc is
+  // still at the wall. Measured, this drew a 35-streak blade fan as a 17-pixel
+  // asterisk on the car and a full slam as a handful of beads at the barrier,
+  // and both were read as "the effect is too small" before the rig was.
+  //
+  // So: one update at a single sim step's worth (which consumes the events and
+  // creates the burst), and only THEN the offset.
   v.update = function (dt, st, cam, id) {
     const S = window.__SHUT__
     if (S.since >= 0) {
-      if (S.since >= S.at) return orig(0, st, cam, id)
-      S.since += Math.min(dt, 0.1)
+      if (!S.primed) { S.primed = true; return orig(1 / 60, st, cam, id) }
+      const rem = S.at - S.since
+      if (rem <= 0) return orig(0, st, cam, id)
+      const step = Math.min(dt, rem)
+      S.since += step
+      return orig(step, st, cam, id)
     }
     return orig(dt, st, cam, id)
   }
@@ -371,6 +435,7 @@ await page.evaluate(() => {
         S.force = +e.force.toFixed(2)
         if (S.hits >= S.want) {
           S.since = 0
+          S.primed = false
           window.__RAIL__.mode = 'off'
           g.maxSubSteps = 0
         }
@@ -385,8 +450,20 @@ await page.evaluate(() => {
 // happened to be mid-swing. So the rail runs alongside the barrier at almost
 // no closing speed -- which costs the budget nothing and lets it refill -- and
 // only then is the angle opened up and the shutter armed.
-await rail('wall', wallS, 0.3, 52)
-await waitSim(3.0)
+//
+// AND THE BUDGET HAS TO BE FULL WHEN THE SHUTTER OPENS. The first version of
+// this settle ran alongside the barrier at 0.3 m/s of closing, which is a
+// contact, which spends tokens -- and photographed a "single slam" that had
+// been handed an EMPTY bucket by the 1.5 s sustained rail two scenarios
+// earlier. The picture was four beads and it was a picture of the throttle
+// again, one level down. Zero closing, four seconds, and the token count is
+// printed so a starved burst can never be mistaken for a quiet effect.
+await page.evaluate(() => { window.__RAIL__.inset = 3.2 })
+await rail('wall', wallS, 0.0, 52)
+await waitSim(4.0)
+await page.evaluate(() => { window.__RAIL__.inset = 0 })
+const armTokens = await page.evaluate(() => Math.round(window.__GAME__.vfx.slotTokens))
+console.log(`slot tokens at arm: ${armTokens} / ${await page.evaluate(() => window.__GAME__.vfx.slotBucket)}`)
 await page.evaluate(() => {
   window.__SHUT__.armed = true
   window.__RAIL__.closing = 26
@@ -412,7 +489,7 @@ for (const [at, tag] of [[0.28, 'onemid'], [0.85, 'onesettled']]) {
   }
   await shoot(tag)
 }
-await page.evaluate(() => { window.__SHUT__.since = -1; window.__SHUT__.armed = false; window.__SHUT__.hits = 0; window.__GAME__.maxSubSteps = 400 })
+await page.evaluate(() => { window.__SHUT__.since = -1; window.__SHUT__.primed = false; window.__SHUT__.armed = false; window.__SHUT__.hits = 0; window.__GAME__.maxSubSteps = 400 })
 
 // ---------------------------------------------------------------------------
 // 4. LINGER. Release the rail and FREEZE: what is left on the road afterwards.

@@ -1,12 +1,18 @@
 /**
  * touchControls.ts — on-screen touch controls for SpaceGen Racing.
  *
- * Three player-selectable schemes, all of which keep Drift and Item as chunky
- * thumb-reachable buttons on the right edge:
+ * Three player-selectable schemes, all of which keep Drift, Brake and Item as
+ * chunky thumb-reachable buttons on the right edge:
  *
  *   'tilt'    device-orientation steering (default on phones)
  *   'stick'   floating virtual stick on the left half, origin set on touchdown
  *   'buttons' discrete left/right arrow pads plus explicit throttle/brake pads
+ *
+ * BRAKE IS NEVER TAKEN AWAY. Auto-accelerate is the default on a phone and it
+ * means "you do not have to hold the gas", not "you cannot slow down", so the
+ * Brake pad is on screen in every scheme and in both throttle modes. Gas is the
+ * only conditional pad: with auto on it would do nothing the game is not
+ * already doing for the player.
  *
  * Latency contract: every pointer event writes plain scalar fields
  * synchronously inside the handler. `sample()` only reads those fields, so a
@@ -221,7 +227,7 @@ const CSS = `
 .sgtc-drift{width:86px;height:86px;font-size:13px;--a:var(--mg)}
 .sgtc-item{width:76px;height:76px;--a:var(--cy)}
 .sgtc-gas{width:74px;height:74px;--a:var(--gn)}
-.sgtc-brake{width:64px;height:64px;--a:var(--rd)}
+.sgtc-brake{width:72px;height:72px;--a:var(--rd)}
 .sgtc-back{width:52px;height:52px;font-size:10px;--a:var(--cy)}
 .sgtc-look{width:52px;height:52px;font-size:10px;--a:var(--am)}
 .sgtc-lift{width:52px;height:52px;font-size:10px;--a:var(--am)}
@@ -229,9 +235,14 @@ const CSS = `
 .sgtc-cal{width:60px;height:60px;font-size:9px;--a:var(--am);
   position:absolute;left:var(--pl);bottom:var(--pb)}
 
-.sgtc-gas,.sgtc-brake{display:none}
-.sgtc[data-accel="manual"] .sgtc-gas,.sgtc[data-accel="manual"] .sgtc-brake,
-.sgtc[data-scheme="buttons"] .sgtc-gas,.sgtc[data-scheme="buttons"] .sgtc-brake{display:flex}
+/* BRAKE has no visibility rule at all -- it is always on screen. The auto
+   throttle in input.ts already stands down the moment brake passes 0.15, so the
+   pad has always worked in auto mode; it simply was not drawn, which left the
+   default phone setup with no way to slow down on purpose. GAS is the one pad
+   that is conditional, because with auto on it is a no-op. */
+.sgtc-gas{display:none}
+.sgtc[data-accel="manual"] .sgtc-gas,
+.sgtc[data-scheme="buttons"] .sgtc-gas{display:flex}
 .sgtc-lift{display:none}
 .sgtc[data-lift="on"] .sgtc-lift{display:flex}
 .sgtc-left{display:none}
@@ -273,8 +284,9 @@ const CSS = `
    HORIZONTAL travel only (see bindStick: dx steers, dy moves the knob and
    nothing else). There is no throttle or brake on this axis in any of the three
    schemes. So the graphic is a left/right axis and nothing else, and the
-   sub-label names where forward actually comes from: automatic throttle, or the
-   GAS / BRAKE pads on the opposite edge when the player has turned auto off. */
+   sub-label names where forward and slowing down actually come from. Both
+   variants of that line end in "BRAKE >", because the brake pad is on the
+   opposite edge in both throttle modes; only the gas half changes. */
 .sgtc-lh{position:absolute;left:var(--pl);bottom:var(--pb);display:none;
   flex-direction:column;align-items:flex-start;gap:8px;pointer-events:none;
   max-width:min(52vw,300px)}
@@ -306,6 +318,12 @@ const CSS = `
 .sgtc-pad__sub{font-size:8px;font-weight:700;letter-spacing:.14em;
   color:rgb(var(--cy) / .56);display:none;white-space:nowrap;
   text-shadow:0 1px 2px rgba(0,0,0,.95),0 0 9px rgba(0,0,0,.9)}
+/* The arrow means "the pads are over there", so it has to follow them: the
+   one-handed LEFT layout puts the action cluster on the left and moves this
+   whole block to the right, and an arrow still pointing right would be sending
+   the player to the empty corner. */
+.sgtc-pad__arw{display:inline-block}
+.sgtc.oh.ohl .sgtc-pad__arw{transform:scaleX(-1)}
 .sgtc[data-accel="auto"] .sgtc-pad__auto{display:block}
 .sgtc[data-accel="manual"] .sgtc-pad__man{display:block}
 
@@ -342,7 +360,7 @@ const CSS = `
   .sgtc-drift{width:74px;height:74px}
   .sgtc-item{width:66px;height:66px}
   .sgtc-gas{width:64px;height:64px}
-  .sgtc-brake{width:56px;height:56px}
+  .sgtc-brake{width:62px;height:62px}
   .sgtc-back,.sgtc-look,.sgtc-lift{width:48px;height:48px;font-size:9px}
   .sgtc-arrow{width:72px;height:72px}
   .sgtc-right{gap:10px}
@@ -360,6 +378,18 @@ const CSS = `
    be a tall column in the opposite corner. Lay it out as a row instead -- same
    two pieces, half the height. */
 @media (orientation:portrait){
+  /* PORTRAIT PUTS THE HUD'S INSTRUMENT BAND AT ROW 2's HEIGHT. styles.css lifts
+     the band by 116px -- one pad plus this layer's bottom inset -- which clears
+     the BOTTOM row of pads and nothing above it, so the inner column of row 2
+     lands on the band's right end and covers the boost count. That was already
+     true of the Brake pad when it lived in row 2; it is the Gas pad's slot now.
+     Row 1 is the corner the thumb rests in and must not move, so the clearance
+     goes between the rows instead: in column-reverse a margin under row 2 opens
+     the gap above row 1 and carries row 3 with it. Only when Gas is actually on
+     screen -- with auto throttle on, row 2 is one Item pad well clear of the
+     band's right edge and there is nothing to move out of the way. */
+  .sgtc[data-accel="manual"] .sgtc-row:nth-child(2),
+  .sgtc[data-scheme="buttons"] .sgtc-row:nth-child(2){margin-bottom:48px}
   .sgtc-lh{flex-direction:row;align-items:flex-end;gap:10px;
     max-width:min(64vw,320px)}
   .sgtc-pad{--padsz:62px}
@@ -465,14 +495,33 @@ class TouchControlsImpl implements TouchControls {
 
     // Right-edge action cluster. Row order is bottom-up; each row is laid out
     // right-to-left so the first child sits in the outer lower corner.
+    //
+    // TWO COLUMNS, TWO JOBS. The outer column is the corner the thumb rests in:
+    // DRIFT, then ITEM above it, then BACK. The column inboard of it is the
+    // pedals: BRAKE, then GAS directly above it. That gives the arrangement the
+    // controls actually need:
+    //
+    //   * BRAKE sits immediately inboard of DRIFT, the shortest move on the
+    //     cluster, because braking mid-slide (and ITEM + BRAKE, which fires an
+    //     item backwards) are things you do WHILE drifting.
+    //   * GAS and BRAKE share a column and are never wanted at the same time,
+    //     so one digit works them like pedals and never has to leave DRIFT to
+    //     find the throttle.
+    //   * Nothing moves when the player turns auto-accelerate off. GAS appears
+    //     in the empty slot above BRAKE; DRIFT, BRAKE and ITEM keep the exact
+    //     positions they had, so muscle memory survives the switch.
+    //
+    // In the one-handed LEFT layout the rows flip to `row` (see .oh.ohl) and
+    // the whole thing mirrors: BRAKE ends up immediately inboard of DRIFT on
+    // that side too, which is the same relationship, not a different one.
     const right = mk(doc, 'div', 'sgtc-right', root)
     const row1 = mk(doc, 'div', 'sgtc-row', right)
     const row2 = mk(doc, 'div', 'sgtc-row', right)
     const row3 = mk(doc, 'div', 'sgtc-row', right)
     this.mkBtn(doc, 'sgtc-drift', 'DRIFT', row1, K_DRIFT)
-    this.mkBtn(doc, 'sgtc-gas', 'GAS', row1, K_GAS)
+    this.mkBtn(doc, 'sgtc-brake', 'BRAKE', row1, K_BRAKE)
     this.mkBtn(doc, 'sgtc-item', 'ITEM', row2, K_ITEM)
-    this.mkBtn(doc, 'sgtc-brake', 'BRAKE', row2, K_BRAKE)
+    this.mkBtn(doc, 'sgtc-gas', 'GAS', row2, K_GAS)
     this.mkBtn(doc, 'sgtc-back', 'BACK', row3, K_BACK)
     this.mkBtn(doc, 'sgtc-look', 'LOOK', row3, K_LOOK)
     this.mkBtn(doc, 'sgtc-lift', 'LIFT', row3, K_LIFT)
@@ -494,8 +543,8 @@ class TouchControlsImpl implements TouchControls {
     const pad = mk(doc, 'div', 'sgtc-pad', lh)
     mkSvg(doc, PAD_SVG, pad)
     mk(doc, 'div', 'sgtc-pad__lbl', pad).textContent = 'SLIDE TO STEER'
-    mk(doc, 'div', 'sgtc-pad__sub sgtc-pad__auto', pad).textContent = 'THROTTLE: AUTO'
-    mk(doc, 'div', 'sgtc-pad__sub sgtc-pad__man', pad).textContent = 'GAS / BRAKE ▶'
+    mkSub(doc, pad, 'sgtc-pad__auto', 'GAS: AUTO / BRAKE ')
+    mkSub(doc, pad, 'sgtc-pad__man', 'GAS / BRAKE ')
     const hint = mk(doc, 'div', 'sgtc-hint', lh)
     hint.textContent = 'TAP TO ENABLE TILT STEERING'
     hint.setAttribute('role', 'button')
@@ -993,6 +1042,17 @@ function mkSvg(doc: Document, markup: string, parent: HTMLElement): SVGSVGElemen
   const el = host.firstElementChild as SVGSVGElement
   parent.appendChild(el)
   return el
+}
+
+/**
+ * One line of the watermark's sub-label, with the "over there" arrow as its own
+ * element so the one-handed LEFT layout can mirror it (see .sgtc-pad__arw).
+ */
+function mkSub(doc: Document, parent: HTMLElement, cls: string, text: string): HTMLElement {
+  const row = mk(doc, 'div', 'sgtc-pad__sub ' + cls, parent)
+  row.textContent = text
+  mk(doc, 'span', 'sgtc-pad__arw', row).textContent = '▶'
+  return row
 }
 
 function mk(doc: Document, tag: string, cls: string, parent: HTMLElement | null): HTMLElement {

@@ -789,7 +789,18 @@ export class Game {
       }
 
       const speed01 = clamp01(Math.hypot(local.vel.x, local.vel.z) / Math.max(1, topSpeed))
-      if (this.post) this.post.render(dt, this.vfx?.boostIntensity ?? 0, this.vfx?.hitFlash ?? 0, speed01)
+      // THE WARP IS THE CAMERA'S OWN IMPULSE, not a second thing derived from
+      // the boost state. Reading it off the rig is what keeps the streaks and
+      // the tunnel in step with the dolly frame for frame, and -- the reason it
+      // is spelled this way and not as `this.vfx.boostIntensity` -- it is what
+      // makes reduced motion reach the screen effect: the camera zeroes its
+      // impulse under the toggle, so there is no second suppression to forget.
+      if (this.post) {
+        this.post.render(
+          dt, this.vfx?.boostIntensity ?? 0, this.vfx?.hitFlash ?? 0, speed01,
+          this.chase.dollyLevel, this.reduceMotion,
+        )
+      }
       else this.renderer.render(this.scene, this.chase.camera)
     } else {
       this.renderer.render(this.scene, this.chase.camera)
