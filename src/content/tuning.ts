@@ -951,6 +951,42 @@ export const TUNING = {
     heightSpeedGain: 0,
     distanceLock: 1,
     /**
+     * WHERE THE CAR SITS IN THE FRAME, as a fraction of width and height.
+     *
+     * MEASURED OFF A REFERENCE FRAME THE STUDIO HEAD SUPPLIED, not chosen:
+     * the car's bounding box in that shot centres at x 0.502, y 0.812 of a
+     * 1391x944 image. Dead centre horizontally, and low enough that the road
+     * ahead owns the top four fifths of the screen.
+     *
+     * This is an INPUT to the camera, not an outcome of it. A rig that only
+     * places the camera lets the car's screen position fall out of the
+     * geometry, so it moves whenever the geometry does -- through every
+     * corner, and through 360 degrees in a loop, which is why a loop or a jump
+     * used to put the car somewhere unplayable. Solving the aim against the
+     * real projection matrix makes the position hold in any orientation,
+     * because it never asks what the orientation is.
+     */
+    anchorX: 0.502,
+    anchorY: 0.812,
+    /** 0 disables the anchor and restores the raw look-ahead aim. */
+    anchorStrength: 1,
+    /**
+     * HOW MUCH OF THE CORNER TRAIL TO TAKE OUT, 0 none, 1 rigidly behind.
+     *
+     * The distance lock keeps the camera's LENGTH honest and preserves the
+     * DIRECTION the position damping produced -- the camera swinging wide
+     * through a bend and catching up on the exit. That swing is what "the
+     * camera shifts during turns" is, and it cannot be damped away by damping
+     * harder, because the swing IS the lag.
+     *
+     * 0.72 keeps a readable trace of the lag -- enough that a corner still
+     * has weight -- while taking most of the slew out of the frame. It is a
+     * look, not a correctness knob, and it composes with the screen anchor
+     * above: the anchor holds the CAR still, this holds the WORLD steadier
+     * behind it.
+     */
+    trailDamp: 0.72,
+    /**
      * The same lock on the HEIGHT component, and 0 on purpose.
      *
      * The distance lock works in the rig's own frame -- height along the

@@ -48,6 +48,12 @@ export class ChaseCamera {
 
   private readonly _desired = new THREE.Vector3()
   private readonly _target = new THREE.Vector3()
+  /** Screen-anchor scratch: the solved aim point and the camera's own basis. */
+  private readonly _aim = new THREE.Vector3()
+  private readonly _bR = new THREE.Vector3()
+  private readonly _bU = new THREE.Vector3()
+  private readonly _bF = new THREE.Vector3()
+  private readonly _ndc = new THREE.Vector3()
   /**
    * THE CAMERA'S OWN UP, damped toward the car's.
    *
@@ -384,6 +390,35 @@ export class ChaseCamera {
       // heading rather than dividing by zero.
       if (gnd > 1e-4) {
         this._tmp.multiplyScalar(1 + (dist / gnd - 1) * C.distanceLock)
+        // THE CORNER TRAIL, ON A DIAL.
+        //
+        // The lock above keeps the LENGTH honest and deliberately preserves
+        // the DIRECTION the damping produced -- the camera swinging wide and
+        // catching up. That trail is what "the camera shifts during turns"
+        // is: the rig is behind where the car WAS, so the world slews across
+        // the frame every time the road bends.
+        //
+        // Blending that direction back toward straight-behind is the only
+        // honest way to reduce it, because the swing IS the lag. At 1 the
+        // camera is rigidly behind the car and corners read as the world
+        // rotating about a fixed axis; at 0 it is the full trail this
+        // replaced. It is a look, not a correctness knob.
+        if (C.trailDamp > 0) {
+          if (this.gravity) {
+            this._target.copy(this._fwd).multiplyScalar(-dist)
+          } else {
+            this._target.set(-fx * dist, 0, -fz * dist)
+          }
+          // The ideal is already ground-plane by construction on a flat track;
+          // on a gravity track strip the up component so both sides of the
+          // lerp live in the same plane the length was solved in.
+          this._target.addScaledVector(this._up, -this._target.dot(this._up))
+          this._tmp.lerp(this._target, C.trailDamp)
+          // The lerp shortens the chord between two equal-length vectors, so
+          // re-normalise to the distance the lock just solved for.
+          const L = this._tmp.length()
+          if (L > 1e-4) this._tmp.multiplyScalar(dist / L)
+        }
       } else if (this.gravity) {
         this._tmp.copy(this._fwd).multiplyScalar(-dist)
       } else {
@@ -747,16 +782,76 @@ export class ChaseCamera {
       cam.position.y += Math.sin(t * 39.1 + 1.7) * s
       cam.position.z += Math.sin(t * 53.7 + 3.1) * s
     }
-    // `_up` is world +Y on every flat track, so this is the `set(0, 1, 0)` it
-    // replaces. The roll is still applied by rotateZ AFTER lookAt, below.
-    cam.up.copy(this._up)
-    cam.lookAt(this.look)
-    if (!reduceMotion) cam.rotateZ(this.roll)
+    // The FOV has to settle BEFORE the anchor below, because the anchor solves
+    // against the real projection matrix and a stale FOV would aim at the
+    // frame from two milliseconds ago.
     const wantFov = this.framedFov(this.fov)
     if (Math.abs(cam.fov - wantFov) > 0.01) {
       cam.fov = wantFov
       cam.updateProjectionMatrix()
     }
+
+    // `_up` is world +Y on every flat track, so this is the `set(0, 1, 0)` it
+    // replaces.
+    cam.up.copy(this._up)
+
+    /**
+     * THE SCREEN ANCHOR: the car lands on the same pixel, whatever the world
+     * is doing.
+     *
+     * Everything above decides where the CAMERA goes. This decides where the
+     * CAR ENDS UP IN THE FRAME, which is the thing a player actually sees and
+     * the thing three separate reports were about: the view shifting left and
+     * right through corners, the car wandering off its mark, and a loop or a
+     * jump putting the car and the road somewhere unplayable.
+     *
+     * They are one bug. A rig that only places the camera lets the car's
+     * screen position fall out of the geometry -- so it moves whenever the
+     * geometry does, and a loop rotates the geometry through 360 degrees.
+     * Solving for the aim instead makes the car's position an INPUT.
+     *
+     * WHY IT SOLVES RATHER THAN COMPUTES. Perspective maps tan(angle) linearly
+     * to NDC, so a closed form exists for a pure pitch. It stops being closed
+     * the moment roll is in play -- and roll is exactly when this matters,
+     * because the car sits 62% of the way DOWN the frame, and rotating the
+     * view about the screen centre sweeps an off-centre subject sideways. That
+     * is a real part of the reported left-right shift and no aim offset
+     * computed before the roll can cancel it.
+     *
+     * So: aim, roll, project the car, measure the error in NDC, correct the
+     * aim by it, twice. The second pass is not belt and braces -- the first
+     * correction changes the basis the second is measured in. Residual after
+     * two passes is under a thousandth of a frame, asserted in camera.test.ts.
+     */
+    if (C.anchorStrength > 0) {
+      const tx = C.anchorX * 2 - 1
+      const ty = 1 - C.anchorY * 2
+      this._aim.copy(this.look)
+      for (let i = 0; i < 2; i++) {
+        cam.up.copy(this._up)
+        cam.lookAt(this._aim)
+        if (!reduceMotion) cam.rotateZ(this.roll)
+        cam.updateMatrixWorld(true)
+        this._ndc.copy(this._anchor).project(cam)
+        // Behind the camera: `project` mirrors the point through the origin
+        // and the correction would drive the aim the wrong way. Unreachable
+        // with a 9m rig behind the car, and a respawn or a cine cut can put it
+        // there for one frame.
+        if (this._ndc.z > 1) break
+        const d = cam.position.distanceTo(this._anchor)
+        const tanY = Math.tan(cam.fov * 0.5 * Math.PI / 180)
+        cam.matrixWorld.extractBasis(this._bR, this._bU, this._bF)
+        // Car too far right -> look further right -> the car moves left.
+        this._aim.addScaledVector(this._bR, (this._ndc.x - tx) * tanY * cam.aspect * d * C.anchorStrength)
+        this._aim.addScaledVector(this._bU, (this._ndc.y - ty) * tanY * d * C.anchorStrength)
+      }
+    } else {
+      this._aim.copy(this.look)
+    }
+
+    cam.up.copy(this._up)
+    cam.lookAt(this._aim)
+    if (!reduceMotion) cam.rotateZ(this.roll)
   }
 
   resize(aspect: number): void {
