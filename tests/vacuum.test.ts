@@ -61,7 +61,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
   const smp = track.at(s)
   const p = track.surfacePoint(s, lat)
   return {
-    id: 0, chassisId, pilotId: 'pip', isAI: false, isLocal: false, aiSkill: 4,
+    id: 0, chassisId, pilotId: '', isAI: false, isLocal: false, aiSkill: 4,
     pos: {
       x: p.x + smp.normal.x * loco.rideHeight,
       y: p.y + smp.normal.y * loco.rideHeight,
@@ -71,7 +71,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
     yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: smp.tangent.x, y: smp.tangent.y, z: smp.tangent.z },
     up: { x: smp.normal.x, y: smp.normal.y, z: smp.normal.z },
-    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,
+    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0, driftGrace: 0, guardTime: 0, wardTime: 0,
     chainStacks: 0, chainWindow: 0, boostTime: 0, boostMag: 0, boostSource: 'none',
     lift: loco.liftCapacity, liftActive: false, airTime: 0, trickArmed: false,
     rampCooldown: 0, ballisticTime: 0,
@@ -350,7 +350,7 @@ describe('the AI reads the same arithmetic the physics does', () => {
     expect(inVac).toBeLessThan(inAir * 0.95)
   })
 })
-const PILOT = 'pip'
+const PILOT = ''
 
 // ---------------------------------------------------------------------------
 describe('the three shipped circuits cannot reach the mechanic', () => {

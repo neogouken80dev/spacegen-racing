@@ -211,7 +211,7 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   const dt = T.sim.dt
   const m = mem(r.id)
   _grav = track.hasGravity
-  const derived = getDerived(r.chassisId)
+  const derived = getDerived(r.chassisId, r.pilotId)
   const loco = getLocomotion(r.chassisId)
   const skill = clamp(Math.round(r.aiSkill), 0, T.ai.skillSpeed.length - 1)
   const speedCap = T.ai.skillSpeed[skill]

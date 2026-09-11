@@ -11,7 +11,7 @@ import type { SimConfig } from '../src/sim/types'
 
 const cfg = (): SimConfig => ({
   seed: 21, totalLaps: 3, racerCount: 1, trackId: 'test-plain',
-  chassisIds: ['solaire'], pilotIds: ['pip'], localRacerIndex: 0, aiSkill: [0],
+  chassisIds: ['solaire'], pilotIds: [''], localRacerIndex: 0, aiSkill: [0],
 })
 
 function ready(track: Track) {
@@ -54,7 +54,7 @@ describe('spin recovery faces the racing direction', () => {
     const race = new Race(track, {
       seed: 4, totalLaps: 3, racerCount: 8, trackId: 'rustfall',
       chassisIds: ['solaire','filament','bulwark','dray9','vector7','solaire','filament','bulwark'],
-      pilotIds: Array.from({ length: 8 }, () => 'pip'),
+      pilotIds: Array.from({ length: 8 }, () => ''),
       localRacerIndex: -1, aiSkill: Array.from({ length: 8 }, () => 3),
     })
     let worstBackwards = 0

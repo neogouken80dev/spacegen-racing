@@ -18,7 +18,7 @@ const RDT = 1 / 60
 
 const cfg = (chassisId: string): SimConfig => ({
   seed: 5, totalLaps: 3, racerCount: 1, trackId: 'test-plain',
-  chassisIds: [chassisId], pilotIds: ['pip'],
+  chassisIds: [chassisId], pilotIds: [''],
   localRacerIndex: 0, aiSkill: [0],
 })
 

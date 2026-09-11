@@ -359,7 +359,7 @@ export function stationaryRacer(chassisId: string, pilotId: string): RacerState 
     driftTier: -1,
     driftInward: 0,
     driftEntry: false,
-    driftTime: 0,
+    driftTime: 0, driftGrace: 0, guardTime: 0, wardTime: 0,
     chainStacks: 0,
     chainWindow: 0,
     boostTime: 0,

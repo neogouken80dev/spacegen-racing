@@ -1,3 +1,4 @@
+import { PILOTS, pilotAbility } from '../content/pilots'
 import { clamp, clamp01, lerp, sign, angleDelta, vdist, v3, vrotAxis, type Vec3 } from './math'
 import { Rng, hashFloats } from './rng'
 import { Track } from './track'
@@ -109,7 +110,7 @@ export class Race {
       racers.push({
         id: i,
         chassisId,
-        pilotId: config.pilotIds[i] ?? 'pip',
+        pilotId: config.pilotIds[i] ?? PILOTS[0].id,
         isAI: i !== config.localRacerIndex,
         isLocal: i === config.localRacerIndex,
         aiSkill: config.aiSkill[i] ?? 2,
@@ -141,6 +142,9 @@ export class Race {
         windPush: 0,
         driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false,
         driftTime: 0,
+        driftGrace: 0,
+        guardTime: 0,
+        wardTime: 0,
         chainStacks: 0, chainWindow: 0,
         boostTime: 0, boostMag: 0, boostSource: 'none',
         lift: loco.liftCapacity, liftActive: false, airTime: 0, trickArmed: false,
@@ -425,8 +429,8 @@ export class Race {
           this.hit(a, 'overdriveCore', ITEM_PARAMS.overdriveCore.contactSpin)
         }
 
-        const ma = getDerived(a.chassisId).massKg * a.massMult
-        const mb = getDerived(b.chassisId).massKg * b.massMult
+        const ma = getDerived(a.chassisId, a.pilotId).massKg * a.massMult
+        const mb = getDerived(b.chassisId, b.pilotId).massKg * b.massMult
         const total = ma + mb
         // Clamp so the heaviest chassis cannot delete the lightest.
         const ratioA = clamp(mb / total, 1 / (1 + T.collision.maxMassRatio), T.collision.maxMassRatio / (1 + T.collision.maxMassRatio))
@@ -557,7 +561,7 @@ export class Race {
     // Alpha Missile is locked out near the finish so a wire-to-wire lead is safe.
     const leader = this.state.racers.reduce((a, b) => (a.totalS > b.totalS ? a : b))
     const remaining = (this.state.totalLaps * this.track.length) - leader.totalS
-    const est = remaining / Math.max(20, getDerived(leader.chassisId).topSpeed)
+    const est = remaining / Math.max(20, getDerived(leader.chassisId, leader.pilotId).topSpeed)
     if (est < T.items.alphaLockoutBeforeFinish) {
       weights = weights.slice()
       weights[ITEM_ORDER.indexOf('alphaMissile')] = 0
@@ -924,10 +928,22 @@ export class Race {
         if (!p.alive) continue
       }
 
-      const radius = p.kind === 'rail' ? ITEM_PARAMS.railMissile.radius
+      /**
+       * THE BLAST BELONGS TO WHOEVER FIRED IT.
+       *
+       * Read off `p.ownerId`, not off the racer being tested: the offensive
+       * pilot's ordnance is wider wherever it lands, and a victim's own pilot
+       * has no say in how big someone else's missile is. The same projectile
+       * therefore has ONE radius for every target it is tested against, which
+       * is also the only version that is fair -- a blast that were larger for
+       * some racers than others in the same explosion would be indefensible.
+       */
+      const ownerAb = pilotAbility(s.racers[p.ownerId]?.pilotId ?? '')
+      const baseRadius = p.kind === 'rail' ? ITEM_PARAMS.railMissile.radius
         : p.kind === 'seeker' ? ITEM_PARAMS.seekerMissile.radius
           : p.kind === 'bullet' ? ITEM_PARAMS.laserGatling.radius
             : ITEM_PARAMS.alphaMissile.radius
+      const radius = baseRadius * (ownerAb.blastMult ?? 1)
       if (p.kind === 'bullet') continue
       for (const r of s.racers) {
         if (r.finished || r.id === p.ownerId) continue
@@ -937,9 +953,14 @@ export class Race {
         if (p.kind !== 'alpha' && (r.invincibleTime > 0 || r.immuneTime > 0)) continue
         if (p.kind === 'alpha' && r.immuneTime > 0) continue
         const item: ItemId = p.kind === 'rail' ? 'railMissile' : p.kind === 'seeker' ? 'seekerMissile' : 'alphaMissile'
-        const spin = p.kind === 'rail' ? ITEM_PARAMS.railMissile.spinTime
+        const baseSpin = p.kind === 'rail' ? ITEM_PARAMS.railMissile.spinTime
           : p.kind === 'seeker' ? ITEM_PARAMS.seekerMissile.spinTime
             : ITEM_PARAMS.alphaMissile.spinTime
+        // "Damage" in this sim is time spun out, which is the currency a hit is
+        // actually paid in: position lost while you are not driving. The
+        // offensive pilot buys more of it. Alpha keeps its own full stop --
+        // see the fullStop note in hit().
+        const spin = baseSpin * (ownerAb.weaponMult ?? 1)
         this.hit(r, item, spin, p.kind === 'alpha')
         p.alive = false
         break
@@ -1036,7 +1057,30 @@ export class Race {
 
   private hit(r: RacerState, item: ItemId, spin: number, fullStop = false): void {
     if (r.immuneTime > 0 || r.invincibleTime > 0) return
-    r.spinTime = Math.max(r.spinTime, spin)
+    const ab = pilotAbility(r.pilotId)
+
+    /**
+     * FIELD REPAIR: the health pilot eats one weapon outright.
+     *
+     * Returning before anything else is written is the point -- this is not a
+     * reduced hit, it is no hit. The spin, the drift cancel, the lost boost, the
+     * lost charges: none of it happens. A cooldown this long (30s) has to be
+     * worth noticing when it fires, and "you kept your Tier 3 drift through a
+     * missile" is worth noticing.
+     *
+     * The stagger shield is still set, so a second weapon arriving in the same
+     * instant cannot slip through behind the one that was absorbed.
+     */
+    if (ab.wardCooldown && r.wardTime <= 0) {
+      r.wardTime = ab.wardCooldown
+      r.immuneTime = T.items.staggerShield
+      r.events.push({ t: 'ward', item })
+      return
+    }
+
+    // Recovery is a multiplier on the SPIN, not on the cooldown: the health and
+    // flow pilots get up faster from the same hit rather than being hit less.
+    r.spinTime = Math.max(r.spinTime, spin * (ab.recoverMult ?? 1))
     r.immuneTime = T.items.staggerShield
     r.lastHitBy = item
     r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0
@@ -1046,7 +1090,16 @@ export class Race {
     r.beamCharge = 0
     r.beamGrace = 0
     // Retain some velocity so a hit costs position rather than the whole race.
-    const keep = fullStop ? 0.05 : T.items.spinRetainVelocity
+    //
+    // The flow pilot keeps more of it. Expressed as a reduction of the LOSS
+    // rather than a bonus to what is kept, so it cannot overshoot: scrubMult 0
+    // would mean losing nothing, never gaining. A full stop stays a full stop --
+    // that path is reserved for the effects whose whole identity is stopping
+    // you, and a pilot perk should not quietly rewrite one of those.
+    const baseKeep = fullStop ? 0.05 : T.items.spinRetainVelocity
+    const keep = fullStop
+      ? baseKeep
+      : 1 - (1 - baseKeep) * (ab.scrubMult ?? 1)
     r.vel.x *= keep; r.vel.z *= keep
     r.events.push({ t: 'hit', item })
   }

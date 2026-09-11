@@ -108,7 +108,7 @@ describe('ramps launch every locomotion class', () => {
       resetAI()
       const race = new Race(track, {
         seed: 3, totalLaps: 3, racerCount: 1, trackId: 'rustfall',
-        chassisIds: [chassisId], pilotIds: ['pip'], localRacerIndex: 0, aiSkill: [0],
+        chassisIds: [chassisId], pilotIds: [''], localRacerIndex: 0, aiSkill: [0],
       })
       const r = race.state.racers[0]
       while (race.state.phase === 'countdown') race.step()

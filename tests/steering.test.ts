@@ -17,7 +17,7 @@ import type { SimConfig } from '../src/sim/types'
  */
 const cfg = (): SimConfig => ({
   seed: 1, totalLaps: 3, racerCount: 1, trackId: 'rustfall',
-  chassisIds: ['solaire'], pilotIds: ['pip'],
+  chassisIds: ['solaire'], pilotIds: [''],
   localRacerIndex: 0, aiSkill: [0],
 })
 

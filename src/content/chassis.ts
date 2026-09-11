@@ -1,5 +1,6 @@
 import type { ChassisDef, ChassisDerived, ChassisStats, LocomotionProfile } from '../sim/types'
 import { TUNING } from './tuning'
+import { PILOTS_BY_ID } from './pilots'
 
 export const CHASSIS: ChassisDef[] = [
   {
@@ -231,13 +232,69 @@ export function deriveChassis(stats: ChassisStats): ChassisDerived {
   }
 }
 
+/**
+ * THE PILOT IS PART OF THE CAR NOW.
+ *
+ * A pilot's bonus is expressed in chassis STAT POINTS rather than in derived
+ * physics, and is added before deriveChassis runs. Three things fall out of
+ * that choice and all three are the reason for it:
+ *
+ *   One curve, not two. `topSpeedPer` and friends already encode what a point
+ *   of a stat is worth; a pilot that added metres per second directly would be
+ *   a second, parallel opinion about that, and the two would drift apart the
+ *   first time a tuning constant moved.
+ *
+ *   The gauges are honest. The garage draws a pilot's contribution as extra
+ *   yellow on the chassis bar, and that is not a visualisation of the effect --
+ *   it IS the quantity, in the same unit as the bar it extends.
+ *
+ *   Balance stays arguable in one currency. "This pilot is worth 1.4 points"
+ *   is a sentence about the same axis the chassis roster is tuned on.
+ *
+ * Stats are clamped to the 0..10 the gauges and the derive curves assume, so a
+ * bonus on top of a roster-max stat cannot push a value off the end of a scale
+ * that the rest of the game treats as bounded.
+ */
+function withPilot(base: ChassisStats, pilotId: string | undefined): ChassisStats {
+  if (!pilotId) return base
+  const p = PILOTS_BY_ID[pilotId]
+  if (!p) return base
+  const b = p.stats
+  const add = (v: number, d: number | undefined): number =>
+    Math.max(0, Math.min(10, v + (d ?? 0)))
+  return {
+    topSpeed: add(base.topSpeed, b.topSpeed),
+    accel: add(base.accel, b.accel),
+    grip: add(base.grip, b.grip),
+    mass: add(base.mass, b.mass),
+    drift: add(base.drift, b.drift),
+    handling: add(base.handling, b.handling),
+  }
+}
+
+/** The stat line a chassis actually races with, pilot included. For the UI. */
+export function effectiveStats(chassisId: string, pilotId?: string): ChassisStats {
+  const def = CHASSIS_BY_ID[chassisId] ?? CHASSIS[0]
+  return withPilot(def.stats, pilotId)
+}
+
 const derivedCache = new Map<string, ChassisDerived>()
-export function getDerived(chassisId: string): ChassisDerived {
-  let d = derivedCache.get(chassisId)
+/**
+ * `pilotId` is optional, and omitting it gives the bare chassis.
+ *
+ * Deliberately optional rather than required: this has 50-odd call sites across
+ * the sim, the tools and the tests, and most of them -- a probe comparing two
+ * chassis, a test asserting a roster property -- are asking about the CHASSIS
+ * and would only be made noisier by being forced to name a pilot. The sim call
+ * sites, which are the ones where a racer has a pilot, pass it.
+ */
+export function getDerived(chassisId: string, pilotId?: string): ChassisDerived {
+  const key = pilotId ? `${chassisId}|${pilotId}` : chassisId
+  let d = derivedCache.get(key)
   if (!d) {
     const def = CHASSIS_BY_ID[chassisId] ?? CHASSIS[0]
-    d = deriveChassis(def.stats)
-    derivedCache.set(chassisId, d)
+    d = deriveChassis(withPilot(def.stats, pilotId))
+    derivedCache.set(key, d)
   }
   return d
 }

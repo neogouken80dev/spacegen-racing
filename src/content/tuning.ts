@@ -149,6 +149,35 @@ export const TUNING = {
     arcPerYaw: 1.24,
     arcCounter: -0.34,
     /**
+     * How much of the speed falloff a committed drift is excused while boosting,
+     * at pad-strength boost. 0 restores the old behaviour exactly.
+     *
+     * `speedYawFalloff` is there to keep the STEERING WHEEL calm at speed, and
+     * it should be. Applied to a drift arc it also made the drift stop working
+     * at exactly the moment a player most wants it: a drift release grants a
+     * boost, so the follow-up drift into the next corner always happened inside
+     * the boost window and always felt dead. The car was drifting the whole
+     * time -- it just was not turning.
+     *
+     * 0.85 rather than 1.0 so a boosting drift is still very slightly wider
+     * than a cold one. The car is going faster; some of that should be felt.
+     * Ordinary steering is untouched, so this cannot make a boosting car darty
+     * on a straight -- the relief has to be bought by committing to a slide.
+     */
+    boostArcRelief: 0.85,
+    /** Seconds after a drift release during which re-entry is easier. */
+    reentryWindow: 0.45,
+    /**
+     * How much of the enter threshold applies inside that window.
+     *
+     * 0.45 of 0.22 is 0.099 -- a tenth of stick travel rather than a fifth. Not
+     * zero on purpose: at zero, any stick deflection at all would re-enter a
+     * drift the instant one ended, so a player who released the drift to
+     * STRAIGHTEN UP would be thrown back into a slide by the correction they
+     * made to exit it.
+     */
+    reentryThreshold: 0.45,
+    /**
      * THE ARC EASES OFF AS THE SLIDE IS HELD.
      *
      * arcBase/arcPerYaw give the turn-in its bite, but holding that same rate

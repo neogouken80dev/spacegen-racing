@@ -82,7 +82,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
   const smp = track.at(s)
   const p = track.surfacePoint(s, lat)
   return {
-    id: 0, chassisId, pilotId: 'pip', isAI: false, isLocal: false, aiSkill: 4,
+    id: 0, chassisId, pilotId: '', isAI: false, isLocal: false, aiSkill: 4,
     pos: {
       x: p.x + smp.normal.x * loco.rideHeight,
       y: p.y + smp.normal.y * loco.rideHeight,
@@ -92,7 +92,7 @@ function spawn(track: Track, chassisId: string, s: number, speed: number, lat = 
     yaw: track.yawAt(s), yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: smp.tangent.x, y: smp.tangent.y, z: smp.tangent.z },
     up: { x: smp.normal.x, y: smp.normal.y, z: smp.normal.z },
-    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,
+    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0, driftGrace: 0, guardTime: 0, wardTime: 0,
     chainStacks: 0, chainWindow: 0, boostTime: 0, boostMag: 0, boostSource: 'none',
     lift: loco.liftCapacity, liftActive: false, airTime: 0, trickArmed: false,
     rampCooldown: 0, ballisticTime: 0,
@@ -562,6 +562,21 @@ describe('the flat tracks cannot reach any of this', () => {
     //             edit, 0.55 + 1.85 == 2.4 exactly for the grounded class, and
     //             an A/B of the two rules produced identical sub-deck frame
     //             counts on all three measured tracks.
-    expect(race.hash()).toBe('27ad749b')
+    //   42272a00  pilots stopped being decoration. Two changes land together
+    //             and both are deliberate. A pilot now contributes chassis stat
+    //             POINTS before deriveChassis runs, and this grid cycles the
+    //             roster, so every car on it is derived from a slightly
+    //             different stat line than before. And a committed drift keeps
+    //             most of its arc under boost (T.drift.boostArcRelief), which
+    //             changes the line through every corner taken on a boost.
+    //             Neither is a fix to a bug -- both are new mechanics, asked
+    //             for, and a hash that did NOT move would mean one of them had
+    //             failed to reach the sim.
+    //             The drift re-entry window rides along and is NOT provably
+    //             inert here: it lowers the enter threshold for 0.45s after a
+    //             release, and the AI releases drifts constantly. It is not
+    //             separable from the arc change by inspection, so it is not
+    //             claimed to be.
+    expect(race.hash()).toBe('42272a00')
   })
 })

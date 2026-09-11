@@ -43,7 +43,7 @@ function racer(chassisId: string, track: Track, speed: number, s = 0): RacerStat
   const p = track.surfacePoint(s, 0)
   const yaw = Math.atan2(smp.tangent.x, smp.tangent.z)
   return {
-    id: 0, chassisId, pilotId: 'pip', isAI: false, isLocal: true, aiSkill: 3,
+    id: 0, chassisId, pilotId: '', isAI: false, isLocal: true, aiSkill: 3,
     pos: { x: p.x, y: p.y + loco.rideHeight, z: p.z },
     vel: { x: Math.sin(yaw) * speed, y: 0, z: Math.cos(yaw) * speed },
     yaw, yawRate: 0, fwd: { x: Math.sin(yaw), y: 0, z: Math.cos(yaw) }, up: { x: 0, y: 1, z: 0 },
@@ -209,11 +209,24 @@ describe('a barrier charges for the impact, not for the slide', () => {
     // model being removed. Neither budget is comfortable padding -- they are
     // about 10% above the measured values, so this fails on a real regression
     // and not on a tenth of a metre per second.
-    for (const [def, budget] of [[RUSTFALL, 200], [AETHERION, 100]] as const) {
+    // RE-BASELINED against the firmer aim above (1.45 of half-width). The old
+    // 200/100 were measured with a car that only grazed the wall; pressing into
+    // it properly costs more, and a budget carried over from a gentler harness
+    // would have been slack rather than strict. Measured here: rustfall 176.8,
+    // aetherion 132.3. Kept to the same ~10% margin the previous pair used, so
+    // this still fails on a real regression rather than on noise.
+    //
+    // BOTH BUDGETS WERE THEN CHECKED AGAINST AN ACTUAL SABOTAGE rather than
+    // assumed to be strict. With contactFade forced to 1, the numbers go 176.8
+    // -> 193.0 (rustfall) and 132.3 -> 217.6 (aetherion). Aetherion catches that
+    // with room to spare; Rustfall at a 10% margin would NOT have -- 193 slips
+    // under 195 -- so its budget is 185 instead, keeping the job the header
+    // assigns it. A re-baselined budget that cannot fail is not a test.
+    for (const [def, budget] of [[RUSTFALL, 185], [AETHERION, 146]] as const) {
       const track = new Track(def)
       const race = new Race(track, {
         seed: 7, totalLaps: 2, racerCount: 1, trackId: def.id,
-        chassisIds: ['solaire'], pilotIds: [PILOTS[0].id], localRacerIndex: 0, aiSkill: [3],
+        chassisIds: ['solaire'], pilotIds: [''], localRacerIndex: 0, aiSkill: [3],
       } as SimConfig)
       const r = race.state.racers[0]
       let prev = 0
@@ -222,7 +235,21 @@ describe('a barrier charges for the impact, not for the slide', () => {
       for (let f = 0; f < 60 * 200 && race.state.phase !== 'finished'; f++) {
         const proj = track.project(r.pos, r.splineS)
         const k = track.curvatureAt(r.splineS + 10, 24)
-        const want = (k >= 0 ? -1 : 1) * proj.sample.width * 0.88
+        // PRESS INTO THE BARRIER, do not merely aim near it.
+      //
+      // This was 0.88 of the half-width -- just inside the road -- and it held
+      // sustained contact only because the car's line happened to drift out to
+      // meet the wall. That made the PREMISE of this test (contact lasting past
+      // impactFadeTime) a coincidence of the cornering model rather than
+      // something the harness causes, and the first change to the drift arc
+      // broke it: swept against boostArcRelief, `longest` came back 0.067,
+      // 0.017, 0.033, 0.083 for reliefs of 0.25, 0.45, 0.65, 0.85 -- chaotic,
+      // not a trend, which is what a coincidence looks like when you vary
+      // something upstream of it.
+      //
+      // Aiming PAST the edge makes contact the harness's doing. The budgets
+      // below were then re-measured against this line, not carried over.
+      const want = (k >= 0 ? -1 : 1) * proj.sample.width * 1.45
         const aimYaw = track.yawAt(r.splineS + 22)
         const latErr = (want - proj.lateral) / Math.max(1, proj.sample.width)
         const steer = Math.max(-1, Math.min(1, STEER_SIGN * (angleDelta(r.yaw, aimYaw) * 2.0 - latErr * 1.1)))
@@ -237,6 +264,8 @@ describe('a barrier charges for the impact, not for the slide', () => {
       }
       // The premise: contact really was sustained past the fade window, so both
       // mechanisms were exercised.
+      // eslint-disable-next-line no-console
+      if (process.env.SG_MEASURE) console.log(`MEASURE ${def.id} longest=${longest.toFixed(3)} lost=${lost.toFixed(1)}`)
       expect(longest, `${def.id} never held contact`).toBeGreaterThan(TUNING.collision.impactFadeTime)
       expect(lost, `${def.id} lost ${lost.toFixed(0)} m/s to barriers`).toBeLessThan(budget)
     }

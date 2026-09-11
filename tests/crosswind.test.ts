@@ -21,7 +21,7 @@ function peakPush(trackId: string, chassisId: string, frames = 60 * 90): number 
   const track = new Track(TRACKS_BY_ID[trackId])
   const cfg: SimConfig = {
     seed: 11, totalLaps: 3, racerCount: 1, trackId,
-    chassisIds: [chassisId], pilotIds: [PILOTS[0].id], localRacerIndex: 0, aiSkill: [3],
+    chassisIds: [chassisId], pilotIds: [''], localRacerIndex: 0, aiSkill: [3],
   }
   const race = new Race(track, cfg)
   const r = race.state.racers[0]

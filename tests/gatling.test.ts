@@ -11,7 +11,7 @@ const P = ITEM_PARAMS.laserGatling
 
 const cfg = (): SimConfig => ({
   seed: 11, totalLaps: 3, racerCount: 2, trackId: 'test-plain',
-  chassisIds: ['solaire', 'solaire'], pilotIds: ['pip', 'pip'],
+  chassisIds: ['solaire', 'solaire'], pilotIds: ['', ''],
   localRacerIndex: 0, aiSkill: [0, 0],
 })
 

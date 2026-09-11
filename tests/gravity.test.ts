@@ -345,7 +345,14 @@ describe('the AI', () => {
     //           be led, dodged or simply fired at nothing, so the AI's bursts
     //           no longer chip every car in front of them and the field is
     //           marginally quicker. Fire rate also dropped 14 -> 10.
-    expect(avg).toBeCloseTo(56.63, 2)
+    //   55.91s  pilots gained stats and a drift keeps its arc under boost.
+    //           The AI got FASTER by 0.72s a lap, and that direction is the
+    //           point rather than a side effect: the boost relief exists
+    //           because a drift taken during a boost barely rotated, and the AI
+    //           drifts through roughly half its corners. A change meant to make
+    //           boosted cornering work that left lap times untouched would have
+    //           been a change that did nothing.
+    expect(avg).toBeCloseTo(55.91, 2)
   })
 })
 
@@ -355,7 +362,7 @@ describe('the car on screen', () => {
   const UP = new THREE.Vector3(0, 1, 0)
 
   it('is the same single yaw rotation it always was on a flat track', () => {
-    const v = createVehicleVisual('solaire', 'pip', QUALITY_PRESETS.high)
+    const v = createVehicleVisual('solaire', '', QUALITY_PRESETS.high)
     const r = JSON.parse(JSON.stringify(new Race(new Track(TEST_PLAIN), cfg(TEST_PLAIN.id, 1)).state.racers[0])) as RacerState
     r.yaw = 0.9
     // Deliberately poison the frame the gravity path would read. A flat track

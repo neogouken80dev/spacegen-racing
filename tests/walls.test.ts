@@ -12,7 +12,7 @@ const CHASSIS_ID = 'dray9'
 
 const solo = (): SimConfig => ({
   seed: 9, totalLaps: 9, racerCount: 1, trackId: 'test-bounce',
-  chassisIds: [CHASSIS_ID], pilotIds: ['pip'], localRacerIndex: 0, aiSkill: [0],
+  chassisIds: [CHASSIS_ID], pilotIds: [''], localRacerIndex: 0, aiSkill: [0],
 })
 
 /**
@@ -94,7 +94,7 @@ describe('bounce walls redirect momentum, they do not create it', () => {
     const race = new Race(new Track(RUSTFALL), {
       seed: 31, totalLaps: 3, racerCount: 8, trackId: 'rustfall',
       chassisIds: ['solaire','filament','bulwark','dray9','vector7','solaire','filament','bulwark'],
-      pilotIds: Array.from({ length: 8 }, () => 'pip'),
+      pilotIds: Array.from({ length: 8 }, () => ''),
       localRacerIndex: -1, aiSkill: Array.from({ length: 8 }, () => 3),
     })
     const idle = emptyInput()

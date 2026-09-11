@@ -237,6 +237,31 @@ export interface RacerState {
   /** Seconds the current slide has been held. Drives the arc ease-off, and is
    *  wall-clock time rather than driftCharge, which is scaled per chassis. */
   driftTime: number
+  /**
+   * Seconds left in the re-entry grace window after releasing a drift.
+   *
+   * Exists so that release-then-drift-the-other-way is quick. Coming out of a
+   * left drift the stick is at full left lock; entering a right drift needs it
+   * past +driftEnterThreshold, and travelling that whole span is dead time the
+   * player experiences as the car ignoring them. While this is counting down
+   * the threshold is scaled down, so the flick engages sooner.
+   *
+   * Deliberately NOT a side-flip. Releasing still exits the drift and still
+   * cashes the boost, and counter-steering inside a drift still only steers --
+   * the grace window shortens the gap between two drifts without merging them
+   * into one mechanic.
+   */
+  driftGrace: number
+  /**
+   * Seconds until the defensive pilot's plating can ignore another impact, and
+   * until the health pilot's field repair can ignore another weapon.
+   *
+   * Sim state, not render state: they gate real physics, so they tick on the
+   * fixed step and land in the determinism hash like everything else. A racer
+   * whose pilot has no such ability simply never has them lowered.
+   */
+  guardTime: number
+  wardTime: number
   chainStacks: number
   chainWindow: number
   boostTime: number
@@ -306,6 +331,18 @@ export type RacerEvent =
   | { t: 'driftStart' }
   | { t: 'driftEnd'; tier: number }
   | { t: 'hit'; item: ItemId }
+  /**
+   * A pilot ability absorbed something. `guard` is the defensive plating eating
+   * an impact, `ward` the health pilot's field repair eating a weapon.
+   *
+   * A separate event rather than a suppressed 'hit' because the two want
+   * opposite presentation: a hit is a punishment and should read as one, while
+   * an absorb is the pilot doing its job and should read as a reward. The HUD
+   * and the VFX both need to tell them apart, and neither can if the only
+   * signal is a hit that did not arrive.
+   */
+  | { t: 'guard' }
+  | { t: 'ward'; item: ItemId }
   | { t: 'fire'; item: ItemId }
   | { t: 'pickup' }
   | { t: 'charge' }

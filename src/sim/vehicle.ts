@@ -5,6 +5,7 @@ import {
 import type { InputFrame, RacerState, ChassisDerived, LocomotionProfile } from './types'
 import { TUNING as T } from '../content/tuning'
 import { getDerived, getLocomotion, CHASSIS_BY_ID } from '../content/chassis'
+import { pilotAbility } from '../content/pilots'
 import { Track, SURFACE_GRIP, bridgeSolid } from './track'
 
 const DT = T.sim.dt
@@ -325,7 +326,7 @@ export function stepVehicle(
   input: InputFrame,
   ctx: VehicleContext,
 ): void {
-  const derived: ChassisDerived = getDerived(r.chassisId)
+  const derived: ChassisDerived = getDerived(r.chassisId, r.pilotId)
   const loco: LocomotionProfile = getLocomotion(r.chassisId)
   const track = ctx.track
 
@@ -341,6 +342,11 @@ export function stepVehicle(
   if (r.immuneTime > 0) r.immuneTime = Math.max(0, r.immuneTime - DT)
   if (r.invincibleTime > 0) r.invincibleTime = Math.max(0, r.invincibleTime - DT)
   if (r.slowTime > 0) { r.slowTime = Math.max(0, r.slowTime - DT); if (r.slowTime === 0) r.slowMag = 0 }
+  if (r.driftGrace > 0) r.driftGrace = Math.max(0, r.driftGrace - DT)
+  // Pilot ability cooldowns. Ticked here rather than where they are spent so
+  // they run for every racer on every step regardless of what happened to them.
+  if (r.guardTime > 0) r.guardTime = Math.max(0, r.guardTime - DT)
+  if (r.wardTime > 0) r.wardTime = Math.max(0, r.wardTime - DT)
   if (r.boostTime > 0) {
     r.boostTime = Math.max(0, r.boostTime - DT)
     if (r.boostTime === 0) { r.boostMag = 0; r.boostSource = 'none' }
@@ -651,7 +657,14 @@ export function stepVehicle(
   let releaseKick = 0
 
   if (r.driftSide === 0) {
-    if (eff.drift && canDrift && Math.abs(eff.steer) > T.steering.driftEnterThreshold) {
+    // A smaller stick movement enters a drift for a moment after releasing
+    // one. Coming out of a left slide the stick is at full LEFT; the right-hand
+    // drift cannot begin until it has crossed all the way past +threshold, and
+    // that travel is dead time the player reads as the car not responding.
+    const enterAt = r.driftGrace > 0
+      ? T.steering.driftEnterThreshold * T.drift.reentryThreshold
+      : T.steering.driftEnterThreshold
+    if (eff.drift && canDrift && Math.abs(eff.steer) > enterAt) {
       r.driftSide = sign(eff.steer) as -1 | 1
       r.driftCharge = 0
       r.driftTier = -1
@@ -736,6 +749,11 @@ export function stepVehicle(
       r.driftSide = 0
       r.driftCharge = 0
       r.driftTier = -1
+      // Open the re-entry window. See RacerState.driftGrace: this is what makes
+      // release-then-flick-the-other-way quick, and it is the whole of that
+      // feature -- no side flip, no carried charge, no change to what
+      // counter-steering means inside a drift.
+      r.driftGrace = T.drift.reentryWindow
       r.driftInward = 0
     } else {
       // inward01: 0 = full counter-steer (wide, shallow), 1 = full lock into
@@ -801,7 +819,35 @@ export function stepVehicle(
       ? lerp(hold, tight * ease, shaped)
       : lerp(hold, tight * T.drift.arcCounter, -shaped))
       * loco.driftArcMult * driftSurfaceFactor(surfaceGrip)
-    targetYawRate = STEER_SIGN * r.driftSide * arc * speedYawFalloff
+    /**
+     * A DRIFT KEEPS ITS AUTHORITY UNDER BOOST.
+     *
+     * `speedYawFalloff` is 1/(1 + speed/yawSpeedFalloff) and it exists to stop
+     * the STEERING WHEEL getting twitchier the faster you go. Applied to the
+     * drift arc it does something else: at boost speed the term collapses and a
+     * committed slide barely rotates, which reads to a player as "drifting does
+     * not work while boosting". Nothing blocks the drift -- entry is only
+     * `drift held && above min speed && past the steer threshold` -- it simply
+     * stops turning the car.
+     *
+     * That is worst exactly where it is least wanted. Releasing a drift GRANTS a
+     * boost, so the natural follow-up -- release, immediately drift the other
+     * way through the next corner -- happens inside the boost window, and the
+     * second drift is the one that feels dead.
+     *
+     * So the falloff is eased back toward 1 in proportion to boost, for the
+     * committed arc only. Ordinary steering below keeps the full term, which is
+     * what stops a boosting car from becoming darty on the straight -- the
+     * exemption is paid for by having COMMITTED to a slide.
+     */
+    // Normalised against a boost PAD, the strongest routine boost in the game
+    // (0.35). A Tier 3 drift release is stronger still and saturates, which is
+    // the right shape: the bigger the boost, the more speed there is for the
+    // falloff to eat, so the more relief the arc needs to feel unchanged.
+    const boost01 = clamp01(r.boostTime > 0 ? r.boostMag / T.boost.padMag : 0)
+    const arcFalloff = speedYawFalloff
+      + (1 - speedYawFalloff) * T.drift.boostArcRelief * boost01
+    targetYawRate = STEER_SIGN * r.driftSide * arc * arcFalloff
   } else {
     targetYawRate = STEER_SIGN * eff.steer * derived.maxYawRate * speedYawFalloff
     if (newLong < 0) targetYawRate *= -T.steering.reverseYawMult
@@ -1499,7 +1545,34 @@ export function stepVehicle(
         // Hit a wall and you pay for it; lean on one and you pay the per-second
         // friction below, which is what a scrape costs.
         const contactFade = Math.max(0, 1 - r.wallTime / T.collision.impactFadeTime)
-        const impactShare = clamp01(severity / T.collision.hardImpactSpeed) * contactFade
+
+        /**
+         * IMPACT PLATING: the defensive pilot ignores one hard hit outright.
+         *
+         * Gated on `hardImpactSpeed * 0.5` so it spends itself on a CRASH, not
+         * on the first kerb brush of the lap. A 20s cooldown that can be burned
+         * by a graze is not an ability, it is a lottery -- the player has to be
+         * able to feel that the thing which just cost them nothing was the thing
+         * worth spending it on.
+         *
+         * `contactFade` is already in the term, so leaning on a wall cannot
+         * re-trigger it every frame: the second frame of the same contact is no
+         * longer hard enough to qualify.
+         */
+        const pab = pilotAbility(r.pilotId)
+        let guarded = false
+        if (pab.guardCooldown && r.guardTime <= 0
+          && severity > T.collision.hardImpactSpeed * 0.5 && contactFade > 0.5) {
+          r.guardTime = pab.guardCooldown
+          guarded = true
+          r.events.push({ t: 'guard' })
+        }
+        // The flow pilot keeps its line: less of the impact is converted into
+        // lost speed. Same shape as the weapon scrub in race.ts -- a reduction
+        // of the LOSS, so it can never add speed.
+        const scrubMult = guarded ? 0 : (pab.scrubMult ?? 1)
+        const impactShare = clamp01(severity / T.collision.hardImpactSpeed)
+          * contactFade * scrubMult
         const dir = along >= 0 ? 1 : -1
         // Convert part of the into-wall speed into travel ALONG the wall
         // instead of deleting it, then charge the impact against the total.
@@ -1546,7 +1619,10 @@ export function stepVehicle(
             if (r.yaw < -Math.PI) r.yaw += Math.PI * 2
           }
         }
-        if (severity > T.drift.collisionCancelSpeed) {
+        // A guarded impact does not break the drift either. Absorbing the speed
+        // loss but still cancelling the slide would take the more valuable half
+        // of what the hit cost and call it protection.
+        if (!guarded && severity > T.drift.collisionCancelSpeed) {
           r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0
         }
         r.events.push({ t: 'wall', force: severity, px: r.pos.x, py: r.pos.y, pz: r.pos.z, nx: wallNormalX, ny: wallNormalY, nz: wallNormalZ })

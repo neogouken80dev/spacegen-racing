@@ -56,12 +56,12 @@ function spawn(track: Track, chassisId: string, s: number, speed: number): Racer
   const p = track.surfacePoint(s, 0)
   const yaw = track.yawAt(s)
   return {
-    id: 0, chassisId, pilotId: 'pip', isAI: false, isLocal: false, aiSkill: 4,
+    id: 0, chassisId, pilotId: '', isAI: false, isLocal: false, aiSkill: 4,
     pos: { x: p.x, y: p.y + smp.normal.y * loco.rideHeight, z: p.z },
     vel: { x: Math.sin(yaw) * speed, y: 0, z: Math.cos(yaw) * speed },
     yaw, yawRate: 0, altitude: loco.rideHeight, vertVel: 0, grounded: true, wallTime: 0, windPush: 0,
     fwd: { x: Math.sin(yaw), y: 0, z: Math.cos(yaw) }, up: { x: 0, y: 1, z: 0 },
-    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0,
+    driftSide: 0, driftCharge: 0, driftTier: -1, driftInward: 1, driftEntry: false, driftTime: 0, driftGrace: 0, guardTime: 0, wardTime: 0,
     chainStacks: 0, chainWindow: 0, boostTime: 0, boostMag: 0, boostSource: 'none',
     lift: loco.liftCapacity, liftActive: false, airTime: 0, trickArmed: false,
     rampCooldown: 0, ballisticTime: 0,
@@ -369,7 +369,7 @@ function aiOnRing(surface: SurfaceKind, radius: number, speed: number, chassisId
   const track = new Track(ring(surface, radius))
   const cfg: SimConfig = {
     seed: 7, totalLaps: 3, racerCount: 1, trackId: track.def.id,
-    chassisIds: [chassisId], pilotIds: ['pip'], localRacerIndex: -1, aiSkill: [4],
+    chassisIds: [chassisId], pilotIds: [''], localRacerIndex: -1, aiSkill: [4],
   }
   resetAI()
   const race = new Race(track, cfg)

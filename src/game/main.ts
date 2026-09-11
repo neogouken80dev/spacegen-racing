@@ -110,7 +110,7 @@ export class Game {
   private eventCarry: RacerEvent[][] = []
   private lastTime = 0
   private localId = 0
-  private selection = { chassisId: 'solaire', pilotId: 'pip' }
+  private selection = { chassisId: 'solaire', pilotId: 'socket' }
   private raf = 0
   private reduceMotion = false
   /**
@@ -900,7 +900,7 @@ export class Game {
       }
 
       const local = st.racers[this.localId]
-      const topSpeed = getDerived(local.chassisId).topSpeed
+      const topSpeed = getDerived(local.chassisId, local.pilotId).topSpeed
       const lookBack = this.lastInput.lookBack
       const localView = this.renderRacers[this.localId].view
       if (this.phase === 'attract') {

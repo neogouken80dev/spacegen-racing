@@ -907,7 +907,7 @@ class HudImpl implements Hud {
 
     if (this.lastChassis !== r.chassisId) {
       this.lastChassis = r.chassisId
-      this.topSpeed = getDerived(r.chassisId).topSpeed
+      this.topSpeed = getDerived(r.chassisId, r.pilotId).topSpeed
       const loco = getLocomotion(r.chassisId)
       this.isFlight = loco.liftCapacity > 0
       this.liftCap = loco.liftCapacity > 0 ? loco.liftCapacity : 1

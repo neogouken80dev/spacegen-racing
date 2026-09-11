@@ -64,7 +64,7 @@ function harness(opts: { reducedMotion?: boolean; fail?: boolean } = {}): Harnes
     },
     {
       chassisId: 'solaire',
-      pilotId: 'pip',
+      pilotId: 'socket',
       tier: 'medium',
       reducedMotion: opts.reducedMotion === true,
     },
@@ -181,23 +181,23 @@ describe('the preview shows what is actually selected', () => {
   it('builds the stored selection the first time the garage opens', () => {
     const h = harness()
     h.core.setVisible(true)
-    expect(h.stage().built[0]).toEqual({ chassisId: 'solaire', pilotId: 'pip', tier: 'medium' })
+    expect(h.stage().built[0]).toEqual({ chassisId: 'solaire', pilotId: 'socket', tier: 'medium' })
   })
 
   it('rebuilds when the chassis changes', () => {
     const h = harness()
     h.core.setVisible(true)
-    h.core.setSelection('bulwark', 'pip')
+    h.core.setSelection('bulwark', 'socket')
     const last = h.stage().built[h.stage().built.length - 1]
     expect(last.chassisId).toBe('bulwark')
-    expect(last.pilotId).toBe('pip')
+    expect(last.pilotId).toBe('socket')
   })
 
   it('rebuilds when the pilot changes', () => {
     const h = harness()
     h.core.setVisible(true)
-    h.core.setSelection('solaire', 'null')
-    expect(h.stage().built[h.stage().built.length - 1].pilotId).toBe('null')
+    h.core.setSelection('solaire', 'koan')
+    expect(h.stage().built[h.stage().built.length - 1].pilotId).toBe('koan')
   })
 
   it('rebuilds when the quality tier changes', () => {
@@ -211,7 +211,7 @@ describe('the preview shows what is actually selected', () => {
     const h = harness()
     h.core.setVisible(true)
     const n = h.stage().built.length
-    h.core.setSelection('solaire', 'pip')
+    h.core.setSelection('solaire', 'socket')
     h.core.setQuality('medium')
     run(h.core, 1)
     expect(h.stage().built.length).toBe(n)
@@ -222,19 +222,19 @@ describe('the preview shows what is actually selected', () => {
     // stored chassis and pilot at construction, long before the garage screen
     // is ever shown.
     const h = harness()
-    h.core.setSelection('dray9', 'volt')
+    h.core.setSelection('dray9', 'vanguard')
     h.core.setVisible(true)
-    expect(h.stage().built[0]).toEqual({ chassisId: 'dray9', pilotId: 'volt', tier: 'medium' })
+    expect(h.stage().built[0]).toEqual({ chassisId: 'dray9', pilotId: 'vanguard', tier: 'medium' })
   })
 
   it('rebuilds from scratch on the visit after a hide', () => {
     const h = harness()
     h.core.setVisible(true)
     h.core.setVisible(false)
-    h.core.setSelection('vector7', 'halo9')
+    h.core.setSelection('vector7', 'zephyr')
     h.core.setVisible(true)
     expect(h.stages.length).toBe(2)
-    expect(h.stage().built[0]).toEqual({ chassisId: 'vector7', pilotId: 'halo9', tier: 'medium' })
+    expect(h.stage().built[0]).toEqual({ chassisId: 'vector7', pilotId: 'zephyr', tier: 'medium' })
   })
 
   it('every chassis and every pilot in the roster is a valid selection', () => {
@@ -384,7 +384,7 @@ describe('prefers-reduced-motion', () => {
 describe('the stationary racer handed to the vehicle visual', () => {
   it('is a car standing still on the ground, not a fake', () => {
     for (const c of CHASSIS) {
-      const r = stationaryRacer(c.id, 'pip')
+      const r = stationaryRacer(c.id, 'socket')
       expect(r.chassisId).toBe(c.id)
       expect(r.vel).toEqual({ x: 0, y: 0, z: 0 })
       expect(r.grounded).toBe(true)
@@ -406,8 +406,8 @@ describe('the stationary racer handed to the vehicle visual', () => {
     // temperament set stopped running here it would stop running everywhere,
     // and no screenshot would say so.
     const jitteryFace: number[] = []
-    const v = createVehicleVisual('solaire', 'volt', QUALITY_PRESETS.low)
-    const r = stationaryRacer('solaire', 'volt')
+    const v = createVehicleVisual('solaire', 'vanguard', QUALITY_PRESETS.low)
+    const r = stationaryRacer('solaire', 'vanguard')
     const face = v.materials.face.sg
     for (let i = 0; i < 60 * 6; i++) {
       v.update(r, 1 / 60, 8)
@@ -423,11 +423,11 @@ describe('the stationary racer handed to the vehicle visual', () => {
   })
 
   it('leaves a cold pilot cold', () => {
-    // MERIDIAN's whole character is that nothing happens. A test that only
+    // AEGIS's whole character is that nothing happens. A test that only
     // checked "something moves" would pass on a preview that animated every
     // pilot identically.
-    const v = createVehicleVisual('filament', 'meridian', QUALITY_PRESETS.low)
-    const r = stationaryRacer('filament', 'meridian')
+    const v = createVehicleVisual('filament', 'aegis', QUALITY_PRESETS.low)
+    const r = stationaryRacer('filament', 'aegis')
     const face = v.materials.face.sg
     for (let i = 0; i < 60 * 6; i++) v.update(r, 1 / 60, 8)
     expect(face.uBlink.value).toBe(0)
@@ -437,8 +437,8 @@ describe('the stationary racer handed to the vehicle visual', () => {
 
   it('parks a stationary car without NaN, at rest, for every chassis', () => {
     for (const c of CHASSIS) {
-      const v = createVehicleVisual(c.id, 'pip', QUALITY_PRESETS.low)
-      const r = stationaryRacer(c.id, 'pip')
+      const v = createVehicleVisual(c.id, 'socket', QUALITY_PRESETS.low)
+      const r = stationaryRacer(c.id, 'socket')
       for (let i = 0; i < 240; i++) v.update(r, 1 / 60, 8)
       const p = v.group.position
       expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)).toBe(true)
@@ -455,8 +455,8 @@ describe('the stationary racer handed to the vehicle visual', () => {
     // The LOD switches on metres, but what it approximates is screen coverage.
     // The preview scales the distance by how few pixels a phone's box has, so
     // a phone gets LOD1 without anybody writing a device check.
-    const v = createVehicleVisual('solaire', 'pip', QUALITY_PRESETS.low)
-    const r = stationaryRacer('solaire', 'pip')
+    const v = createVehicleVisual('solaire', 'socket', QUALITY_PRESETS.low)
+    const r = stationaryRacer('solaire', 'socket')
     v.update(r, 1 / 60, 8)
     const near = v.lodIndex
     v.update(r, 1 / 60, 30)
