@@ -150,6 +150,12 @@ await waitFrames(3)
 const tiny = `${dir}veh-${CHASSIS}-${TAG}-silhouette40.png`
 await box.screenshot({ path: tiny })
 
+// Ground clearance is NOT measured here. It was tried: the preview keeps its
+// vehicle in its own scene, which this page does not expose, and a turntable
+// photographs a car floating in a box with no road in it anyway. It lives in
+// tests/clearance.test.ts instead, which walks the real geometry of every
+// chassis at every tier in node and is both cheaper and broader.
+
 const stats = await dbg()
 console.log(`\ndraw calls ${stats?.calls ?? '?'}   triangles ${stats?.tris ?? '?'}`)
 console.log(`errors: ${errors.length}`, errors.slice(0, 4))

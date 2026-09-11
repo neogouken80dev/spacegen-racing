@@ -997,16 +997,36 @@ const buildSolaire: Builder = (def, p, det) => {
  */
 const FILAMENT_SCALE = 1.5
 
-/** [span, y, z, roll, chord] per plate, innermost first. Roll is the dihedral
- *  that opens the fan; the forward sweep and the tip taper live in FAN_SHAPE,
- *  because they have to be baked into the span rather than applied as a
- *  rotation -- see the placement loop. */
+/**
+ * [span, y, z, roll, chord] per plate, innermost first. Roll is the anhedral
+ * that opens the fan; the forward sweep and the tip taper live in FAN_SHAPE,
+ * because they have to be baked into the span rather than applied as a
+ * rotation -- see the placement loop.
+ *
+ * SPANS ARE HALF AGAIN LONGER THAN THE FIRST FAN, AND THE ROLLS ARE FLATTER,
+ * and the second half is not a style choice -- it is the road.
+ *
+ * A plate's root sits at x = 0 and its tip at (cos rz, sin rz) * span, so with
+ * anhedral the tip DROPS as the span grows. The model origin sits rideHeight
+ * above the surface and hover's rideHeight is 1.00, which puts the ground at
+ * y = -1.00 in model space. Measured before touching anything: the outermost
+ * plate's tip was already at -1.00 exactly -- grazing the road at rest, a bug
+ * the 1.5x scale pass introduced and nothing caught, because no probe in this
+ * repo looks at ground clearance. Lengthening it 50% at the same angle would
+ * have put that tip 0.36m THROUGH the deck.
+ *
+ * So the rolls are solved rather than eyeballed: each is
+ * asin((targetTipY / SCALE - rootY) / span) for a target that steps the fan
+ * down gently and leaves the outermost tip 0.25m clear. Flatter also happens
+ * to be what was asked for -- a longer, shallower plate reads as a wing, and
+ * a short steep one reads as a fin.
+ */
 const FILAMENT_FAN: readonly (readonly [number, number, number, number, number])[] = [
-  [0.74, 0.10, -0.60, -0.04, 1.06],
-  [0.88, 0.03, -0.70, -0.13, 0.96],
-  [1.00, -0.04, -0.80, -0.24, 0.86],
-  [1.06, -0.11, -0.90, -0.35, 0.74],
-  [1.04, -0.18, -1.00, -0.47, 0.62],
+  [1.11, 0.10, -0.60, -0.054, 1.06],
+  [1.32, 0.03, -0.70, -0.083, 0.96],
+  [1.50, -0.04, -0.80, -0.116, 0.86],
+  [1.59, -0.11, -0.90, -0.149, 0.74],
+  [1.56, -0.18, -1.00, -0.194, 0.62],
 ]
 
 /** Every plate is a feather: full chord and thickness at the root, half the
@@ -1083,9 +1103,9 @@ const buildFilament: Builder = (def, p, det) => {
       { frontX: 0.08, frontY: 0.32, backX: 0.74 })
     sb(c.prim, 0, 1.06, 0.20, 2.30, 0, 0.12, -0.02, 0, 0, 0, { frontX: 0.18, frontY: 0.46 })
     sb(c.emis, 1, 0.12, 0.06, 2.20, 0, 0.16, 0.42)
-    for (const r of [-0.34, Math.PI + 0.34]) {
-      sb(c.prim, 0, 0.90, 0.07, 0.78, Math.cos(r) * 0.45, Math.sin(r) * 0.45, -0.82,
-        0, 0, r, { spanZ: [1, 0.42], spanSweep: 0.40 })
+    for (const r of [-0.15, Math.PI + 0.15]) {
+      sb(c.prim, 0, 1.35, 0.07, 0.78, Math.cos(r) * 0.675, Math.sin(r) * 0.675, -0.82,
+        0, 0, r, { spanZ: [1, 0.42], spanSweep: 0.60 })
     }
     sb(c.sec, 0, 1.10, 0.46, 0.46, 0, 0.24, -1.06)
     sb(c.emis, 1, 0.96, 0.09, 0.08, 0, 0.30, -1.26)
@@ -1162,12 +1182,19 @@ const buildFilament: Builder = (def, p, det) => {
   // ALMOST FLAT and overlapping, so the anhedral only has to open far enough
   // that each one clears the one above it. 2 to 27 degrees does that.
   for (const [span, y, z, rz, chord] of FILAMENT_FAN) {
-    plate(c.prim, 0, span, 0.06, y, z, rz, chord, 0.46 * (chord / 1.06))
+    // spanSweep is an absolute Z offset at the tip, so holding it constant
+    // across a 50% longer plate would have quietly halved the rake angle.
+    // Scaled with the span, the forward sweep looks exactly as it did.
+    plate(c.prim, 0, span, 0.06, y, z, rz, chord, 0.69 * (chord / 1.06))
   }
   // The glow burning between the layers, tucked under each plate's root, where
   // the plate above it casts the shadow that makes it read as a slot.
+  // 0.41 of the (now longer) span rather than 0.62, so these stay the same
+  // absolute length they were: they are a root detail marking the slot between
+  // two plates, and a glow running all the way out to a wingtip is a light
+  // strip, which is a different object.
   for (const [span, y, z, rz, chord] of FILAMENT_FAN) {
-    plate(c.emis, 1, span * 0.62, 0.03, y + 0.05, z - chord * 0.16, rz, chord * 0.30, 0.14)
+    plate(c.emis, 1, span * 0.41, 0.03, y + 0.05, z - chord * 0.16, rz, chord * 0.30, 0.14)
   }
 
   // Centre spine, and a lit blade down its ridge.
