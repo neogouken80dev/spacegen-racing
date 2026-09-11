@@ -161,6 +161,14 @@ export interface PostFx {
     dt: number, boost: number, hit: number, speed01: number,
     warp?: number, calm?: boolean,
   ): void
+  /**
+   * The live shockfronts to bend the picture around, already projected into
+   * this pass's own 0..1 screen space. Call it every frame, including with an
+   * empty list: slots past the end are zeroed, and a slot left holding last
+   * frame's blast freezes a lens on screen after the explosion that made it
+   * has gone.
+   */
+  setBlasts(list: readonly Blast[]): void
   /** Pass the same logical width/height you pass to renderer.setSize(). */
   resize(w: number, h: number): void
   /**
@@ -239,6 +247,29 @@ const GLARE_FLOOR = 0.10
  */
 const WARP_SHAPE = 0.65
 
+/**
+ * How many shockfronts can bend the picture at once.
+ *
+ * Four, because the frame it has to survive is a pile-up: an Alpha hit, the
+ * two cars it wrecks, and somebody boosting out of the mess. Past that the
+ * displacements start cancelling anyway, and each slot is an unconditional
+ * branch in a per-pixel loop, so the cost is paid on every frame whether the
+ * slot is live or not -- which is exactly why the shader tests `w <= 0` and
+ * skips, rather than there being ten of them.
+ */
+const MAX_BLASTS = 4
+
+/** One live shockfront, in the composite's own 0..1 UV space. */
+export interface Blast {
+  /** Screen position, 0..1 across the frame. */
+  x: number
+  y: number
+  /** Radius as a fraction of frame WIDTH (the shader corrects for aspect). */
+  radius: number
+  /** 0..1, already faded. 0 means the slot is idle. */
+  strength: number
+}
+
 const COMPOSITE_VERT = `
 varying vec2 vUv;
 void main() {
@@ -258,6 +289,22 @@ uniform float uExposure;
 uniform float uScreen;
 uniform float uWarp;
 uniform float uCalm;
+
+/**
+ * BLAST REFRACTION.
+ *
+ * Up to BLASTS shockfronts, each packed as (screen x, screen y, radius,
+ * strength) with x/y/radius in the 0..1 UV space of this pass. Strength is
+ * already faded and already multiplied by the player's screen-effect setting
+ * on the CPU side, so a zero here means "draw nothing" with no second rule to
+ * remember.
+ *
+ * The scene's own explosion meshes draw a dark sphere with a chromatic rim,
+ * which LOOKS like a lens and refracts nothing: the geometry cannot see the
+ * pixels behind it. This can, because by the time the composite runs the
+ * scene is a texture.
+ */
+uniform vec4 uBlast[BLASTS];
 
 #ifdef GLARE
 uniform sampler2D tGlare;
@@ -326,6 +373,43 @@ void main() {
   // on-screen size while the world stretches behind it. See the header.
   c *= 1.0 - uBoost * 0.024 * uScreen;
   uv = c + 0.5;
+
+  /**
+   * THE SHOCKFRONT LENS.
+   *
+   * Displacement peaks ON THE EDGE of the blast and falls to zero at both the
+   * centre and the outside, which is what a real pressure front does and what
+   * "a distorting field within the explosion edge" means: the middle of a
+   * fireball is opaque fire, and the interesting optics are in the thin shell
+   * where the density gradient is.
+   *
+   * sin(PI * t) gives exactly that with no branching -- 0 at t=0, 1 at the
+   * half-radius, 0 at the rim -- and squaring it tightens the band into
+   * something that reads as a shell rather than a general blur.
+   *
+   * The aspect correction is not cosmetic: without it the ring is an ellipse
+   * on any non-square frame, and at 2.25:1 on a phone in landscape it looks
+   * like a horizontal smear rather than a blast.
+   */
+  float aspect = max(uRes.x, 1.0) / max(uRes.y, 1.0);
+  for (int i = 0; i < BLASTS; i++) {
+    vec4 b = uBlast[i];
+    if (b.w <= 0.0004 || b.z <= 0.0001) continue;
+    vec2 d = uv - b.xy;
+    d.x *= aspect;
+    float dist = length(d);
+    float t = dist / b.z;
+    if (t >= 1.0) continue;
+    float shell = sin(3.14159265 * t);
+    shell *= shell;
+    // Outward along the front. The 0.06 is the displacement at full strength
+    // as a fraction of the blast radius, so a big blast bends more of the
+    // picture than a small one by construction rather than by a second knob.
+    vec2 dir = dist > 1e-5 ? d / dist : vec2(0.0);
+    dir.x /= aspect;
+    uv += dir * shell * b.w * b.z * 0.06;
+  }
+  c = uv - 0.5;
 
   // Impact tear: whole rows slip sideways on a hard hit.
   float tear = step(0.60, uHit) * (hash11(floor(uv.y * 96.0) + floor(uTime * 26.0)) - 0.5);
@@ -577,7 +661,12 @@ class PostFxImpl implements PostFx {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), strength, radius, threshold)
     composer.addPass(this.bloom)
 
-    const defines: Record<string, string> = { GLARE: '' }
+    // BLASTS is UNCONDITIONAL. The uniform array and the loop that reads it
+    // sit outside the FX_FULL guard -- a shockfront bending the picture is the
+    // substance of the effect, not a flourish on top of one -- so the define
+    // has to exist on every path or the low tier fails to compile the whole pass and
+    // loses its post-processing entirely.
+    const defines: Record<string, string> = { GLARE: '', BLASTS: String(MAX_BLASTS) }
     if (this.full) {
       defines.FX_FULL = ''
       defines.TAPS = quality.tier === 'high' ? '6' : '4'
@@ -605,6 +694,11 @@ class PostFxImpl implements PostFx {
         uScreen: { value: lastScreen },
         uWarp: { value: 0 },
         uCalm: { value: 1 },
+        // Fixed-length: a GLSL array uniform cannot be resized, and a
+        // re-compile mid-race to add a slot would hitch the frame.
+        uBlast: {
+          value: Array.from({ length: MAX_BLASTS }, () => new THREE.Vector4(0, 0, 0, 0)),
+        },
         uGlareCeil: { value: GLARE_CEIL },
         uGlareKneeLo: { value: GLARE_KNEE_LO },
         uGlareKneeHi: { value: GLARE_KNEE_HI },
@@ -624,6 +718,30 @@ class PostFxImpl implements PostFx {
     // Re-apply whatever the player last chose, including the bloom pass being
     // switched off entirely at glare 0.
     this.setIntensity(lastGlare, lastScreen)
+  }
+
+  /**
+   * Hand over the live shockfronts, already projected to screen space.
+   *
+   * Called every frame with however many there are, including none; slots past
+   * `list.length` are zeroed rather than left holding the last frame's blast,
+   * which would freeze a lens in the middle of the screen the moment the
+   * explosion that made it expired.
+   */
+  setBlasts(list: readonly Blast[]): void {
+    const mat = this.compositeMat
+    if (mat === null) return
+    const arr = mat.uniforms.uBlast.value as THREE.Vector4[]
+    for (let i = 0; i < MAX_BLASTS; i++) {
+      const b = i < list.length ? list[i] : null
+      const v = arr[i]
+      if (b === null) { v.set(0, 0, 0, 0); continue }
+      v.set(
+        b.x, b.y,
+        b.radius < 0 ? 0 : b.radius,
+        b.strength < 0 ? 0 : b.strength > 1 ? 1 : b.strength,
+      )
+    }
   }
 
   render(

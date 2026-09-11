@@ -72,7 +72,15 @@ const RIB_RIGHT = 2
 const DEFER_MAX = 32
 const MAX_WELLS = 4
 const MAX_EMP = 3
-const MAX_DISTORT = 3
+/**
+ * Live shockfronts. Each one is a mesh (the chromatic rim in the scene) AND a
+ * screen-space lens in the composite, so the count bounds both.
+ *
+ * Raised from 3 with the lens: the frame this has to survive is a pile-up --
+ * an Alpha hit, the two cars it wrecks and somebody boosting out of the mess
+ * -- and the composite's own array is sized to match (postfx MAX_BLASTS).
+ */
+const MAX_DISTORT = 4
 
 /** Deferred burst kinds. */
 const D_VOID_BURST = 0
@@ -3909,6 +3917,18 @@ class Vfx implements VfxSystem {
       _rgb, 0.17 * front, 0.55, 0.38 + tier * 0.07, K_SPRITE, 0.4, 2.4,
     )
 
+    // THE SHOCKFRONT LENS, ON EVERY BOOST.
+    //
+    // It used to fire at Tier 3 only, which meant the one thing a player does
+    // constantly -- boost -- bent the picture on maybe one release in ten.
+    // Scaled by tier so the ladder still reads: at Tier 3 these numbers are
+    // exactly the 2.2 / 12.0 / 0.55 the Singularity block used to pass, so the
+    // biggest release is unchanged and everything below it gained an effect.
+    this.spawnDistortion(
+      pX(0, 0, hy), pY(0, 0, hy), pZ(0, 0, hy),
+      1.0 + tier * 0.4, 6.0 + tier * 2.0, 0.22 + tier * 0.11,
+    )
+
     if (tier >= 2) this.claimLight(pX(0, 0, 0.8), pY(0, 0, 0.8), pZ(0, 0, 0.8), _rgb, 3.0 + tier * 2, 0.28)
 
     if (tier >= 3) {
@@ -3924,7 +3944,7 @@ class Vfx implements VfxSystem {
       this.shockShell(sx, sy, sz, WHITE_RGB, 0.78, 0.42, 1.6, 5.2)
       this.shockShell(sx, sy, sz, WHITE_RGB, 0.60, 0.62, 2.6, 8.4)
       this.shockRing(gX(0, 0, 0.08), gY(0, 0, 0.08), gZ(0, 0, 0.08), WHITE_RGB, 0.90, 0.62, 1.4, 13.0, true)
-      this.spawnDistortion(bx, by, bz, 2.2, 12.0, 0.55)
+      // (the lens for this release was already fired above, scaled by tier)
       this.burst(bx, by, bz, _bUpX * 0.1, _bUpY * 0.1, _bUpZ * 0.1, Math.round(40 * q), 26, 1.0, WHITE_RGB, 0.55, 0.42, 0.15, K_SPARK, -10, 1.4)
       if (isLocal) this.boostIntensity = 1.0
     } else if (isLocal) {
@@ -3960,6 +3980,9 @@ class Vfx implements VfxSystem {
         this.burst(px, py, pz, dX(1, 0, 0.18), dY(1, 0, 0.18), dZ(1, 0, 0.18), Math.round(50 * q), 34, 0.32, col, 1.10, 0.30, 0.13, K_SPARK, -14, 1.6)
         this.burst(px, py, pz, dX(1, 0, 0.1), dY(1, 0, 0.1), dZ(1, 0, 0.1), Math.round(10 * q), 12, 0.9, col, 0.60, 0.5, 0.20, K_SPRITE, -2, 2.4)
         this.ring(px, py, pz, col, 1.1, 0.26, 0.5, 22, false)
+        // Small and quick: a rail hit is a spark cone, not a fireball, so the
+        // lens is a snap rather than a swell.
+        this.spawnDistortion(px, py, pz, 1.0, 9.0, 0.20)
         this.claimLight(px, py, pz, col, 5, 0.18)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.34)
         break
@@ -3971,6 +3994,7 @@ class Vfx implements VfxSystem {
         this.burst(px, py, pz, _bUpX * 0.2, _bUpY * 0.2, _bUpZ * 0.2, Math.round(44 * q), 22, 1.0, col, 1.15, 0.42, 0.14, K_SPARK, -12, 1.5)
         this.burst(px, py, pz, _bUpX * 0.4, _bUpY * 0.4, _bUpZ * 0.4, Math.round(16 * q), 4, 1.0, SMOKE_RGB, 1.4, 1.1, 0.9, K_SMOKE, 1.2, 1.0)
         this.ring(px, py, pz, col, 1.15, 0.42, 0.7, 26, false)
+        this.spawnDistortion(px, py, pz, 1.8, 10.0, 0.34)
         this.claimLight(px, py, pz, col, 7, 0.3)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.42)
         break
@@ -3993,6 +4017,8 @@ class Vfx implements VfxSystem {
       case 'voidMine': {
         // Implosion first, then the burst.
         this.implode(px, py, pz, col, Math.round(34 * q), 0.30)
+        // The mine pulls IN first: a lens on the implosion would fight the
+        // burst that follows it 0.30s later, so this one is deferred with it.
         this.spawn(px, py, pz, 0, 0, 0, col[0] * 2.0, col[1] * 2.0, col[2] * 2.0, 0.32, 3.0, -7.0, 0, 0, K_RING)
         this.defer(0.30, px, py, pz, col, D_VOID_BURST, q)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.48)
@@ -4004,6 +4030,7 @@ class Vfx implements VfxSystem {
         this.flash(px, py, pz, EMP_RGB, 1.4, 0.32, 1.8)
         this.burst(px, py, pz, _bUpX * 0.2, _bUpY * 0.2, _bUpZ * 0.2, Math.round(46 * q), 16, 1.0, EMP_RGB, 1.20, 0.55, 0.14, K_SPARK, -4, 1.4)
         this.defer(0.16, px, py, pz, EMP_RGB, D_EMP_PULSE, 1.0)
+        this.spawnDistortion(px, py, pz, 2.4, 13.0, 0.45)
         this.claimLight(px, py, pz, EMP_RGB, 9, 0.4)
         if (isLocal) this.hitFlash = 0.58
         break
@@ -4013,6 +4040,7 @@ class Vfx implements VfxSystem {
         this.flash(px, py, pz, col, 1.7, 0.34, 2.1)
         this.ring(px, py, pz, col, 1.2, 0.42, 0.8, 32, false)
         this.burst(px, py, pz, _bUpX * 0.3, _bUpY * 0.3, _bUpZ * 0.3, Math.round(50 * q), 24, 1.0, col, 1.2, 0.5, 0.16, K_SPARK, -10, 1.4)
+        this.spawnDistortion(px, py, pz, 2.0, 11.0, 0.38)
         this.claimLight(px, py, pz, col, 10, 0.35)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.5)
         break
@@ -4861,6 +4889,10 @@ class Vfx implements VfxSystem {
       switch (this.defKind[i]) {
         case D_VOID_BURST:
           this.flash(x, y, z, _rgb2, 1.6, 0.30, 2.0)
+          // The mine's lens rides the BURST rather than the implosion 0.30s
+          // earlier: a void mine's whole read is suck-then-blow, and bending
+          // the picture on the inhale muddies the one beat that sells it.
+          this.spawnDistortion(x, y, z, 2.0, 10.0, 0.40)
           this.spawn(x, y, z, 0, 0, 0, _rgb2[0] * 1.3, _rgb2[1] * 1.3, _rgb2[2] * 1.3, 0.44, 0.9, 9.0, 0, 0, K_SHELL)
           this.ring(x, y, z, _rgb2, 1.0, 0.45, 0.6, 26, false)
           this.burst(x, y, z, _axX * 0.2, _axY * 0.2, _axZ * 0.2, Math.round(48 * s), 26, 1.0, _rgb2, 1.15, 0.5, 0.14, K_SPARK, -12, 1.3)
@@ -4969,6 +5001,37 @@ class Vfx implements VfxSystem {
     this.empMesh[slot].userData.radius = radius
   }
 
+  /**
+   * The live shockfronts, in WORLD space, for the composite's screen lens.
+   *
+   * Written into a reused array -- this runs every frame and the render path
+   * allocates nothing. The scene meshes these mirror draw a dark sphere with a
+   * chromatic rim, which reads as a lens and refracts nothing at all: geometry
+   * cannot see the pixels behind it. The composite can, because by then the
+   * scene is a texture, so the same fronts are published here and bent there.
+   */
+  readonly blasts: { x: number; y: number; z: number; radius: number; strength: number }[] = []
+
+  private collectBlasts(): void {
+    this.blasts.length = 0
+    for (let i = 0; i < MAX_DISTORT; i++) {
+      if (this.distLife[i] <= 0) continue
+      const u = this.distAge[i] / this.distLife[i]
+      if (u >= 1) continue
+      const m = this.distMesh[i]
+      const r0 = (m.userData.r0 as number) ?? 2
+      const gr = (m.userData.growth as number) ?? 10
+      this.blasts.push({
+        x: m.position.x, y: m.position.y, z: m.position.z,
+        radius: r0 + gr * this.distAge[i],
+        // Front-loaded: the bend is strongest as the front leaves and is gone
+        // well before the mesh has finished fading. A lens that outlived its
+        // explosion read as a smear sitting on the road.
+        strength: (1 - u) * (1 - u) * (1 - u),
+      })
+    }
+  }
+
   private spawnDistortion(x: number, y: number, z: number, r0: number, growth: number, life: number): void {
     let slot = 0
     let worst = -1
@@ -5024,6 +5087,7 @@ class Vfx implements VfxSystem {
       this.distMat[i].uniforms.uRadius.value = r0 + gr * this.distAge[i]
       this.distMat[i].uniforms.uOpacity.value = (1 - u) * (1 - u)
     }
+    this.collectBlasts()
   }
 
   private updateLights(dt: number): void {

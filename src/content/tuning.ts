@@ -1718,7 +1718,27 @@ export const TUNING = {
     orbitRadius: 10.5,
     orbitHeight: 3.9,
     /** Degrees a second the camera walks around the car. Slow on purpose. */
-    orbitRate: 19,
+    /**
+     * THE ORBIT, and the three terms that stop it being a turntable.
+     *
+     * `orbitRate` is the base sweep in degrees/second -- raised from 19 so the
+     * shot covers a genuine tour of the car rather than a quarter of one.
+     * `orbitSwell` modulates it by that fraction on `orbitSwellPeriod`, which
+     * is what keeps the eye from reading the constancy: a constant angular
+     * rate is the single thing that makes an orbit look mechanical, and no
+     * amount of extra speed fixes it. `craneRise` and `pushIn` give the whole
+     * move a direction, so it ends higher and tighter than it began instead of
+     * merely returning to where it started.
+     *
+     * All three are suppressed under reduced motion along with the orbit
+     * itself: continuous camera translation is precisely what that setting
+     * exists to remove.
+     */
+    orbitRate: 26,
+    orbitSwell: 0.55,
+    orbitSwellPeriod: 3.4,
+    craneRise: 2.4,
+    pushIn: 1.6,
     /**
      * Where the orbit starts, degrees off dead astern. Non-zero so the first
      * second is already a three-quarter view rather than the chase shot the

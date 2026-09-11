@@ -292,7 +292,12 @@ describe('the AI', () => {
     //           was measured, not predicted -- the pin above was left behind by
     //           the change that introduced it and this test was already failing
     //           before Aetherion's dust pass touched anything.
-    expect(avg).toBeCloseTo(57.78, 2)
+    //   57.06s  the Void Mine moved to the REAR of the car. It used to lob 20m
+    //           forward by default, which seeded the racing line ahead of the
+    //           thrower -- and the AI drove into it. Dropping it behind takes
+    //           those hits out of the lap, which is where the 0.72s comes from;
+    //           the mine is otherwise unchanged. See src/sim/race.ts.
+    expect(avg).toBeCloseTo(57.06, 2)
   })
 })
 
@@ -762,8 +767,10 @@ describe('projectiles follow the surface', () => {
     expect(mine).toBeTruthy()
     if (!mine) return
     const proj = track.project(mine.pos, shooter.splineS)
-    // Lobbed 20 m forward, sitting at the racer's own ride height above the
-    // deck. Along +Y it would be a metre out into the void beside the ribbon.
+    // Dropped 6 m BEHIND (see the note in race.ts -- both throws are rearward
+    // now), sitting at the racer's own ride height above the deck. Along +Y it
+    // would be a metre out into the void beside the ribbon, which is the whole
+    // point of re-seating it onto the road: the wall-ride's deck is vertical.
     expect(proj.height).toBeCloseTo(0.55, 2)
     expect(Math.abs(proj.lateral)).toBeLessThan(track.at(proj.s).width)
   })

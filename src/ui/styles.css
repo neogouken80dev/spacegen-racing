@@ -1009,229 +1009,255 @@
    touch-control agent owns. The minimap shrinks; the warnings grow.
    ========================================================================== */
 
-@media (max-width: 860px), (max-height: 540px) {
-  .sg-hud {
-    --sg-pad: clamp(8px, 1.4vmin, 14px);
-    gap: 6px;
-  }
+/* ===========================================================================
+   THE COMPACT HUD, and why it is a CLASS rather than a media query.
+   ===========================================================================
 
-  /* --- ONE HORIZONTAL INSTRUMENT STRIP, BOTTOM CENTRE -------------------
-     A landscape phone is 390-430 CSS px tall. The desktop ring is a 214px
-     circle whose useful content is three digits in the middle of it, and the
-     charge pill used to be exiled to the top centre where the glare and pause
-     buttons sit directly on top of it -- so the boost count was, in practice,
-     invisible on a phone. Both problems have the same answer: flatten the ring
-     into a line, and put speed, drift ladder and charges in one band about
-     40px tall in the gap between the two thumb clusters.
+   These rules used to live in `@media (max-width: 860px), (max-height: 540px)`,
+   which asks the wrong question. What decides whether the HUD needs to get out
+   of the way is not how wide the viewport is -- it is whether there are THUMBS
+   on the glass. A tablet in landscape is 1024-1366px wide and well over 540px
+   tall, so it sailed past both breakpoints and got the desktop layout: the
+   214px speedometer ring sat in the bottom-right corner directly underneath
+   the touch controls, and the item slots were exiled to a corner the player
+   could not look at while driving.
 
-     Reading order is the priority order. The speed number is what a driver
-     reads at a glance, so it is first and it is the only large type here. The
-     drift ladder is next, because when to release is a timing decision and the
-     ticks say how close the next rung is. The boost count is last: it is a
-     number you check between corners, not during one. */
-  .sg-hud__band {
-    display: flex;
-    grid-area: bc;
-    justify-self: center;
-    align-self: end;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    padding: 5px 12px 6px;
-    border-radius: 999px;
-    background: var(--sg-panel);
-    border: 2px solid var(--sg-line);
-    box-shadow: var(--sg-shadow-sm);
-  }
+   So the condition moved to JS, which is the only place that knows both
+   answers: `.sg-compact` is set on <html> when the viewport is small OR a
+   touch scheme is active (src/ui/compact.ts). One source of truth, and
+   switching the control scheme in the settings panel re-lays the HUD
+   immediately rather than at the next resize.
 
-  /* Inside the strip the charge pill loses its own shell -- one border around
-     the band, not three. The segment bar comes BACK: it is the boost meter and
-     the whole reason the widget exists, and it costs 40px of the width the
-     circle used to spend on empty middle. */
-  .sg-hud__charge {
-    grid-area: auto;
-    align-self: center;
-    justify-self: auto;
-    padding: 0;
-    gap: 5px;
-    border: 0;
-    background: none;
-    box-shadow: none;
-  }
-  .sg-charge__bar {
-    display: flex;
-    gap: 2px;
-  }
-  .sg-charge__seg {
-    width: 3px;
-    height: clamp(10px, 2.6vmin, 14px);
-    border-radius: 1px;
-  }
-  .sg-charge__icon {
-    width: clamp(13px, 3.4vmin, 17px);
-    height: clamp(13px, 3.4vmin, 17px);
-  }
-  .sg-charge__num {
-    font-size: clamp(15px, 4vmin, 20px);
-  }
-  .sg-hud__charge.is-drop {
-    border: 0;
-  }
-  .sg-hud__charge.is-drop .sg-charge__num {
-    color: var(--sg-red);
-  }
+   Everything below is the phone layout verbatim; only the selectors changed.
+   =========================================================================== */
+.sg-compact .sg-hud {
+  --sg-pad: clamp(8px, 1.4vmin, 14px);
+  gap: 6px;
+}
 
-  /* The tool bar is 38px on compact rather than 44, so the pill comes up with
-     it. Tighter all round: it must never be wide enough to crowd the minimap
-     on a 412px frame. */
-  .sg-hud__wind {
-    gap: 6px;
-    padding: 2px 9px 3px;
-    border-width: 1px;
-    margin-top: 46px;
-  }
+/* --- ONE HORIZONTAL INSTRUMENT STRIP, BOTTOM CENTRE -------------------
+   A landscape phone is 390-430 CSS px tall. The desktop ring is a 214px
+   circle whose useful content is three digits in the middle of it, and the
+   charge pill used to be exiled to the top centre where the glare and pause
+   buttons sit directly on top of it -- so the boost count was, in practice,
+   invisible on a phone. Both problems have the same answer: flatten the ring
+   into a line, and put speed, drift ladder and charges in one band about
+   40px tall in the gap between the two thumb clusters.
 
-  /* items tuck under the position block, still top-left */
-  .sg-hud__items {
-    grid-area: ml;
-    align-self: start;
-    justify-self: start;
-    flex-direction: row;
-    align-items: flex-start;
-  }
-  .sg-slot__box {
-    width: clamp(58px, 15vmin, 84px);
-    height: clamp(58px, 15vmin, 84px);
-  }
-  .sg-slot--alt .sg-slot__box {
-    width: clamp(42px, 11vmin, 62px);
-    height: clamp(42px, 11vmin, 62px);
-  }
-  .sg-slot__name {
-    display: none;
-  }
+   Reading order is the priority order. The speed number is what a driver
+   reads at a glance, so it is first and it is the only large type here. The
+   drift ladder is next, because when to release is a timing decision and the
+   ticks say how close the next rung is. The boost count is last: it is a
+   number you check between corners, not during one. */
+.sg-compact .sg-hud__band {
+  display: flex;
+  grid-area: bc;
+  justify-self: center;
+  align-self: end;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 12px 6px;
+  border-radius: 999px;
+  background: var(--sg-panel);
+  border: 2px solid var(--sg-line);
+  box-shadow: var(--sg-shadow-sm);
+}
 
-  /* The gauge stops being a circle and becomes the left half of the strip:
-     the number, then the flat drift ladder. */
-  .sg-hud__gauge {
-    grid-area: auto;
-    justify-self: auto;
-    align-self: center;
-    width: auto;
-    height: auto;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-  }
-  .sg-gauge__svg {
-    display: none;
-  }
-  .sg-gauge__readout {
-    position: static;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 3px;
-  }
-  /* Fixed width on the number so a 99 -> 100 does not shove the drift bar and
-     the charges sideways at 300 km/h. Tabular figures are already on. */
-  .sg-gauge__spd {
-    font-size: clamp(21px, 5.4vmin, 30px);
-    min-width: 2.9ch;
-    text-align: right;
-  }
-  .sg-gauge__unit {
-    margin-top: 0;
-    font-size: 8px;
-    letter-spacing: 0.16em;
-  }
-  /* The bar carries its own tier label; the ring's one would be a second copy
-     in the same 40px of screen. */
-  .sg-gauge__tier {
-    display: none;
-  }
-  /* Boost is a colour on the number here, the way it is a colour on the arc
-     on desktop. */
-  .sg-hud__gauge.is-boost .sg-gauge__spd {
-    color: var(--sg-gold);
-    text-shadow: 0 0 16px rgba(255, 210, 63, 0.7);
-  }
+/* Inside the strip the charge pill loses its own shell -- one border around
+   the band, not three. The segment bar comes BACK: it is the boost meter and
+   the whole reason the widget exists, and it costs 40px of the width the
+   circle used to spend on empty middle. */
+.sg-compact .sg-hud__charge {
+  grid-area: auto;
+  align-self: center;
+  justify-self: auto;
+  padding: 0;
+  gap: 5px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.sg-compact .sg-charge__bar {
+  display: flex;
+  gap: 2px;
+}
+.sg-compact .sg-charge__seg {
+  width: 3px;
+  height: clamp(10px, 2.6vmin, 14px);
+  border-radius: 1px;
+}
+.sg-compact .sg-charge__icon {
+  width: clamp(13px, 3.4vmin, 17px);
+  height: clamp(13px, 3.4vmin, 17px);
+}
+.sg-compact .sg-charge__num {
+  font-size: clamp(15px, 4vmin, 20px);
+}
+.sg-compact .sg-hud__charge.is-drop {
+  border: 0;
+}
+.sg-compact .sg-hud__charge.is-drop .sg-charge__num {
+  color: var(--sg-red);
+}
 
-  .sg-gauge__bar {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    width: clamp(74px, 19vw, 128px);
-  }
-  /* Empty most of the lap, so it holds its line box open rather than letting
-     the strip grow a row the first time a drift charges. */
-  .sg-gauge__barTier {
-    font-family: var(--sg-display);
-    font-size: 8px;
-    line-height: 1;
-    letter-spacing: 0.16em;
-    text-align: center;
-    color: var(--ring);
-    text-shadow: 0 0 10px var(--ring);
-    min-height: 8px;
-  }
-  .sg-gauge__barTrack {
-    position: relative;
-    height: clamp(8px, 2.2vmin, 11px);
-    border-radius: 999px;
-    overflow: hidden;
-    background: rgba(12, 22, 42, 0.85);
-    box-shadow: inset 0 0 0 1px rgba(122, 190, 255, 0.18);
-  }
-  .sg-gauge__barFill {
-    position: absolute;
-    inset: 0;
-    transform-origin: 0 50%;
-    transform: scaleX(0);
-    background: var(--ring);
-    box-shadow: 0 0 8px var(--ring);
-    transition: background-color 90ms linear;
-  }
-  /* Tier boundaries, from the same tuning table the ring's ticks come from. */
-  .sg-gauge__barTick {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    margin-left: -1px;
-    background: rgba(5, 9, 18, 0.85);
-  }
+/* The tool bar is 38px on compact rather than 44, so the pill comes up with
+   it. Tighter all round: it must never be wide enough to crowd the minimap
+   on a 412px frame. */
+.sg-compact .sg-hud__wind {
+  gap: 6px;
+  padding: 2px 9px 3px;
+  border-width: 1px;
+  margin-top: 46px;
+}
 
-  .sg-map__canvas {
-    width: clamp(84px, 22vmin, 112px);
-    height: clamp(84px, 22vmin, 112px);
-  }
-  .sg-map__frame {
-    padding: 5px;
-  }
-  .sg-map__fps {
-    display: none;
-  }
+/* THE ITEM SLOTS, ON THE LEFT EDGE AT EYE LEVEL.
+   Bottom-left is where they live on desktop and it is the one place they
+   cannot go here: that corner is a thumb. They used to tuck under the position
+   block at the TOP of the middle-left cell, which on a tablet reads as "hidden
+   in a corner" -- it is the furthest point from where a driver is looking.
+   Centred in the cell puts the item you are about to fire beside the car
+   rather than above the horizon, and it is still clear of both thumb
+   clusters. */
+.sg-compact .sg-hud__items {
+  grid-area: ml;
+  align-self: center;
+  justify-self: start;
+  flex-direction: row;
+  align-items: center;
+}
+.sg-compact .sg-slot__box {
+  width: clamp(58px, 15vmin, 84px);
+  height: clamp(58px, 15vmin, 84px);
+}
+.sg-compact .sg-slot--alt .sg-slot__box {
+  width: clamp(42px, 11vmin, 62px);
+  height: clamp(42px, 11vmin, 62px);
+}
+.sg-compact .sg-slot__name {
+  display: none;
+}
 
-  /* louder, not smaller */
-  .sg-warn {
-    width: clamp(96px, 26vmin, 150px);
-    height: clamp(68px, 18vmin, 104px);
-    margin-left: calc(clamp(96px, 26vmin, 150px) / -2);
-    margin-top: calc(clamp(68px, 18vmin, 104px) / -2);
-  }
-  .sg-warn__arc path {
-    stroke-width: 11;
-  }
-  .sg-warn__icons {
-    width: clamp(30px, 8vmin, 44px);
-    height: clamp(30px, 8vmin, 44px);
-  }
+/* The gauge stops being a circle and becomes the left half of the strip:
+   the number, then the flat drift ladder. */
+.sg-compact .sg-hud__gauge {
+  grid-area: auto;
+  justify-self: auto;
+  align-self: center;
+  width: auto;
+  height: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.sg-compact .sg-gauge__svg {
+  display: none;
+}
+.sg-compact .sg-gauge__readout {
+  position: static;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 3px;
+}
+/* Fixed width on the number so a 99 -> 100 does not shove the drift bar and
+   the charges sideways at 300 km/h. Tabular figures are already on. */
+.sg-compact .sg-gauge__spd {
+  font-size: clamp(21px, 5.4vmin, 30px);
+  min-width: 2.9ch;
+  text-align: right;
+}
+.sg-compact .sg-gauge__unit {
+  margin-top: 0;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+}
+/* The bar carries its own tier label; the ring's one would be a second copy
+   in the same 40px of screen. */
+.sg-compact .sg-gauge__tier {
+  display: none;
+}
+/* Boost is a colour on the number here, the way it is a colour on the arc
+   on desktop. */
+.sg-compact .sg-hud__gauge.is-boost .sg-gauge__spd {
+  color: var(--sg-gold);
+  text-shadow: 0 0 16px rgba(255, 210, 63, 0.7);
+}
 
-  .sg-lift__track {
-    height: clamp(64px, 22vmin, 120px);
-    width: clamp(10px, 3vmin, 15px);
-  }
+.sg-compact .sg-gauge__bar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: clamp(74px, 19vw, 128px);
+}
+/* Empty most of the lap, so it holds its line box open rather than letting
+   the strip grow a row the first time a drift charges. */
+.sg-compact .sg-gauge__barTier {
+  font-family: var(--sg-display);
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-align: center;
+  color: var(--ring);
+  text-shadow: 0 0 10px var(--ring);
+  min-height: 8px;
+}
+.sg-compact .sg-gauge__barTrack {
+  position: relative;
+  height: clamp(8px, 2.2vmin, 11px);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(12, 22, 42, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(122, 190, 255, 0.18);
+}
+.sg-compact .sg-gauge__barFill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--ring);
+  box-shadow: 0 0 8px var(--ring);
+  transition: background-color 90ms linear;
+}
+/* Tier boundaries, from the same tuning table the ring's ticks come from. */
+.sg-compact .sg-gauge__barTick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(5, 9, 18, 0.85);
+}
+
+.sg-compact .sg-map__canvas {
+  width: clamp(84px, 22vmin, 112px);
+  height: clamp(84px, 22vmin, 112px);
+}
+.sg-compact .sg-map__frame {
+  padding: 5px;
+}
+.sg-compact .sg-map__fps {
+  display: none;
+}
+
+/* louder, not smaller */
+.sg-compact .sg-warn {
+  width: clamp(96px, 26vmin, 150px);
+  height: clamp(68px, 18vmin, 104px);
+  margin-left: calc(clamp(96px, 26vmin, 150px) / -2);
+  margin-top: calc(clamp(68px, 18vmin, 104px) / -2);
+}
+.sg-compact .sg-warn__arc path {
+  stroke-width: 11;
+}
+.sg-compact .sg-warn__icons {
+  width: clamp(30px, 8vmin, 44px);
+  height: clamp(30px, 8vmin, 44px);
+}
+
+.sg-compact .sg-lift__track {
+  height: clamp(64px, 22vmin, 120px);
+  width: clamp(10px, 3vmin, 15px);
 }
 
 /* Very short landscape phones: keep the bottom row shallow. */

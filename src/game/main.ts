@@ -1,4 +1,11 @@
 import * as THREE from 'three'
+
+/** Blast-projection scratch. Module level so the render path never allocates. */
+const _bp = new THREE.Vector3()
+const _be = new THREE.Vector3()
+const _bR = new THREE.Vector3()
+const _bU = new THREE.Vector3()
+const _bF = new THREE.Vector3()
 import { Race } from '../sim/race'
 import { Track } from '../sim/track'
 import { resetAI } from '../sim/ai'
@@ -18,7 +25,8 @@ import { createHud, type Hud } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
 import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
-import { createInput, type InputManager } from './input'
+import { installCompactLayout, type CompactLayout } from '../ui/compact'
+import { createInput, isTouchScheme, type InputManager } from './input'
 import { ChaseCamera } from './camera'
 import { clamp01 } from '../sim/math'
 import type { VfxSystem, TrackVisual, EnvironmentVisual, CrosswindFrame } from '../render/api'
@@ -56,6 +64,8 @@ export class Game {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private chase: ChaseCamera
+  /** Reused so the render path allocates nothing. See the projection below. */
+  private readonly blastBuf: { x: number; y: number; radius: number; strength: number }[] = []
   private quality: RenderQuality
   private tier: QualityTier = 'high'
 
@@ -73,6 +83,7 @@ export class Game {
   private cheer: Cheer
   private frontEnd: FrontEnd
   private input: InputManager
+  private readonly compact: CompactLayout
   private settings: SettingsPanel
   private tools: HTMLElement
   /** True when the settings overlay paused the race, so closing resumes it. */
@@ -167,6 +178,12 @@ export class Game {
     })
     this.frontEnd = createFrontEnd(container)
     this.input = createInput(canvas, container)
+    // THE HUD LAYOUT FOLLOWS THE HANDS, NOT THE VIEWPORT. See ui/compact.ts:
+    // a tablet is too wide for the phone breakpoints and still has thumbs on
+    // the glass, so the compact instruments are driven from the live control
+    // scheme as well as the window size.
+    this.compact = installCompactLayout(() => isTouchScheme(this.input.scheme))
+    this.input.onSchemeChange = () => this.compact.refresh()
 
     this.settings = createSettingsPanel(container, {
       input: this.input,
@@ -808,7 +825,48 @@ export class Game {
       // the warp grades the picture. Tying the screen to the camera's value is
       // what made calming the boost for motion comfort silently take two
       // thirds of the tunnel vision with it.
+      /**
+       * THE BLAST LENSES, PROJECTED.
+       *
+       * The composite works in screen space and the explosions happen in the
+       * world, so the bridge is here: one project() per live front, at most
+       * four of them, into the 0..1 UV space the pass reads.
+       *
+       * A front BEHIND the camera projects to a mirrored point that is still
+       * on screen, which would put a lens in the middle of the frame for an
+       * explosion the player cannot see -- so those are dropped rather than
+       * clamped. The radius is taken as a fraction of frame WIDTH, measured by
+       * projecting a second point one radius to the camera's right: doing it
+       * by similar triangles instead needs the FOV, the aspect and the
+       * distance, and gets the vertical wrong on every non-16:9 screen.
+       */
       if (this.post) {
+        const blasts = this.blastBuf
+        blasts.length = 0
+        const cam = this.chase.camera
+        const src = this.vfx?.blasts
+        if (src && src.length > 0 && !this.reduceMotion) {
+          cam.updateMatrixWorld(true)
+          cam.matrixWorld.extractBasis(_bR, _bU, _bF)
+          for (let i = 0; i < src.length; i++) {
+            const b = src[i]
+            _bp.set(b.x, b.y, b.z).project(cam)
+            if (_bp.z > 1) continue
+            _be.set(b.x, b.y, b.z).addScaledVector(_bR, b.radius).project(cam)
+            const rad = Math.abs(_be.x - _bp.x) * 0.5
+            if (!(rad > 0.001)) continue
+            blasts.push({
+              x: _bp.x * 0.5 + 0.5,
+              y: _bp.y * 0.5 + 0.5,
+              radius: rad,
+              // The player's speed-effect dial owns this the way it owns the
+              // warp: one multiply, here, so "Speed effects: Off" is one rule
+              // and not a list of exceptions.
+              strength: b.strength * this.vfxScreen,
+            })
+          }
+        }
+        this.post.setBlasts(blasts)
         this.post.render(
           dt, this.vfx?.boostIntensity ?? 0, this.vfx?.hitFlash ?? 0, speed01,
           this.chase.warpLevel, this.reduceMotion,
@@ -892,6 +950,7 @@ export class Game {
     this.cheer.dispose()
     this.hud.dispose()
     this.settings.dispose()
+    this.compact.dispose()
     this.tools.remove()
     this.frontEnd.dispose()
     this.input.dispose()

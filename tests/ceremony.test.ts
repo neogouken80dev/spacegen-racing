@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 /**
  * THE FINISH CEREMONY, and the one thing it is not allowed to do.
  *
@@ -191,7 +192,10 @@ describe('the finish camera stays in the world', () => {
     for (let f = 0; f < 30; f++) cam.update(hero, 1 / 60, 60, false, reduceMotion)
     cam.beginCinematic(hero)
 
-    const rows: { clearance: number; edge: number; step: number; az: number }[] = []
+    const rows: {
+      clearance: number; edge: number; step: number; az: number
+      ndcX: number; ndcY: number; behind: number
+    }[] = []
     let prevX = cam.camera.position.x, prevY = cam.camera.position.y, prevZ = cam.camera.position.z
     for (let f = 0; f < Math.round(seconds * 60); f++) {
       race.setInput(0, idle)
@@ -201,12 +205,21 @@ describe('the finish camera stays in the world', () => {
       const p = cam.camera.position
       const proj = track.project(p, hero.splineS)
       const surf = track.surfacePoint(proj.s, proj.lateral)
+      // WHERE THE CAR ACTUALLY LANDS IN THE FRAME. The whole point of the
+      // finish shot is that the subject is the car, and nothing above would
+      // notice it being off screen: every other row here is about where the
+      // CAMERA is, and the camera can be in a perfectly legal place while
+      // pointing somewhere else entirely.
+      cam.camera.updateMatrixWorld(true)
+      const ndc = new THREE.Vector3(hero.pos.x, hero.pos.y, hero.pos.z)
+        .project(cam.camera)
       rows.push({
         clearance: p.y - surf.y,
         edge: Math.abs(proj.lateral) / Math.max(1, proj.sample.width),
         step: Math.hypot(p.x - prevX, p.y - prevY, p.z - prevZ),
         // Bearing of the camera from the car: what the orbit is walking.
         az: Math.atan2(p.x - hero.pos.x, p.z - hero.pos.z),
+        ndcX: ndc.x, ndcY: ndc.y, behind: ndc.z > 1 ? 1 : 0,
       })
       prevX = p.x; prevY = p.y; prevZ = p.z
     }
@@ -234,6 +247,56 @@ describe('the finish camera stays in the world', () => {
       expect(worstStep).toBeLessThan(4)
     })
   }
+
+  /**
+   * THE SUBJECT IS THE CAR, AND IT MUST BE IN THE PICTURE.
+   *
+   * This is the regression guard for a shot that was comprehensively broken
+   * without a single existing test noticing, because every one of them asked
+   * where the CAMERA was rather than where the car ended up.
+   *
+   * Two separate causes, both invisible from the camera's own position:
+   *
+   *  - The chase rig's SCREEN ANCHOR was running during the ceremony. Its
+   *    target point `_anchor` is written in update() and nowhere else, so
+   *    through a ceremony -- where the car keeps driving under AI -- it held a
+   *    world point the car had left behind, and the solve aimed at that.
+   *    Measured: the car ranged over 400 NDC units and was behind the camera
+   *    on 216 frames out of 480.
+   *  - The HANDOVER seeded from `this.look`, the damped look-ahead TARGET,
+   *    which at a loose tracking setting trails so far it sits BEHIND the car
+   *    (0.56s half-life against 60 m/s). The shot opened pointing away from
+   *    its subject: dot(camera forward, direction to car) = -0.64.
+   */
+  for (const def of [RUSTFALL, CRYOSTATIC] as Def[]) {
+    it(`${def.id}: the car is in frame, and near the middle of it`, () => {
+      for (const rm of [false, true]) {
+        const rows = shoot(def, T.ceremony.maxDuration, rm)
+        const behind = rows.reduce((a, r) => a + r.behind, 0)
+        expect(behind, `${rm ? 'reduced motion: ' : ''}frames with the car behind the camera`)
+          .toBe(0)
+        const worstX = Math.max(...rows.map((r) => Math.abs(r.ndcX)))
+        const worstY = Math.max(...rows.map((r) => Math.abs(r.ndcY)))
+        // Comfortably inside the frame. NDC 1.0 is the edge; 0.6 leaves the
+        // car in the middle 60% in both axes for every frame of the shot,
+        // including the handover blend.
+        expect(worstX, `${rm ? 'RM ' : ''}car reached ${worstX.toFixed(2)} horizontally`)
+          .toBeLessThan(0.6)
+        expect(worstY, `${rm ? 'RM ' : ''}car reached ${worstY.toFixed(2)} vertically`)
+          .toBeLessThan(0.6)
+      }
+    })
+  }
+
+  it('the handover opens pointing AT the car, not away from it', () => {
+    // The one frame the old code got most wrong, and the one a player sees
+    // first. Checked as a direction rather than a screen position so it stays
+    // meaningful even if the framing is later retuned.
+    const rows = shoot(RUSTFALL, 0.5, false)
+    expect(rows[0].behind, 'the very first ceremony frame had the car behind the camera')
+      .toBe(0)
+    expect(Math.hypot(rows[0].ndcX, rows[0].ndcY)).toBeLessThan(0.6)
+  })
 
   it('the orbit actually walks around the car', () => {
     const rows = shoot(RUSTFALL, T.ceremony.maxDuration, false)

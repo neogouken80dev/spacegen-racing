@@ -91,6 +91,19 @@ export interface VfxSystem {
    * without firing several times on a high-refresh display.
    */
   dollyRequest: number
+  /**
+   * Live shockfronts in WORLD space, for the composite's screen-space lens.
+   *
+   * The scene's own explosion meshes draw a dark sphere with a chromatic rim.
+   * That reads as a lens and refracts nothing -- geometry cannot see the
+   * pixels behind it. The composite can, because by the time it runs the scene
+   * is a texture, so the same fronts are published here and bent there.
+   *
+   * Reused array: read it, do not retain it.
+   */
+  readonly blasts: readonly {
+    x: number; y: number; z: number; radius: number; strength: number
+  }[]
   dispose(): void
 }
 

@@ -804,10 +804,31 @@ export class ChaseCamera {
       this.camera.position.y - r.pos.y,
       this.camera.position.z - r.pos.z,
     )
+    /**
+     * WHERE THE CAMERA WAS ACTUALLY LOOKING, not where `this.look` says.
+     *
+     * `this.look` is the damped look-ahead TARGET, and at a loose tracking
+     * setting it is not the aim and not even in front of the car: its
+     * half-life is posHalfLife * 1.4, which at the shipped default is 0.56s,
+     * so at 60 m/s it trails the thing it is chasing by ~48m against a 13m
+     * lead -- it sits BEHIND the car. During a race that is invisible, because
+     * the screen anchor re-solves the aim from scratch every frame and never
+     * ships `look` to the lens. The handover did ship it, and so began the
+     * finish shot pointing away from the subject: measured, dot(camera
+     * forward, direction to car) = -0.64, and the car was behind the camera
+     * for the first 27 frames of every ceremony.
+     *
+     * Taking the camera's OWN forward direction makes the handover seamless by
+     * construction -- it starts from the exact frame the player was just
+     * looking at -- and it cannot drift out of step with the aim again,
+     * whatever the rig does upstream.
+     */
+    this._tmp.set(0, 0, -1).applyQuaternion(this.camera.quaternion)
+    const reach = Math.max(1, this.camera.position.distanceTo(this._anchor))
     this._handoffLook.set(
-      this.look.x - r.pos.x,
-      this.look.y - r.pos.y,
-      this.look.z - r.pos.z,
+      this.camera.position.x + this._tmp.x * reach - r.pos.x,
+      this.camera.position.y + this._tmp.y * reach - r.pos.y,
+      this.camera.position.z + this._tmp.z * reach - r.pos.z,
     )
     this.handoffFov = this.camera.fov
     // Start where the chase rig was standing — behind the car — offset by
@@ -853,6 +874,10 @@ export class ChaseCamera {
    */
   updateCinematic(r: RacerState, dt: number, track: Track, reduceMotion: boolean): void {
     if (this.cineT < 0) this.beginCinematic(r)
+    // Kept current even though the anchor is skipped below: the car is still
+    // driving under AI, and a scratch value that is only harmless while
+    // nobody reads it is a trap for whatever reads it next.
+    this._anchor.set(r.pos.x, r.pos.y, r.pos.z)
     this.cineT += dt
     const t = this.cineT
 
@@ -870,14 +895,34 @@ export class ChaseCamera {
         : r.yaw + Math.PI + CER.orbitStart * DEG
       this.cineAz += angleDelta(this.cineAz, want) * (1 - Math.pow(2, -dt / 0.28))
     } else {
-      this.cineAz += CER.orbitRate * DEG * k * dt
+      // A SWELL ON THE RATE, so the shot reads as a camera operator rather
+      // than a turntable. A constant angular rate is the one thing that makes
+      // an orbit look mechanical: the eye picks the constancy out immediately,
+      // and no amount of extra speed fixes it. Modulating it means the shot
+      // has a beat -- it comes round the flank quickly and lingers on the
+      // three-quarter views, which are the ones worth lingering on.
+      //
+      // Clamped positive so the swell can never reverse the orbit: a shot that
+      // walks backwards for a beat reads as a mistake, not a flourish.
+      const swell = Math.max(
+        0.15,
+        1 + CER.orbitSwell * Math.sin((t / CER.orbitSwellPeriod) * Math.PI * 2),
+      )
+      this.cineAz += CER.orbitRate * DEG * k * swell * dt
     }
 
     // A breath on radius and height. Tiny, and off under reduced motion.
     const breath = reduceMotion ? 0
       : Math.sin((t / CER.breathePeriod) * Math.PI * 2) * CER.breatheAmp
-    const radius = CER.orbitRadius + breath
-    const height = CER.orbitHeight + breath * 0.45
+    // THE CRANE AND THE PUSH-IN. Over the length of the shot the camera rises
+    // and closes, so the last second is a tighter, higher three-quarter than
+    // the first -- the move has a direction rather than just a rotation.
+    // Suppressed under reduced motion along with the orbit and the breath,
+    // because a continuous camera translation is exactly what that setting is
+    // for; a reduced-motion player gets a fixed rig that simply follows.
+    const prog = reduceMotion ? 0 : clamp01(t / Math.max(0.01, CER.maxDuration))
+    const radius = CER.orbitRadius + breath - CER.pushIn * prog
+    const height = CER.orbitHeight + breath * 0.45 + CER.craneRise * prog
 
     // -------------------------------------------------------------------------
     // THE ORBIT, in the car's own plane.
@@ -1151,7 +1196,28 @@ export class ChaseCamera {
      * under half a percent of frame height, about 4px on a 944-high frame, and
      * costs one lookAt and one project per frame against a full scene render.
      */
-    if (C.anchorStrength > 0) {
+    /**
+     * THE ANCHOR IS A CHASE-CAMERA CONCERN, AND THE FINISH SHOT IS NOT ONE.
+     *
+     * It exists to hold the car on a driving mark low in the frame while the
+     * world does whatever it likes. The finish shot wants the opposite: the
+     * car is the SUBJECT, it belongs in the middle of the picture, and the
+     * rig already solves its own aim (`_cineLook`, the car plus lookHeight).
+     *
+     * Running the anchor over the top of that did not merely mis-frame it, it
+     * destroyed it. `_anchor` is written in update() and NOWHERE ELSE, so
+     * through a ceremony -- where the car keeps driving under AI for several
+     * seconds -- it holds a world point the car left behind at the handover.
+     * The solve then dutifully aimed the camera at that stale point while the
+     * subject drove off. Measured over an 8-second ceremony: the car's screen
+     * position ranged over 400 NDC units, and it was BEHIND THE CAMERA on 216
+     * frames out of 480.
+     *
+     * So the cinematic path aims where it meant to, and `_anchor` is kept
+     * fresh below regardless, because a stale scratch value that is only
+     * harmless as long as nobody reads it is a trap for the next change.
+     */
+    if (C.anchorStrength > 0 && this.cineT < 0) {
       const tx = C.anchorX * 2 - 1
       const ty = 1 - this.rig.anchorY * 2
       this._aim.copy(this.look)

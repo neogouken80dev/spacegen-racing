@@ -587,7 +587,17 @@ export class Race {
       }
       case 'voidMine': {
         const p = ITEM_PARAMS.voidMine
-        const dist = backwards ? -p.dropBack : p.lobDistance
+        // A MINE LEAVES THE BACK OF THE CAR. Both throws are rearward: the
+        // default drops it just behind, and the backward modifier lobs it
+        // further back down the road for whoever is chasing.
+        //
+        // It used to lob 20m FORWARD by default, which is where the report
+        // "it shoots out in front of the vehicle" comes from. The forward lob
+        // had a use -- seeding the racing line ahead of you -- but it is the
+        // wrong thing to get by pressing fire, on an item the distribution
+        // table hands mostly to the leader, whose whole reason for wanting it
+        // is what is behind them.
+        const dist = backwards ? -p.lobDistance : -p.dropBack
         const drop = this.deployPoint(r, fwdX, fwdY, fwdZ, dist)
         s.fields.push({
           id: s.nextEntityId++, kind: 'mine', ownerId: r.id, pos: drop.pos, up: drop.up,

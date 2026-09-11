@@ -12,7 +12,7 @@ export interface ItemDef {
 
 export const ITEMS: Record<ItemId, ItemDef> = {
   laserGatling: { id: 'laserGatling', name: 'Pulse Gatling', charges: 1, color: 0x35ff9e, icon: 'gatling', description: 'Three seconds of auto-fire. Hold a racer in your sights to break them.' },
-  voidMine:      { id: 'voidMine',      name: 'Void Mine',      charges: 1, color: 0xb44dff, icon: 'mine',    description: 'Drop behind, or lob forward. Arms in 0.5s.' },
+  voidMine:      { id: 'voidMine',      name: 'Void Mine',      charges: 1, color: 0xb44dff, icon: 'mine',    description: 'Drops behind you. Hold back to lob it further. Arms in 0.5s.' },
   nitro:         { id: 'nitro',         name: 'Nitro',          charges: 1, color: 0x2fe36b, icon: 'nitro',   description: 'Instant boost. Clears light debuffs.' },
   nitroTriple:   { id: 'nitroTriple',   name: 'Nitro x3',       charges: 3, color: 0x2fe36b, icon: 'nitro3',  description: 'Three boosts, held as orbiting pips.' },
   railMissile:   { id: 'railMissile',   name: 'Rail Missile',   charges: 1, color: 0xffd23f, icon: 'rail',    description: 'Fires dead straight. Rewards aim.' },
@@ -25,6 +25,9 @@ export const ITEMS: Record<ItemId, ItemDef> = {
 
 /** Item behaviour parameters. Every number the sim reads lives here. */
 export const ITEM_PARAMS = {
+  // voidMine: BOTH distances are rearward -- see the note in race.ts. dropBack
+  // is the default drop just behind the car; lobDistance is the longer throw
+  // on the backward modifier, landing it where a chaser is about to be.
   voidMine:      { triggerRadius: 3.5, spinTime: 1.6, speedLoss: 0.60, life: 20, armDelay: 0.5, lobDistance: 20, dropBack: 6 },
   nitro:         { mag: 0.45, duration: 1.6 },
   nitroTriple:   { mag: 0.45, duration: 1.6 },

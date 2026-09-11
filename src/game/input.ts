@@ -31,6 +31,12 @@ export interface InputManager {
   sample(): InputFrame
   scheme: ControlScheme
   setScheme(s: ControlScheme): void
+  /**
+   * Fired when the scheme actually changes. The HUD layout hangs off it: a
+   * player switching to Touch has to see the instruments re-lay immediately
+   * rather than at the next resize. See ui/compact.ts.
+   */
+  onSchemeChange: (s: ControlScheme) => void
   readonly isTouch: boolean
   setAutoAccelerate(on: boolean): void
   /** Capture the player's current holding angle as tilt-neutral. */
@@ -199,7 +205,7 @@ function detectTouch(): boolean {
   return coarse && touchy
 }
 
-function isTouchScheme(s: ControlScheme): s is TouchScheme {
+export function isTouchScheme(s: ControlScheme): s is TouchScheme {
   return s === 'tilt' || s === 'stick' || s === 'buttons'
 }
 
@@ -684,6 +690,13 @@ class InputManagerImpl implements InputManager {
 
   private lastNonPad: ControlScheme = 'keyboard'
 
+  /**
+   * Fired whenever the control scheme actually changes. The HUD layout hangs
+   * off this: switching to Touch has to re-lay the instruments immediately,
+   * not at the next resize. Assigned by the host; defaults to a no-op.
+   */
+  onSchemeChange: (s: ControlScheme) => void = (): void => {}
+
   private applyScheme(s: ControlScheme, persist: boolean): void {
     if (!isValidScheme(s)) return
     if (this.cur !== s) {
@@ -698,6 +711,7 @@ class InputManagerImpl implements InputManager {
       }
       this.keySteer = 0
       this.padDpadSteer = 0
+      this.onSchemeChange(s)
     }
     if (persist) this.persist()
   }
