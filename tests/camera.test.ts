@@ -1,5 +1,9 @@
+import * as THREE from 'three'
 import { describe, it, expect } from 'vitest'
-import { ChaseCamera } from '../src/game/camera'
+import {
+  ChaseCamera, CAMERA_LIMITS, DEFAULT_CAMERA_SETTINGS, anchorYToAngle,
+  angleToAnchorY, normaliseCameraSettings, type CameraSettings,
+} from '../src/game/camera'
 import { Race } from '../src/sim/race'
 import { Track } from '../src/sim/track'
 import { TEST_PLAIN } from './fixtures/testTrack'
@@ -207,7 +211,26 @@ describe('the vertigo shot fires on a boost, not only on a drift release', () =>
     r.boostSource = 'pad'
     cam.update(r, RDT, 60, false, false)
     const fired = cam.dollyLevel
-    expect(fired, 'a pad boost must fire the shot').toBeGreaterThan(0.4)
+    // DERIVED, NOT A LITERAL. This used to assert `> 0.4`, which was a number
+    // that happened to sit under a boostDollyGain of 0.55; turning the gain
+    // down to 0.30 for motion comfort broke a test that was never about 0.4.
+    // What the rig actually promises is that a grant of `padMag` fires an
+    // impulse scaled by how big that rise is against `boostDollyFullRise`, so
+    // that is what gets asserted -- and it now survives any retune of either.
+    //
+    // The one frame of decay is not slop, it is the read: update() raises the
+    // impulse and then decays it before returning, so `dollyLevel` on the
+    // firing frame is already one step down the curve. Leaving it out put the
+    // expectation 4.5% high and would have been "fixed" by loosening the
+    // tolerance until the test stopped meaning anything.
+    const want = Math.min(1, T.boost.padMag / C.boostDollyFullRise)
+      * C.boostDollyGain * Math.pow(2, -RDT / C.dollyHalfLife)
+    expect(fired, 'a pad boost must fire the shot the tuning asks for')
+      .toBeCloseTo(want, 4)
+    // ...and it must be a real punch rather than a token one, whatever the
+    // tuning says.
+    expect(fired, 'a pad boost must fire a punch, not a twitch')
+      .toBeGreaterThan(C.boostDollyGain * 0.5)
 
     // A strip calls applyBoost on every frame a wheel is on it. Only the first
     // raises boostMag, so only the first may punch -- otherwise crossing a
@@ -244,7 +267,8 @@ describe('the vertigo shot fires on a boost, not only on a drift release', () =>
     cam.update(r, RDT, 60, false, false)
     r.boostMag = 0.9
     cam.update(r, RDT, 60, false, false)
-    expect(cam.dollyLevel, 'after the cooldown it fires again').toBeGreaterThan(0.4)
+    expect(cam.dollyLevel, 'after the cooldown it fires again')
+      .toBeGreaterThan(C.boostDollyGain * 0.5)
     expect(quiet, 'and it had genuinely gone quiet first').toBeLessThan(0.02)
   })
 
@@ -329,7 +353,19 @@ describe('vertigo shot: the CAR stays put while the world stretches', () => {
     // FOV must genuinely spike past the control...
     expect(s.peakFovGap, `peak FOV gap ${s.peakFovGap.toFixed(1)} deg`).toBeGreaterThan(8)
     // ...and the camera must genuinely come in to pay for it.
-    expect(s.maxPullIn, `max pull-in ${s.maxPullIn.toFixed(2)}m`).toBeGreaterThan(1.5)
+    //
+    // As a FRACTION OF THE RIG, not a fixed 1.5m. The pull-in is whatever
+    // distance cancels the lens punch, so it scales with both `dollyFov` and
+    // `distance`; the previous literal silently encoded a 30-degree punch on a
+    // 9m rig and failed the moment either moved. A tenth of the rig distance
+    // is the floor for "you can see it happen" -- it currently clears that
+    // with room, and it would still catch the pull-in being removed, which is
+    // the regression this test exists for.
+    const floor = C.distance * 0.10
+    expect(
+      s.maxPullIn,
+      `max pull-in ${s.maxPullIn.toFixed(2)}m, floor ${floor.toFixed(2)}m`,
+    ).toBeGreaterThan(floor)
   })
 
   it('the pull-in unwinds with the impulse instead of latching on', () => {
@@ -372,4 +408,231 @@ describe('vertigo shot: the CAR stays put while the world stretches', () => {
     expect(many).toBeCloseTo(cam.camera.fov, 6)
     expect(many).toBeGreaterThan(one)
   })
+})
+
+
+// ===========================================================================
+// THE PLAYER'S CAMERA CONTROLS
+//
+// Six numbers the player owns. The tests that matter here are not "does the
+// slider move" -- they are the three ways a settings system silently ruins a
+// game: a default that does not reproduce what shipped, a default that cannot
+// be got back to, and a setting somewhere in range that produces a frame you
+// cannot drive in.
+// ===========================================================================
+
+describe('camera settings: the defaults ARE the authored rig', () => {
+  it('every default reproduces the tuned constant it stands for', () => {
+    // If this drifts, a player who never opens the menu is quietly playing a
+    // different game from the one that was signed off.
+    expect(DEFAULT_CAMERA_SETTINGS.distance).toBe(C.distance)
+    expect(DEFAULT_CAMERA_SETTINGS.height).toBe(C.height)
+    expect(DEFAULT_CAMERA_SETTINGS.shake).toBe(1)
+    expect(DEFAULT_CAMERA_SETTINGS.boost).toBe(1)
+    // The angle is the authored anchor, rounded onto the control's grid. The
+    // rounding is allowed; drifting off the anchor is not.
+    // The rounding onto the grid is worth 0.0009 of frame height, which is
+    // 0.8 of a pixel on the 944-high reference frame the 0.812 was measured
+    // from. Stated as a bound rather than a decimal place so the cost is
+    // visible in the test rather than hidden in a tolerance argument.
+    expect(Math.abs(angleToAnchorY(DEFAULT_CAMERA_SETTINGS.angle) - C.anchorY))
+      .toBeLessThan(0.002)
+    // The invariant is that the default IS the authored angle put on the
+    // grid -- not that the two are within some tolerance of each other.
+    expect(Math.round(anchorYToAngle(C.anchorY) * 2) / 2)
+      .toBe(DEFAULT_CAMERA_SETTINGS.angle)
+  })
+
+  it('the tracking default reproduces the authored damping exactly', () => {
+    // The dial maps one number onto three constants through a piecewise lerp
+    // anchored on the authored point. "Anchored" has to mean EXACTLY, not
+    // nearly: a rig that is 4% off the signed-off damping at the default is a
+    // regression nobody would ever think to look for.
+    const cam = new ChaseCamera(16 / 9)
+    const rig = (cam as unknown as { rig: Record<string, number> }).rig
+    expect(rig.trailDamp).toBeCloseTo(C.trailDamp, 12)
+    expect(rig.posHalfLife).toBeCloseTo(C.posHalfLife, 12)
+    expect(rig.yawHalfLife).toBeCloseTo(C.yawHalfLife, 12)
+  })
+
+  it('every default sits on the step grid, so it can be got back to', () => {
+    // A default that is not reachable by stepping is a trap: nudge it once and
+    // the shipped frame is gone for good. This is exactly how the angle
+    // default was caught at 20.55 against a grid of whole degrees.
+    for (const key of Object.keys(CAMERA_LIMITS) as (keyof CameraSettings)[]) {
+      const [lo, hi, step] = CAMERA_LIMITS[key]
+      const v = DEFAULT_CAMERA_SETTINGS[key]
+      expect(v, `${key} default below its minimum`).toBeGreaterThanOrEqual(lo)
+      expect(v, `${key} default above its maximum`).toBeLessThanOrEqual(hi)
+      const n = (v - lo) / step
+      expect(
+        Math.abs(n - Math.round(n)),
+        `${key} default ${v} is off its ${step} grid from ${lo}`,
+      ).toBeLessThan(1e-9)
+    }
+  })
+})
+
+describe('camera settings: junk in cannot produce a broken frame', () => {
+  it('clamps, fills and ignores rubbish', () => {
+    const s = normaliseCameraSettings({
+      distance: 1e9, height: -40, angle: Number.NaN,
+      shake: 'loud', tracking: undefined, boost: Number.POSITIVE_INFINITY,
+    } as unknown as Partial<CameraSettings>)
+    expect(s.distance).toBe(CAMERA_LIMITS.distance[1])
+    expect(s.height).toBe(CAMERA_LIMITS.height[0])
+    // NaN, a string and undefined all fall back rather than propagating: a
+    // NaN reaching the rig blanks the frame, and it would arrive from a
+    // hand-edited localStorage blob, not from the UI.
+    expect(s.angle).toBe(DEFAULT_CAMERA_SETTINGS.angle)
+    expect(s.shake).toBe(DEFAULT_CAMERA_SETTINGS.shake)
+    expect(s.tracking).toBe(DEFAULT_CAMERA_SETTINGS.tracking)
+    // Infinity is JUNK, not "very large": it falls back to the default rather
+    // than clamping to the maximum, because a stored Infinity means the blob
+    // is corrupt and guessing that the player wanted the loudest possible
+    // setting is the wrong guess to make.
+    expect(s.boost).toBe(DEFAULT_CAMERA_SETTINGS.boost)
+    expect(normaliseCameraSettings(null)).toEqual({ ...DEFAULT_CAMERA_SETTINGS })
+  })
+})
+
+describe('camera settings: the dials do what they say', () => {
+  const fake = (speed: number): RacerState => ({
+    pos: { x: 0, y: 1, z: 0 }, vel: { x: 0, y: 0, z: speed }, yaw: 0, yawRate: 0,
+    driftSide: 0, driftInward: 0, boostMag: 0, boostSource: 'none',
+    fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 },
+  } as unknown as RacerState)
+
+  it('the boost dial scales the shot, and 0 switches it off entirely', () => {
+    const level = (dial: number): number => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings({ boost: dial })
+      const r = fake(60)
+      cam.reset(r)
+      cam.update(r, RDT, 60, false, false)
+      r.boostMag = T.boost.padMag
+      r.boostSource = 'pad'
+      cam.update(r, RDT, 60, false, false)
+      return cam.dollyLevel
+    }
+    const full = level(1)
+    expect(full).toBeGreaterThan(0)
+    expect(level(0.5), 'half the dial, half the punch').toBeCloseTo(full * 0.5, 6)
+    // Off must mean OFF: the same value feeds the camera pull-in, the FOV
+    // punch and the composite's warp, so a player who turns this down to stop
+    // feeling ill must not be left with two thirds of the effect.
+    expect(level(0), 'a zeroed dial fires nothing at all').toBe(0)
+  })
+
+  it('the shake dial scales the knock, and 0 switches it off', () => {
+    const peak = (dial: number): number => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings({ shake: dial })
+      const r = fake(40)
+      cam.reset(r)
+      cam.addShake(0.8)
+      const before = cam.camera.position.clone()
+      cam.update(r, RDT, 40, false, false)
+      return cam.camera.position.distanceTo(before)
+    }
+    expect(peak(0), 'shake off means the camera does not move for a hit').toBeLessThan(1e-9)
+    expect(peak(2)).toBeGreaterThan(peak(1))
+  })
+
+  it('a bigger distance really does put the camera further back', () => {
+    const at = (d: number): number => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings({ distance: d })
+      const r = fake(0)
+      cam.reset(r)
+      return Math.hypot(
+        cam.camera.position.x - r.pos.x,
+        cam.camera.position.z - r.pos.z,
+      )
+    }
+    expect(at(7)).toBeCloseTo(7, 4)
+    expect(at(10.5)).toBeCloseTo(10.5, 4)
+    expect(at(16)).toBeCloseTo(16, 4)
+  })
+})
+
+describe('the car holds its mark at every setting', () => {
+  /**
+   * THE REGRESSION THIS EXISTS FOR.
+   *
+   * The screen anchor seeds its solve from `this.look`, which is heavily
+   * damped. At the loose end of the tracking dial that seed can lag far enough
+   * behind a long corner that the first aim points AWAY from the car -- the
+   * car then projects behind the camera, and the original code broke out of
+   * the solve and left the aim at that lagged value. Measured on a 120m corner
+   * at 60 m/s: the rig position was a healthy 12 degrees off dead astern while
+   * the LENS was 165 degrees out. A camera pointing backwards.
+   *
+   * It was unreachable before the tracking dial existed, which is why the
+   * original code called it unreachable. Adding a control that reaches it is
+   * exactly the kind of change that turns a documented impossibility into a
+   * shipped bug, so every stop on the dial is driven round a real corner here.
+   */
+  const corner = (set: Partial<CameraSettings>): { worst: number; offMark: number } => {
+    const cam = new ChaseCamera(16 / 9)
+    cam.applySettings(set)
+    const R = 120, V = 60
+    const frame = (t: number): RacerState => {
+      const a = V * t / R
+      return {
+        pos: { x: Math.cos(a) * R, y: 0, z: Math.sin(a) * R },
+        vel: { x: -Math.sin(a) * V, y: 0, z: Math.cos(a) * V },
+        fwd: { x: -Math.sin(a), y: 0, z: Math.cos(a) },
+        up: { x: 0, y: 1, z: 0 },
+        yaw: Math.atan2(-Math.sin(a), Math.cos(a)),
+        yawRate: -V / R, driftSide: 0, driftInward: 1, boostMag: 0,
+        boostSource: 'none',
+      } as unknown as RacerState
+    }
+    cam.reset(frame(0))
+    let worst = 0, offMark = 0
+    const want = { x: C.anchorX * 2 - 1, y: 1 - angleToAnchorY(
+      set.angle ?? DEFAULT_CAMERA_SETTINGS.angle,
+    ) * 2 }
+    for (let i = 1; i < 60 * 8; i++) {
+      const f = frame(i * RDT)
+      cam.update(f, RDT, 76, false, false)
+      if (i < 60) continue
+      cam.camera.updateMatrixWorld(true)
+      // Where the car actually lands, in NDC.
+      const v = new THREE.Vector3(f.pos.x, f.pos.y, f.pos.z).project(cam.camera)
+      offMark = Math.max(offMark, Math.hypot(v.x - want.x, v.y - want.y))
+      // And is it even in front of the lens?
+      worst = Math.max(worst, v.z > 1 ? 1 : 0)
+    }
+    return { worst, offMark }
+  }
+
+  for (const tracking of [0, 0.15, 0.30, 0.5, 0.75, 1]) {
+    it(`tracking ${tracking}: the car stays on its mark through a long corner`, () => {
+      const { worst, offMark } = corner({ tracking })
+      expect(worst, 'the car must never end up behind the camera').toBe(0)
+      // Half a percent of frame height -- about 4px on a 944-high frame --
+      // which is what the four-pass solve delivers at every setting in range.
+      // Before the lever-arm fix this was 0.071 at tracking 0.5, and before
+      // the re-seed fix the loose settings put the car off-screen entirely.
+      expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
+    })
+  }
+
+  for (const angle of [CAMERA_LIMITS.angle[0], 14, 24, CAMERA_LIMITS.angle[1]]) {
+    it(`angle ${angle} deg: the mark moves, and the car goes to it`, () => {
+      const { worst, offMark } = corner({ angle })
+      expect(worst).toBe(0)
+      expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
+    })
+  }
+
+  for (const distance of [CAMERA_LIMITS.distance[0], CAMERA_LIMITS.distance[1]]) {
+    it(`distance ${distance}m: the car still lands on its mark`, () => {
+      const { worst, offMark } = corner({ distance })
+      expect(worst).toBe(0)
+      expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
+    })
+  }
 })

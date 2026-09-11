@@ -1174,3 +1174,81 @@
 .sgset-row.is-locked .sgset-row__sub { opacity: 0.62; }
 .sgset-row.is-locked .sgset-sw { opacity: 0.4; cursor: not-allowed; }
 .sgset-row.is-locked .sgset-sw:hover { filter: none; }
+
+/* ---------------------------------------------------------------------------
+   Number stepper: minus / value / plus.
+
+   Built to read as a sibling of .sgset-seg -- same pill, same border, same
+   type -- because it IS one: a segment with two buttons and a readout where
+   the third would be. A control that looked like a different species would
+   imply it behaves like one.
+   --------------------------------------------------------------------------- */
+.sgset-step {
+  display: flex;
+  align-items: stretch;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 2px solid var(--sg-line);
+  background: rgba(10, 17, 32, 0.8);
+  flex: none;
+}
+.sgset-step__btn {
+  font-family: var(--sg-display);
+  font-size: clamp(11px, 1.5vmin, 15px);
+  line-height: 1;
+  border: 0;
+  background: transparent;
+  color: var(--sg-dim);
+  cursor: pointer;
+  touch-action: manipulation;
+  /* A thumb target, not a caret. 34px square is the smallest thing that is
+     reliably hittable on a phone held in landscape at speed. */
+  min-width: 34px;
+  min-height: 32px;
+  padding: 0 0.5em;
+  transition: background 110ms ease, color 110ms ease;
+}
+.sgset-step__btn--wide {
+  font-size: clamp(9px, 1.25vmin, 13px);
+  letter-spacing: 0.12em;
+  padding: 0.42em 1.1em;
+  border-radius: 999px;
+  border: 2px solid var(--sg-line);
+  background: rgba(10, 17, 32, 0.8);
+  text-transform: uppercase;
+  flex: none;
+}
+.sgset-step__btn:hover {
+  background: rgba(122, 190, 255, 0.14);
+  color: var(--sg-ink);
+}
+/* Matches .sgset-seg__btn: the dialog-wide focus ring is drawn inside the
+   pill rather than around it, so it does not bleed over the neighbour. */
+.sgset-step__btn:focus-visible {
+  outline-offset: -3px;
+}
+.sgset-step__btn[aria-disabled='true'] {
+  opacity: 0.32;
+  cursor: default;
+}
+.sgset-step__btn[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--sg-dim);
+}
+.sgset-step__val {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--sg-display);
+  font-size: clamp(10px, 1.3vmin, 13px);
+  letter-spacing: 0.06em;
+  color: var(--sg-ink);
+  /* Fixed width so the row does not jitter as digits change. "Locked" is the
+     longest string any of these formatters produce. */
+  min-width: 4.8em;
+  padding: 0 0.3em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid rgba(122, 190, 255, 0.22);
+  border-right: 1px solid rgba(122, 190, 255, 0.22);
+}

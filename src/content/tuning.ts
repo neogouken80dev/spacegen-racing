@@ -910,7 +910,7 @@ export const TUNING = {
   camera: {
     // Tuned against a 4.7m-long chassis. At 5.2m the camera sat inside the
     // rear bumper and the car filled the lower third of the frame.
-    distance: 9.0, height: 3.6, lookAhead: 13.0,
+    distance: 10.5, height: 3.6, lookAhead: 13.0,
     /**
      * A SET DISTANCE FROM THE VEHICLE.
      *
@@ -1069,7 +1069,7 @@ export const TUNING = {
      * a car whose target distance is 10.3m, so scaling the target moved it by
      * half of what the FOV asked for and the shot inverted into a zoom-out.
      */
-    dollyFov: 30,
+    dollyFov: 20,
     dollyPull: 0.85,
     /** Impulse decay half-life, seconds. Short: this is a punch, not a state. */
     dollyHalfLife: 0.26,
@@ -1103,7 +1103,7 @@ export const TUNING = {
      * stationary car has no background to stretch, and the rocket start would
      * otherwise fire one at the green light of every single race.
      */
-    boostDollyGain: 0.55,
+    boostDollyGain: 0.30,
     boostDollyMinRise: 0.05,
     boostDollyFullRise: 0.30,
     boostDollyCooldown: 1.10,
@@ -1127,7 +1127,22 @@ export const TUNING = {
      * the two ends of the stick are told apart from the picture alone.
      */
     driftFollowVelocity: 0.55,
-    shakeBoost: 0.22, shakeHit: 0.85,
+    /**
+     * IMPACT SHAKE, and the one that used to sit beside it.
+     *
+     * `shakeBoost: 0.22` lived here and had NO READER anywhere in the source.
+     * Nothing has ever shaken the camera on a boost. It is deleted rather than
+     * wired up, because it was actively misleading: the report that started
+     * this pass was "upon boost, the screen shakes too much", and a tuning key
+     * named shakeBoost is exactly the wrong place to go looking. What actually
+     * moves on a boost is the vertigo shot -- see boostDollyGain and dollyFov.
+     *
+     * `shakeHit` had no reader either: main.ts multiplied VfxSystem.hitFlash
+     * by a hard-coded 0.5. The 0.5 is what shipped and what is tuned, so the
+     * constant moves here to match the code rather than the code moving to
+     * match a 0.85 nobody has ever seen.
+     */
+    shakeHit: 0.5,
     lookBackYaw: Math.PI,
   },
 

@@ -27,6 +27,10 @@ import {
   type KeyAction,
 } from '../game/input'
 import type { QualityTier } from '../render/api'
+import {
+  CAMERA_LIMITS, DEFAULT_CAMERA_SETTINGS, normaliseCameraSettings,
+  type CameraSettings,
+} from '../game/camera'
 
 export interface SettingsPanel {
   root: HTMLElement
@@ -50,6 +54,14 @@ export interface SettingsPanel {
    * before the first race, then on every change.
    */
   onCalloutChange: (level: CalloutLevel) => void
+  /**
+   * The camera rig the player has dialled in. Same contract as the three
+   * above: fired once on construction so a stored rig is in force before the
+   * first frame of the first race, then on every change -- including while a
+   * race is paused behind the panel, which is the only way to actually judge
+   * a camera.
+   */
+  onCameraChange: (s: CameraSettings) => void
   dispose(): void
 }
 
@@ -92,6 +104,13 @@ interface Stored {
   screenFx?: FxLevel
   /** Same "absent means never chosen" rule as the two above. */
   callouts?: CalloutLevel
+  /**
+   * The player's camera rig. Partial and untrusted: a key that is missing,
+   * out of range or not a number falls back to the authored default, so an
+   * old or hand-edited blob can never produce an unusable frame. See
+   * normaliseCameraSettings.
+   */
+  camera?: Partial<CameraSettings>
 }
 
 const QUALITIES: { id: QualityTier; label: string }[] = [
@@ -619,6 +638,113 @@ function makeSeg<T extends string>(
 }
 
 // ---------------------------------------------------------------------------
+// A NUMBER ROW: minus, the value, plus.
+//
+// The panel's other controls are segments of 3-4 named steps, and there is a
+// long note above FX_LEVELS explaining why a slider was the wrong shape for
+// them. Every word of it still applies here -- a gamepad cannot move an
+// <input type=range> at all, because the pad reader works by moving DOM focus
+// and pressing A -- but a camera rig is genuinely a continuum where 9.0 and
+// 10.5 are both worth having, so named steps are not the answer either.
+//
+// A stepper is the shape that satisfies both. It is two ordinary buttons, so
+// it inherits pointer, keyboard and pad support through the exact code path
+// every other control here already uses. It shows the NUMBER, which matters
+// for a setting a player is going to want to tell somebody else about. And it
+// is two fat targets on a phone rather than a thumb-width drag between two
+// other rows.
+//
+// THE VALUE GRID IS ANCHORED ON THE MINIMUM, and every default sits on it --
+// asserted in camera.test.ts. A default that is not reachable by stepping is
+// a trap: nudge it once and the frame the game shipped with is gone for good.
+// ---------------------------------------------------------------------------
+
+interface StepperRow {
+  row: HTMLElement
+  set(v: number): void
+  readonly buttons: HTMLButtonElement[]
+}
+
+function makeStepper(
+  parent: Element,
+  label: string,
+  sub: string,
+  range: readonly [number, number, number],
+  fmt: (v: number) => string,
+  get: () => number,
+  onChange: (v: number) => void,
+): StepperRow {
+  const [lo, hi, step] = range
+  const row = el('div', 'sgset-row', parent)
+  const txt = el('div', 'sgset-row__txt', row)
+  el('div', 'sgset-row__k', txt, label)
+  if (sub) el('div', 'sgset-row__sub', txt, sub)
+
+  const grp = el('div', 'sgset-step', row)
+  grp.setAttribute('role', 'group')
+  grp.setAttribute('aria-label', label)
+
+  const bump = (dir: number): void => {
+    // Snap to the grid first, so a stored value from an older build with a
+    // different step lands somewhere reachable instead of carrying its offset
+    // forward forever.
+    const n = Math.round((get() - lo) / step)
+    const next = Math.min(hi, Math.max(lo, lo + (n + dir) * step))
+    // Floating point: 1.2 + 12 * 0.2 is 3.5999999999999996.
+    onChange(Math.round(next * 1e6) / 1e6)
+  }
+
+  const mk = (cls: string, text: string, dir: number, aria: string): HTMLButtonElement => {
+    const b = btn(`sgset-step__btn ${cls}`, grp, text)
+    b.setAttribute('aria-label', `${aria} ${label}`)
+    b.addEventListener('pointerup', (ev) => {
+      if ((ev as PointerEvent).button !== 0) return
+      bump(dir)
+    })
+    b.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        bump(dir)
+      }
+    })
+    return b
+  }
+
+  const minus = mk('sgset-step__btn--dn', '\u2212', -1, 'Decrease')
+  const out = el('div', 'sgset-step__val', grp)
+  out.setAttribute('role', 'status')
+  out.setAttribute('aria-live', 'off')
+  const plus = mk('sgset-step__btn--up', '+', 1, 'Increase')
+
+  // Arrow keys anywhere in the group, matching makeSeg's behaviour so the two
+  // control types feel identical under a keyboard.
+  grp.addEventListener('keydown', (ev) => {
+    const e = ev as KeyboardEvent
+    let d = 0
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') d = 1
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') d = -1
+    else return
+    e.preventDefault()
+    e.stopPropagation()
+    bump(d)
+  })
+
+  const set = (v: number): void => {
+    out.textContent = fmt(v)
+    // At an end stop the button is marked aria-disabled, which ALSO takes it
+    // out of focusables() -- so a pad walking the dialog steps over it rather
+    // than stopping on a control that cannot do anything. That is the same
+    // treatment makeSeg gives a disabled segment, deliberately.
+    minus.setAttribute('aria-disabled', v <= lo + 1e-9 ? 'true' : 'false')
+    plus.setAttribute('aria-disabled', v >= hi - 1e-9 ? 'true' : 'false')
+    grp.setAttribute('aria-valuenow', String(v))
+  }
+  return { row, set, buttons: [minus, plus] }
+}
+
+// ---------------------------------------------------------------------------
 // A labelled switch row.
 // ---------------------------------------------------------------------------
 
@@ -672,6 +798,7 @@ class SettingsPanelImpl implements SettingsPanel {
   onReducedMotionChange: (on: boolean) => void = (): void => {}
   onVfxIntensityChange: (glare: number, screen: number) => void = (): void => {}
   onCalloutChange: (level: CalloutLevel) => void = (): void => {}
+  onCameraChange: (s: CameraSettings) => void = (): void => {}
 
   private readonly host: SettingsHost
   private readonly container: HTMLElement
@@ -719,6 +846,8 @@ class SettingsPanelImpl implements SettingsPanel {
   private readonly swRM: SwitchRow
   private readonly swOne: SwitchRow
   private readonly swHap: SwitchRow
+  private readonly camSteppers: { key: keyof CameraSettings; st: StepperRow }[] = []
+  private readonly camReset: HTMLButtonElement
   private readonly tiltRows: HTMLElement[] = []
   private readonly bindSection: HTMLElement
   private readonly bindSlots: { action: KeyAction; slot: number; b: HTMLButtonElement }[] = []
@@ -732,6 +861,7 @@ class SettingsPanelImpl implements SettingsPanel {
   private readonly actTouchCells = new Map<string, HTMLElement>()
 
   // --- transient ----------------------------------------------------------
+  private camera: CameraSettings = { ...DEFAULT_CAMERA_SETTINGS }
   private capturing: (() => void) | null = null
   private capturingBtn: HTMLButtonElement | null = null
   private prevFocus: HTMLElement | null = null
@@ -752,6 +882,7 @@ class SettingsPanelImpl implements SettingsPanel {
       typeof this.stored.reducedMotion === 'boolean'
         ? this.stored.reducedMotion
         : host.getReducedMotion()
+    this.camera = normaliseCameraSettings(this.stored.camera)
     this.tiltInvert = this.stored.tiltInvert === true
     this.oneHandedSide = this.stored.oneHandedSide === 'left' ? 'left' : 'right'
     this.glareLevel = isFxLevel(this.stored.glare) ? this.stored.glare : null
@@ -923,6 +1054,100 @@ class SettingsPanelImpl implements SettingsPanel {
     this.tiltRows.push(calRow)
 
     // --- Accessibility ----------------------------------------------------
+    // ---- Camera ----------------------------------------------------------
+    //
+    // Six numbers rather than three presets. A chase camera is the one part
+    // of this game where "correct" is a matter of the player's eyes and the
+    // size of their screen: the same rig that reads as planted on a 27-inch
+    // monitor reads as claustrophobic on a phone held at arm's length, and
+    // the amount of camera movement a person can take before they feel ill
+    // varies more between two people than between two of these tracks.
+    //
+    // Every row states the units and the default, and the whole group has one
+    // reset, because the fastest way to ruin a camera is to change four things
+    // and not remember which.
+    const secCam = el('div', 'sgset-sec', grid)
+    el('div', 'sgset-sec__title', secCam, 'Camera')
+
+    const camRow = (
+      key: keyof CameraSettings,
+      label: string,
+      sub: string,
+      fmt: (v: number) => string,
+    ): void => {
+      const st = makeStepper(
+        secCam, label, sub, CAMERA_LIMITS[key], fmt,
+        () => this.camera[key],
+        (v) => {
+          this.camera = normaliseCameraSettings({ ...this.camera, [key]: v })
+          this.onCameraChange(this.camera)
+          this.persist()
+          this.sync()
+        },
+      )
+      this.camSteppers.push({ key, st })
+    }
+
+    camRow('distance', 'Distance', 'How far behind the car the camera sits.',
+      (v) => `${v.toFixed(1)} m`)
+    camRow('height', 'Height', 'How high above it.',
+      (v) => `${v.toFixed(1)} m`)
+    camRow(
+      'angle', 'Angle',
+      'How far down the camera looks. Lower puts the car nearer the middle of '
+      + 'the screen and shows more road ahead.',
+      (v) => `${v.toFixed(1)}°`,
+    )
+    camRow(
+      'tracking', 'Tracking buffer',
+      'How loosely the camera follows. Low is bolted to the car: steady, but '
+      + 'corners read as the world rotating. High swings wide and catches up.',
+      (v) => (v <= 0.001 ? 'Locked' : `${Math.round(v * 100)}%`),
+    )
+    camRow(
+      'shake', 'Impact shake',
+      'How hard the camera is knocked when you hit something. Boosting does '
+      + 'not use this — for that, see Boost effect below.',
+      (v) => (v <= 0.001 ? 'Off' : `${Math.round(v * 100)}%`),
+    )
+    camRow(
+      'boost', 'Boost effect',
+      'The lens punch and screen warp on a boost or drift release. Turn it '
+      + 'down if boosting is disorienting. Off keeps the speed and the '
+      + 'streaks and removes only the camera move.',
+      (v) => (v <= 0.001 ? 'Off' : `${Math.round(v * 100)}%`),
+    )
+
+    const resetRow = el('div', 'sgset-row', secCam)
+    const rTxt = el('div', 'sgset-row__txt', resetRow)
+    el('div', 'sgset-row__k', rTxt, 'Reset camera')
+    el('div', 'sgset-row__sub', rTxt, 'Back to the frame the game ships with.')
+    this.camReset = btn('sgset-step__btn sgset-step__btn--wide', resetRow, 'RESET')
+    this.camReset.setAttribute('aria-label', 'Reset camera to defaults')
+    const doReset = (): void => {
+      this.camera = { ...DEFAULT_CAMERA_SETTINGS }
+      this.onCameraChange(this.camera)
+      this.persist()
+      this.sync()
+    }
+    this.camReset.addEventListener('pointerup', (ev) => {
+      if ((ev as PointerEvent).button !== 0) return
+      doReset()
+    })
+    this.camReset.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        doReset()
+      }
+    })
+    el(
+      'div', 'sgset-note', secCam,
+      'Changes apply straight away. Open this during a race — pause, '
+      + 'adjust, and you can see the new frame behind the panel.',
+    )
+
     const secA11y = el('div', 'sgset-sec', grid)
     el('div', 'sgset-sec__title', secA11y, 'Accessibility')
 
@@ -1411,6 +1636,10 @@ class SettingsPanelImpl implements SettingsPanel {
       // start at the level the panel is showing rather than at Full.
       this.emitVfx()
       this.onCalloutChange(this.effCallouts())
+      // Always, even with nothing stored: the rig has to be in force before
+      // the first frame, and ChaseCamera's own default is the authored one
+      // only until someone has dialled something in.
+      this.onCameraChange(this.camera)
     })
   }
 
@@ -1422,6 +1651,14 @@ class SettingsPanelImpl implements SettingsPanel {
     const input = this.host.input
     const scheme = input.scheme
     const touch = input.isTouch
+
+    // --- camera -----------------------------------------------------------
+    for (const { key, st } of this.camSteppers) st.set(this.camera[key])
+    // The reset is dead while nothing has moved, so the row reads as state
+    // rather than as a button that might do something.
+    const stock = (Object.keys(DEFAULT_CAMERA_SETTINGS) as (keyof CameraSettings)[])
+      .every((k) => this.camera[k] === DEFAULT_CAMERA_SETTINGS[k])
+    this.camReset.setAttribute('aria-disabled', stock ? 'true' : 'false')
 
     // --- tabs -------------------------------------------------------------
     this.tabBtns.forEach((b, id) => {
@@ -1575,6 +1812,15 @@ class SettingsPanelImpl implements SettingsPanel {
     if (this.glareLevel !== null) this.stored.glare = this.glareLevel
     if (this.screenLevel !== null) this.stored.screenFx = this.screenLevel
     if (this.calloutLevel !== null) this.stored.callouts = this.calloutLevel
+    // Only the keys that differ from the authored rig. A player who has never
+    // opened the Camera section stores nothing for it, so a later retune of
+    // the defaults reaches them -- which is the whole point of shipping a
+    // default rather than a starting value.
+    const cam: Partial<CameraSettings> = {}
+    for (const k of Object.keys(DEFAULT_CAMERA_SETTINGS) as (keyof CameraSettings)[]) {
+      if (this.camera[k] !== DEFAULT_CAMERA_SETTINGS[k]) cam[k] = this.camera[k]
+    }
+    if (Object.keys(cam).length > 0) this.stored.camera = cam
     save(this.stored)
   }
 

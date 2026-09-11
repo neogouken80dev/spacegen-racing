@@ -10,6 +10,204 @@ const CER = T.ceremony
 const DEG = Math.PI / 180
 
 /**
+ * ===========================================================================
+ * THE PLAYER'S CAMERA, as six numbers they own.
+ *
+ * Everything in TUNING.camera is an AUTHORED default -- what the rig does for
+ * someone who never opens the menu. These six are the same rig with the dials
+ * brought out to the front panel, because "further back" and "less of that"
+ * are things only the person holding the controller can settle.
+ *
+ * They are per-INSTANCE, not global. The tuning table is read once, at
+ * construction, to seed them; after that every read in this file goes through
+ * `this.rig`. That is what lets a probe replay one lap through six different
+ * camera configurations in the same process, and what stops a settings change
+ * leaking into the garage turntable or the finish shot.
+ * ===========================================================================
+ */
+export interface CameraSettings {
+  /** Metres behind the car, along the ground. */
+  distance: number
+  /** Metres above it, along the camera's own up. */
+  height: number
+  /**
+   * THE ANGLE OF THE CAMERA ON THE CAR, in degrees below the view axis.
+   *
+   * With the screen anchor running, where the camera POINTS is solved rather
+   * than authored: the aim is whatever puts the car on its mark. So the
+   * honest way to expose "angle" is to move the mark, and state it as the
+   * angle it actually is -- how far below the centre of the frame the car
+   * sits. Small angle: the camera looks nearly straight at the car and the
+   * road ahead fills the frame. Large: it looks down over the car's roof.
+   *
+   * Measured against `fovRest` rather than the live FOV on purpose, so the
+   * car's mark does not walk up the screen when the lens opens under boost.
+   */
+  angle: number
+  /** Multiplier on impact shake amplitude. 0 removes it entirely. */
+  shake: number
+  /**
+   * HOW LOOSELY THE RIG FOLLOWS, 0 welded to 1 fully trailing.
+   *
+   * One dial over three constants -- the corner trail, the position damping
+   * and the yaw damping -- because they are not independently meaningful: a
+   * rig with a tight trail and loose yaw does not read as "half way", it
+   * reads as broken. The map is piecewise through 0.30, which reproduces the
+   * authored feel EXACTLY, so a player who never touches this gets the rig
+   * that was signed off, and moving it is a departure in a known direction.
+   */
+  tracking: number
+  /**
+   * Multiplier on the vertigo shot -- the FOV punch, the camera pull-in and
+   * the composite's warp, which all ride the same impulse. 0 is a rig that
+   * never moves on a boost.
+   */
+  boost: number
+}
+
+/** The resolved constants a settings object stands for. */
+interface Rig {
+  distance: number
+  height: number
+  anchorY: number
+  trailDamp: number
+  posHalfLife: number
+  yawHalfLife: number
+  shake: number
+  boost: number
+}
+
+/**
+ * The angle the AUTHORED anchor works out to, so the default of the exposed
+ * control is the shipped frame rather than a number chosen to look tidy.
+ * anchorY 0.812 against a 62-degree lens is 20.6 degrees below the axis.
+ */
+export function anchorYToAngle(anchorY: number): number {
+  return Math.atan((anchorY - 0.5) * 2 * Math.tan(C.fovRest * 0.5 * DEG)) / DEG
+}
+export function angleToAnchorY(angleDeg: number): number {
+  return 0.5 + 0.5 * Math.tan(angleDeg * DEG) / Math.tan(C.fovRest * 0.5 * DEG)
+}
+
+/**
+ * ON THE GRID, DELIBERATELY.
+ *
+ * Every default below is reachable by stepping: the control moves in whole
+ * units of CAMERA_LIMITS[k][2] from the minimum, and each of these sits on one
+ * of those stops. A default that is NOT on the grid is a trap -- nudge it once
+ * and you can never get back to the frame the game shipped with.
+ *
+ * The angle is the only one that needed rounding for this. The authored
+ * anchorY of 0.812 works out to 20.55 degrees below the axis; the control
+ * offers 20.5. On the 944px reference frame the difference moves the car by
+ * 0.7 of a pixel, which is an order of magnitude finer than the bounding box
+ * the 0.812 was measured from in the first place.
+ */
+export const DEFAULT_CAMERA_SETTINGS: Readonly<CameraSettings> = Object.freeze({
+  distance: C.distance,
+  height: C.height,
+  angle: Math.round(anchorYToAngle(C.anchorY) * 2) / 2,
+  shake: 1,
+  tracking: 0.30,
+  boost: 1,
+})
+
+/** The bounds the UI offers and any stored value is clamped into. */
+export const CAMERA_LIMITS: Readonly<Record<keyof CameraSettings, [number, number, number]>> =
+  Object.freeze({
+    // [min, max, step]
+    distance: [6, 18, 0.5],
+    height: [1.2, 9, 0.2],
+    // THE ANGLE CEILING IS NOT A TASTE JUDGEMENT, IT IS THE FRAME EDGE.
+    // The mark is measured against fovRest (62 deg vertical), so an angle of
+    // 31 puts the car exactly on the bottom edge and anything past it puts the
+    // car OFF SCREEN -- the solve dutifully aims at a point nobody can see.
+    // 28 leaves the car at 94% of the way down, which is as low as is drivable.
+    angle: [7, 28, 0.5],
+    shake: [0, 2, 0.1],
+    tracking: [0, 1, 0.05],
+    boost: [0, 1.5, 0.1],
+  })
+
+const clampSetting = (k: keyof CameraSettings, v: number): number => {
+  const [lo, hi] = CAMERA_LIMITS[k]
+  return !Number.isFinite(v) ? DEFAULT_CAMERA_SETTINGS[k] : clamp(v, lo, hi)
+}
+
+/** Clamp and fill an untrusted (stored, or hand-edited) settings object. */
+export function normaliseCameraSettings(s: Partial<CameraSettings> | null | undefined): CameraSettings {
+  const out = { ...DEFAULT_CAMERA_SETTINGS } as CameraSettings
+  if (!s) return out
+  for (const k of Object.keys(out) as (keyof CameraSettings)[]) {
+    const v = s[k]
+    if (typeof v === 'number') out[k] = clampSetting(k, v)
+  }
+  return out
+}
+
+/**
+ * Settings -> the constants the rig runs on.
+ *
+ * The tracking map is the only interesting part. It is a LERP THROUGH THE
+ * AUTHORED POINT rather than a straight line from welded to loose: at 0.30 it
+ * returns exactly `trailDamp 0.72, posHalfLife 0.12, yawHalfLife 0.20`, which
+ * is what shipped. A straight line would have put the default somewhere
+ * between two invented endpoints and quietly changed the game for every player
+ * who never opens the menu.
+ */
+/**
+ * THE LOOSE END OF THE TRACKING DIAL, and why it is not "no damping at all".
+ *
+ * The obvious endpoint is trailDamp 0 with long half-lives -- the rig before
+ * the corner trail was ever reined in. Measured on a clean 120m-radius corner
+ * at 60 m/s (tools/_circ.ts), that endpoint is not merely floaty, it is
+ * BROKEN: the camera swings past the car's own nose and the reported swing
+ * folds back through 180 degrees, so the dial stops being monotonic -- 1.00
+ * read calmer than 0.75.
+ *
+ * These three are the loosest endpoint that stays monotonic over the whole
+ * range. Steady-state swing off dead astern, same corner:
+ *
+ *   tracking  0.00   2.04 deg     (welded)
+ *             0.15   5.03
+ *             0.30   7.91         <- the authored feel, exactly
+ *             0.50  10.24
+ *             0.75  12.72
+ *             1.00  13.95
+ *
+ * and the lens now agrees with the rig to within 0.2 deg at every stop, which
+ * it did not before the anchor learned to re-seed -- see apply().
+ */
+/** Newton passes in the screen-anchor solve. See apply() for the measurements. */
+const ANCHOR_PASSES = 4
+
+const LOOSE_TRAIL = 0.20
+const LOOSE_POS = 0.30
+const LOOSE_YAW = 0.42
+
+function resolveRig(s: CameraSettings): Rig {
+  const t = clamp01(s.tracking)
+  const MID = 0.30
+  // welded <- authored -> loose, on each of the three constants
+  const lerp3 = (weld: number, auth: number, loose: number): number => (
+    t <= MID
+      ? weld + (auth - weld) * (t / MID)
+      : auth + (loose - auth) * ((t - MID) / (1 - MID))
+  )
+  return {
+    distance: s.distance,
+    height: s.height,
+    anchorY: angleToAnchorY(s.angle),
+    // 1 is rigidly behind the car; 0 is the full corner swing.
+    trailDamp: lerp3(1, C.trailDamp, LOOSE_TRAIL),
+    posHalfLife: lerp3(0.035, C.posHalfLife, LOOSE_POS),
+    yawHalfLife: lerp3(0.055, C.yawHalfLife, LOOSE_YAW),
+    shake: s.shake,
+    boost: s.boost,
+  }
+}
+
+/**
  * Chase camera. FOV is the primary speed-sensation lever and costs nothing,
  * so it does most of the work here: 62 degrees at rest widening to 86 under
  * full boost, plus positional lag so the vehicle leads the frame in corners.
@@ -24,6 +222,9 @@ export class ChaseCamera {
   private roll = 0
   private driftYaw = 0
   private shake = 0
+  /** The player's six numbers, and the constants they resolve to. */
+  private settingsValue: CameraSettings = { ...DEFAULT_CAMERA_SETTINGS }
+  private rig: Rig = resolveRig(DEFAULT_CAMERA_SETTINGS)
   private shakeSeed = Math.random() * 1000
   /** Drift-release dolly-zoom impulse, 0-1, decaying. */
   private dolly = 0
@@ -134,8 +335,8 @@ export class ChaseCamera {
     if (this.gravity) {
       this._up.set(r.up.x, r.up.y, r.up.z).normalize()
       this.orient(r)
-      this.pos.copy(this._fwd).multiplyScalar(-C.distance)
-        .addScaledVector(this._up, C.height).add(this._anchor)
+      this.pos.copy(this._fwd).multiplyScalar(-this.rig.distance)
+        .addScaledVector(this._up, this.rig.height).add(this._anchor)
       this.look.copy(this._fwd).multiplyScalar(C.lookAhead)
         .addScaledVector(this._up, 1.6).add(this._anchor)
       this.apply()
@@ -143,7 +344,11 @@ export class ChaseCamera {
     }
     this._up.set(0, 1, 0)
     const fx = Math.sin(r.yaw), fz = Math.cos(r.yaw)
-    this.pos.set(r.pos.x - fx * C.distance, r.pos.y + C.height, r.pos.z - fz * C.distance)
+    this.pos.set(
+      r.pos.x - fx * this.rig.distance,
+      r.pos.y + this.rig.height,
+      r.pos.z - fz * this.rig.distance,
+    )
     this.look.set(r.pos.x + fx * C.lookAhead, r.pos.y + 1.6, r.pos.z + fz * C.lookAhead)
     this.apply()
   }
@@ -188,7 +393,7 @@ export class ChaseCamera {
     // vector. Nudge it off the axis: both ways round are equally long, this
     // just picks one.
     if (this._fwd.dot(this._tmp) < -0.9999) this._tmp.applyAxisAngle(this._up, 1e-3)
-    this._fwd.lerp(this._tmp, 1 - Math.pow(2, -dt / C.yawHalfLife))
+    this._fwd.lerp(this._tmp, 1 - Math.pow(2, -dt / this.rig.yawHalfLife))
     this._fwd.addScaledVector(this._up, -this._fwd.dot(this._up))
     if (this._fwd.lengthSq() < 1e-8) this._fwd.copy(this._tmp)
     this._fwd.normalize()
@@ -221,16 +426,43 @@ export class ChaseCamera {
     this._up.applyAxisAngle(this._tmp, Math.acos(d) * f).normalize()
   }
 
+  /** The player's camera settings. Assigning re-resolves the rig immediately. */
+  get settings(): Readonly<CameraSettings> { return this.settingsValue }
+
+  /**
+   * Apply a settings change. Takes effect on the NEXT frame rather than
+   * snapping: every constant it touches is either a target the rig eases
+   * toward (distance, height) or a damping rate, so a player dragging the
+   * distance while parked in the pause menu sees the camera glide out rather
+   * than cut. The one exception is the anchor, which is solved fresh each
+   * frame and therefore does move at once -- correctly, because the car's
+   * mark is a position and not a velocity.
+   */
+  applySettings(s: Partial<CameraSettings>): void {
+    this.settingsValue = normaliseCameraSettings({ ...this.settingsValue, ...s })
+    this.rig = resolveRig(this.settingsValue)
+  }
+
   addShake(amount: number): void {
-    this.shake = Math.min(1.4, this.shake + amount)
+    // Scaled here rather than at the call site so every source -- impacts now,
+    // anything added later -- goes through the player's dial exactly once.
+    this.shake = Math.min(1.4, this.shake + amount * this.rig.shake)
   }
 
   /**
    * Fire the vertigo shot. `amount` is 0-1; the strongest impulse wins rather
    * than accumulating, so chaining drifts cannot ratchet the frame open.
+   *
+   * THE PLAYER'S BOOST DIAL IS APPLIED HERE AND ONLY HERE. Three separate
+   * things ride `this.dolly` -- the FOV punch (via `C.dollyFov * this.dolly`
+   * in update), the camera pull-in (apply), and the composite's warp (which
+   * reads `dollyLevel`) -- so scaling the impulse at the single point it
+   * enters the rig scales all three, in step, with no chance of one of them
+   * being missed. That is the same reason reduced motion zeroes this value
+   * rather than suppressing three effects.
    */
   addDolly(amount: number): void {
-    this.dolly = Math.max(this.dolly, Math.min(1, amount))
+    this.dolly = Math.max(this.dolly, clamp01(amount * this.rig.boost))
   }
 
   /**
@@ -273,7 +505,7 @@ export class ChaseCamera {
         ? signedAngleAround(r.fwd, r.vel, r.up)
         : angleDelta(r.yaw, Math.atan2(r.vel.x, r.vel.z))) * C.driftFollowVelocity
       : 0
-    this.driftYaw = damp(this.driftYaw, wantDriftYaw, C.yawHalfLife, dt)
+    this.driftYaw = damp(this.driftYaw, wantDriftYaw, this.rig.yawHalfLife, dt)
     const aimYaw = r.yaw + this.driftYaw
 
     // Yaw trails the vehicle so corners read as rotation rather than a snap.
@@ -281,7 +513,7 @@ export class ChaseCamera {
     // Unwrap so the camera never spins the long way around.
     while (targetYaw - this.yaw > Math.PI) targetYaw -= Math.PI * 2
     while (targetYaw - this.yaw < -Math.PI) targetYaw += Math.PI * 2
-    this.yaw = damp(this.yaw, targetYaw, C.yawHalfLife, dt)
+    this.yaw = damp(this.yaw, targetYaw, this.rig.yawHalfLife, dt)
 
     // FOV, and the dolly impulse, BEFORE the camera is placed. The pull-in in
     // apply() needs both FOVs for this frame, and the impulse has to be
@@ -342,8 +574,8 @@ export class ChaseCamera {
     // The dolly does NOT belong here: this is the distance the rig is AIMING
     // for, and even with the lock below it is not the distance the camera is
     // at on the frame the shot fires -- see apply().
-    const dist = C.distance * (1 + speed01 * C.distanceSpeedGain)
-    const height = C.height * (1 + speed01 * C.heightSpeedGain)
+    const dist = this.rig.distance * (1 + speed01 * C.distanceSpeedGain)
+    const height = this.rig.height * (1 + speed01 * C.heightSpeedGain)
 
     // Same rig, same numbers, taken along the racer's frame rather than along
     // the world axes: back along the heading, up along `_up`.
@@ -355,7 +587,7 @@ export class ChaseCamera {
     } else {
       this._desired.set(r.pos.x - fx * dist, r.pos.y + height, r.pos.z - fz * dist)
     }
-    const f = Math.pow(2, -dt / C.posHalfLife)
+    const f = Math.pow(2, -dt / this.rig.posHalfLife)
     this.pos.lerp(this._desired, 1 - f)
 
     // ---- THE DISTANCE LOCK -------------------------------------------------
@@ -403,7 +635,7 @@ export class ChaseCamera {
         // camera is rigidly behind the car and corners read as the world
         // rotating about a fixed axis; at 0 it is the full trail this
         // replaced. It is a look, not a correctness knob.
-        if (C.trailDamp > 0) {
+        if (this.rig.trailDamp > 0) {
           if (this.gravity) {
             this._target.copy(this._fwd).multiplyScalar(-dist)
           } else {
@@ -413,7 +645,7 @@ export class ChaseCamera {
           // on a gravity track strip the up component so both sides of the
           // lerp live in the same plane the length was solved in.
           this._target.addScaledVector(this._up, -this._target.dot(this._up))
-          this._tmp.lerp(this._target, C.trailDamp)
+          this._tmp.lerp(this._target, this.rig.trailDamp)
           // The lerp shortens the chord between two equal-length vectors, so
           // re-normalise to the distance the lock just solved for.
           const L = this._tmp.length()
@@ -447,7 +679,7 @@ export class ChaseCamera {
         r.pos.z + Math.cos(aimYaw) * C.lookAhead,
       )
     }
-    this.look.lerp(this._target, 1 - Math.pow(2, -dt / (C.posHalfLife * 1.4)))
+    this.look.lerp(this._target, 1 - Math.pow(2, -dt / (this.rig.posHalfLife * 1.4)))
 
     this._anchor.set(r.pos.x, r.pos.y, r.pos.z)
 
@@ -819,31 +1051,87 @@ export class ChaseCamera {
      * computed before the roll can cancel it.
      *
      * So: aim, roll, project the car, measure the error in NDC, correct the
-     * aim by it, twice. The second pass is not belt and braces -- the first
-     * correction changes the basis the second is measured in. Residual after
-     * two passes is under a thousandth of a frame, asserted in camera.test.ts.
+     * aim by it, repeat. Each pass is not belt and braces -- the previous
+     * correction changes the basis the next one is measured in.
+     *
+     * HOW MANY PASSES, measured rather than picked (tools/_it.ts, a 120m
+     * corner at 60 m/s, worst NDC error over 8 seconds):
+     *
+     *            authored rig   angle 28 (the frame edge)
+     *   2 passes    0.00573            0.02694
+     *   3 passes    0.00117            0.01101
+     *   4 passes    0.00024            0.00462
+     *   5 passes    0.00005            0.00193
+     *
+     * Convergence is geometric at about 5x a pass -- which it only became once
+     * the lever arm below was fixed; before that it was ~2x and four passes
+     * would have bought almost nothing. 4 puts every setting in the range
+     * under half a percent of frame height, about 4px on a 944-high frame, and
+     * costs one lookAt and one project per frame against a full scene render.
      */
     if (C.anchorStrength > 0) {
       const tx = C.anchorX * 2 - 1
-      const ty = 1 - C.anchorY * 2
+      const ty = 1 - this.rig.anchorY * 2
       this._aim.copy(this.look)
-      for (let i = 0; i < 2; i++) {
+      let reseeded = false
+      for (let i = 0; i < ANCHOR_PASSES; i++) {
         cam.up.copy(this._up)
         cam.lookAt(this._aim)
         if (!reduceMotion) cam.rotateZ(this.roll)
         cam.updateMatrixWorld(true)
         this._ndc.copy(this._anchor).project(cam)
-        // Behind the camera: `project` mirrors the point through the origin
-        // and the correction would drive the aim the wrong way. Unreachable
-        // with a 9m rig behind the car, and a respawn or a cine cut can put it
-        // there for one frame.
-        if (this._ndc.z > 1) break
-        const d = cam.position.distanceTo(this._anchor)
+        // BEHIND THE CAMERA. `project` mirrors the point through the origin,
+        // so the correction below would drive the aim the wrong way.
+        //
+        // The seed for the solve is `this.look`, which is heavily damped, and
+        // on a long corner with a loose tracking setting it can lag far enough
+        // that the first aim points away from the car entirely. The original
+        // spelling BROKE out of the loop here, leaving the aim at that lagged
+        // value -- a camera pointing backwards, which measured as a 165-degree
+        // error between the lens and the nose while the rig POSITION was a
+        // perfectly healthy 12 degrees off astern.
+        //
+        // Looking straight at the car cannot be behind the camera, so that is
+        // the seed to fall back to; the solve then converges from dead centre.
+        // Once only, so a genuinely degenerate frame still terminates.
+        if (this._ndc.z > 1) {
+          if (reseeded) break
+          reseeded = true
+          this._aim.copy(this._anchor)
+          continue
+        }
+        // THE LEVER ARM IS THE AIM'S, NOT THE CAR'S.
+        //
+        // The NDC error converts to an ANGLE the camera has to turn through:
+        // (ndc - target) * tanY is that angle in tan units. Turning the camera
+        // by it means moving the aim point sideways by angle * (how far the
+        // AIM is from the camera) -- and the aim sits on the look-ahead point,
+        // ~13m beyond the car, so it is roughly twice as far away as the car
+        // is.
+        //
+        // This used to use the distance to the CAR for that lever arm, which
+        // under-rotates by exactly the ratio of the two distances: about half.
+        // The solve still converged, but geometrically at ~0.5 per pass rather
+        // than in one step, so two passes left an eighth of the initial error
+        // instead of nothing. At the authored rig that residual was small
+        // enough to pass; at 6m, or at a 27-degree angle, the car sat up to
+        // 0.071 of a frame off its mark -- 67 pixels on a 944-high frame, and
+        // visibly drifting through every corner.
+        //
+        // Guarded because the aim can momentarily coincide with the camera on
+        // a re-seed; the car's distance is the right fallback there, being the
+        // only other length in the problem.
+        const dAim = cam.position.distanceTo(this._aim)
+        const lever = dAim > 0.05 ? dAim : cam.position.distanceTo(this._anchor)
         const tanY = Math.tan(cam.fov * 0.5 * Math.PI / 180)
         cam.matrixWorld.extractBasis(this._bR, this._bU, this._bF)
         // Car too far right -> look further right -> the car moves left.
-        this._aim.addScaledVector(this._bR, (this._ndc.x - tx) * tanY * cam.aspect * d * C.anchorStrength)
-        this._aim.addScaledVector(this._bU, (this._ndc.y - ty) * tanY * d * C.anchorStrength)
+        this._aim.addScaledVector(
+          this._bR, (this._ndc.x - tx) * tanY * cam.aspect * lever * C.anchorStrength,
+        )
+        this._aim.addScaledVector(
+          this._bU, (this._ndc.y - ty) * tanY * lever * C.anchorStrength,
+        )
       }
     } else {
       this._aim.copy(this.look)

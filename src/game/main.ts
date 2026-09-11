@@ -186,6 +186,15 @@ export class Game {
       this.calloutLevel = level
       this.cheer.setLevel(level)
     }
+    // Live, mid-race. Every one of these is either a target the rig eases
+    // toward or a damping rate, so the camera glides to the new pose instead
+    // of cutting -- which is exactly what you want when the panel is open over
+    // a paused race and the player is watching the frame change as they step.
+    //
+    // Nothing caches it here: `chase` is built once in this constructor and
+    // only reset() per race, so the settings it is holding outlive every race
+    // in the session, and the panel re-emits them on the next boot.
+    this.settings.onCameraChange = (s) => { this.chase.applySettings(s) }
     this.settings.onClose = () => {
       this.tools.hidden = false
       if (this.pausedBySettings) { this.pausedBySettings = false; this.resume() }
@@ -778,7 +787,7 @@ export class Game {
       // vertigo punch are both answers to something the PLAYER did, and during
       // the ceremony the car is under AI.
       if (this.phase !== 'ceremony' && this.vfx && this.vfx.hitFlash > 0.4 && !this.reduceMotion) {
-        this.chase.addShake(this.vfx.hitFlash * 0.5)
+        this.chase.addShake(this.vfx.hitFlash * T.camera.shakeHit)
       }
       // Vertigo shot on a cashed-in drift. Consumed here, not in the camera:
       // the VFX pass owns the sim-frame guard, so the impulse fires exactly
