@@ -2257,23 +2257,35 @@ export const AETHERION_THEME: Theme = {
    */
   sky: {
     band: 'strata',
+    // A pale gold lift along the skyline under a violet sky -- the warm/cool
+    // split is most of what makes this planet read as ancient rather than
+    // merely dusty, and the band is where the warm half lives.
+    horizonColor: 0xffc98a,
+    horizonSpan: [0.050, 0.32],
+    horizonGain: 0.52,
     celestial: {
       gain: 1.0,
       ships: {
-        dir: [0.22, 0.38, -0.90],
-        spreadDeg: 34,
-        sizeDeg: 5.2,
+        // A full armada on the skyline. Nine hulls at a wider spread, sitting
+        // where the city's own towers cut across them -- which is what makes
+        // them read as parked over a place rather than pasted onto a sky.
+        dir: [0.26, 0.075, -0.96],
+        spreadDeg: 52,
+        sizeDeg: 6.0,
         color: 0x1d2434,
         lightColor: 0xffd9a8,
-        lightGain: 1.35,
-        count: 5,
+        lightGain: 1.5,
+        count: 9,
         driftDeg: 0.18,
       },
       // A single pale moon far off the armada, so the eye has somewhere to
       // rest and the ships have something to be scaled against.
       bodies: [{
-        dir: [-0.80, 0.44, 0.41],
-        sizeDeg: 3.1,
+        // ANTI-SOLAR: 23 degrees off the key it was both backlit and inside
+        // the glare. Opposite it the disc is 93% lit, and it sits clear of
+        // the fleet's quarter of the sky rather than on top of it.
+        dir: [0.944, 0.090, -0.318],
+        sizeDeg: 6.4,
         color: 0xbfc9dd,
         mottle: 0.38,
         shade: 0.88,

@@ -2069,8 +2069,13 @@ export const HOLLOWCHOIR_THEME: Theme = {
     celestial: {
       gain: 1.0,
       hole: {
-        dir: [0.66, 0.46, -0.60],
-        sizeDeg: 3.2,
+        // Bigger, and down on the skyline where the Breach actually frames it.
+        // The shadow eats contrast, so this was held high and small at first --
+        // but the thing it eats out here is empty vacuum, and putting it on the
+        // horizon is what makes the wreck look like it is falling INTO
+        // something rather than drifting near one.
+        dir: [0.74, 0.085, -0.67],
+        sizeDeg: 6.0,
         lensing: 1.15,
         discInner: 0xffe6b0,
         discOuter: 0xff4d1f,
@@ -2084,6 +2089,11 @@ export const HOLLOWCHOIR_THEME: Theme = {
     // the fog line -- which is what makes the tear read as an opening rather
     // than as one more dark surface.
     starHorizon: 0.035,
+    // The accretion disc IS this planet's horizon light. A faint ember band
+    // along the skyline says so everywhere the hole itself is not in frame.
+    horizonColor: 0xff6a2a,
+    horizonSpan: [0.030, 0.20],
+    horizonGain: 0.30,
   },
 
   /**

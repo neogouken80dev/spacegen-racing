@@ -908,6 +908,12 @@ export const CRYOSTATIC_THEME: Theme = {
     auroraLow: 0x36ffa2,
     auroraHigh: 0x3f6bff,
     auroraGain: 0.75,
+    // A cold band at the skyline, under the aurora rather than competing with
+    // it: the aurora owns the sky from 0.02 up, so this sits below it and
+    // reads as light scattering off the ice pan rather than as more curtain.
+    horizonColor: 0x7fc6ff,
+    horizonSpan: [0.035, 0.22],
+    horizonGain: 0.42,
     /**
      * A SHATTERED MOON, AND THE REASON THE AURORA IS THERE.
      *
@@ -927,23 +933,50 @@ export const CRYOSTATIC_THEME: Theme = {
         // aurora and a haze this pale, a realistic dirty-grey moon is a
         // smudge; the contrast has to come from somewhere and up is the only
         // direction left.
-        dir: [0.44, 0.70, -0.56],
-        sizeDeg: 7.6,
-        color: 0xf4f9ff,
-        mottle: 0.62,
+        // Down onto the skyline and much bigger: the moon that broke is the
+        // reason this planet is the way it is, and it was sitting 44 degrees
+        // up where a driver never looks.
+        // ANTI-SOLAR, and on this track that is worth more than composition:
+        // the moon used to sit 20 degrees off the key, inside its glare and
+        // lit from behind, and rendered as a ghost you had to be told was
+        // there. Opposite the key it is 95% lit -- a full moon over a
+        // blizzard, which is the one thing bright enough to survive this
+        // planet's fog.
+        dir: [-0.675, 0.075, 0.734],
+        sizeDeg: 17,
+        // Pulled DOWN off white. At 0xf4f9ff the bloom pass ate the mottling
+        // and the moon rendered as a blank disc; a moon that is merely much
+        // brighter than the fog still reads as the brightest thing on this
+        // planet, and keeps its maria.
+        color: 0xdde9f6,
+        mottle: 0.72,
         shade: 0.82,
         limb: 0.20,
       }],
       belt: {
         // The debris still lies in the plane the moon broke in, so the belt
-        // runs through the body rather than around the planet.
-        axis: [0.30, 0.62, 0.72],
-        tiltDeg: 4,
-        widthDeg: 1.9,
+        // runs through the body rather than around the planet -- and with the
+        // moon on the skyline the belt now rises out of it, which is the whole
+        // picture: the thing that shattered, and the trail still coming down.
+        /**
+         * SOLVED, not eyeballed: the band is the set of directions whose dot
+         * with this axis equals sin(tiltDeg), so "runs through the moon"
+         * means dot(axis, moonDir) == sin(3 deg) and nothing else. The old
+         * axis gave -0.096 against a half-width of 0.042 -- the belt missed
+         * the body by eight degrees and the frame showed a moon with no
+         * debris anywhere near it.
+         */
+        axis: [0.622, 0.513, 0.591],
+        tiltDeg: 3,
+        // Wider, denser and brighter than the first pass. The belt is drawn
+        // ADDITIVELY, so against a sky this pale it has to be substantial to
+        // register at all -- at 2.4 degrees and 0.30 density it was a handful
+        // of specks above the moon and nothing a player would notice.
+        widthDeg: 3.6,
         color: 0xdce9f7,
-        density: 0.16,
+        density: 0.55,
         driftDeg: 0.30,
-        gain: 0.75,
+        gain: 1.35,
       },
     },
   },

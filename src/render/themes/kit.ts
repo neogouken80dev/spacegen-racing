@@ -360,7 +360,7 @@ export interface SkyShips {
   /** Running-light colour and strength. */
   lightColor?: number
   lightGain?: number
-  /** How many hulls, 1..5. */
+  /** How many hulls, 1..9. */
   count?: number
   /** Degrees per second of station-keeping drift. Tiny. */
   driftDeg?: number
@@ -446,6 +446,23 @@ export interface SkyStyle {
    * capital ships, a black hole. Absent on a track that wants only weather.
    */
   celestial?: Celestial
+  /**
+   * THE HORIZON BAND — a stripe of colour sitting just above the eye line.
+   *
+   * The base gradient is fog at the horizon, `skyBottom` above it and
+   * `skyTop` at the zenith, which is a ramp. This is the stop that makes it a
+   * horizon: a band of its own hue, brightest low and gone a few degrees up.
+   *
+   * It is ADDED and weighted by the headroom left in the sky it lands on, so
+   * it lifts a dim horizon into a glow without blowing out a bright one.
+   * Defaults to a faint warm lift; set it per planet, because this is the
+   * single strongest lever on what time of day a track feels like.
+   */
+  horizonColor?: number
+  /** Where the band peaks and where it has gone, in d.y. Default [0.045, 0.30]. */
+  horizonSpan?: [number, number]
+  /** 0 disables it entirely and restores the two-stop ramp. Default 0.5. */
+  horizonGain?: number
 }
 
 /**

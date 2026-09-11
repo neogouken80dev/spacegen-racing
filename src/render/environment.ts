@@ -605,6 +605,24 @@ uniform float uStarGain;
 uniform float uStarHorizon;
 #endif
 
+/**
+ * THE GRADED HORIZON.
+ *
+ * The base gradient is two stops -- fog at the eye line, uBot just above it,
+ * uTop at the zenith -- and two stops over ninety degrees is a ramp, not a
+ * horizon. A real one has a BAND: a stripe of its own colour sitting a few
+ * degrees up, brightest near the ground and gone by the time the sky proper
+ * starts. That band is what gives the eye something to read distance against,
+ * and it is where every celestial body now sits.
+ *
+ * uHorizSpan.x is where the band peaks and .y how far up it survives, both in
+ * d.y. Held apart from the existing uBot blend so a theme can tint the
+ * horizon without moving the colour the whole lower sky grades through.
+ */
+uniform vec3 uHorizCol;
+uniform vec2 uHorizSpan;
+uniform float uHorizGain;
+
 /* ---------------------------------------------------------------- celestial
  * Everything below is drawn as a function of the VIEW DIRECTION. See the
  * Celestial block in themes/kit.ts for why it lives in this shader rather than
@@ -645,7 +663,14 @@ uniform vec4 uShipOpt;    // x count, y sin(size), z light gain, w drift
 uniform vec3 uShipCol;
 uniform vec3 uShipLight;
 #endif
-#ifdef SG_HOLE
+/* SG_LENS is in this guard as well as SG_HOLE. The lensing block below reads
+ * uHoleDir and uHoleOpt under its own define, so a build with SG_LENS and not
+ * SG_HOLE fails to compile on an undeclared identifier. The shipped material
+ * never produces that pair -- SG_LENS is only set inside the hole branch --
+ * but a tool that strips defines to A/B the layer does, and three.js reports a
+ * failed sky as a console line and keeps running, which is how a broken sky
+ * ships. Declare them for either. */
+#if defined(SG_HOLE) || defined(SG_LENS)
 uniform vec4 uHoleDir;    // xyz direction, w angular radius (radians)
 uniform vec4 uHoleOpt;    // x lensing, y disc outer (in radii), z gain, w unused
 uniform vec4 uHoleAxis;   // xyz disc plane normal, w unused
@@ -733,6 +758,27 @@ void main() {
   // ending on a hard line. Everything else is layered on top of that anchor.
   vec3 c = mix(uFog, uBot, smoothstep(0.0, 0.19, up));
   c = mix(c, uTop, pow(clamp((up - 0.07) / 0.93, 0.0, 1.0), 0.72));
+
+  /**
+   * THE HORIZON BAND, laid over the base ramp.
+   *
+   * Two smoothsteps: up from the eye line so it does not violate the horizon
+   * contract at d.y == 0, and out again by uHorizSpan.y. Squared on the way
+   * out so the falloff is gentle high up and the band has a soft top edge
+   * rather than a line.
+   *
+   * Added rather than mixed, and weighted by how DARK the sky already is
+   * there, so it lifts a dim horizon into a glow without blowing out a bright
+   * one -- the same headroom logic the glare budget in postfx uses, for the
+   * same reason.
+   */
+  {
+    float rise = smoothstep(-0.01, uHorizSpan.x, d.y);
+    float fall = 1.0 - smoothstep(uHorizSpan.x, uHorizSpan.y, d.y);
+    float band = rise * fall * fall;
+    float head = clamp(1.0 - dot(c, vec3(0.2126, 0.7152, 0.0722)) * 0.55, 0.25, 1.0);
+    c += uHorizCol * band * uHorizGain * head;
+  }
 
   // Below the eye line the sky stays pure fog, so looking down over a jump,
   // a chasm or the rim of the world can never reveal an uncovered band.
@@ -823,11 +869,30 @@ void main() {
    * at the point where the terrain shell ends, which is the exact seam the
    * horizon contract at the top of this shader exists to hide.
    *
-   * The sun exclusion is the same rule the starfield already follows: nothing
-   * survives inside the key's own scatter, because a moon crossing the sun is
-   * a compositing error, not an eclipse.
+   * The sun exclusion is NARROW, and the width is the whole point. It used to
+   * be pow(sd, 3.0), which is not an exclusion at all -- it is a hemisphere.
+   * At forty-five degrees off the key that term still took a third of the
+   * body away, so Cryostatic's moon rendered at a quarter strength and
+   * Rustfall's giant at two thirds, and both read as smudges of sky rather
+   * than as objects. Measured off the shipped frames: giant interior vs the
+   * sky beside it was 0xcc -> 0xb2, a nine percent separation.
+   *
+   * pow(sd, 24.0) tracks the key's ACTUAL glare instead -- the sun's own
+   * scatter here is pow(sd, 420) and pow(sd, 13) -- so it is gone by twenty
+   * degrees off and total within eight. A moon crossing the sun is still a
+   * compositing error and still suppressed; a moon in the same quarter of the
+   * sky is now simply a moon.
    */
-  float celFade = smoothstep(-0.02, 0.20, d.y) * (1.0 - 0.9 * pow(sd, 3.0)) * uCelGain;
+  /**
+   * The fade is SHORT on purpose. It used to reach full strength only 11
+   * degrees up, which meant anything placed where you actually look while
+   * driving -- just above the horizon -- was drawn at a third of its value.
+   * Now it is clear by about 3.5 degrees: below the eye line nothing is drawn
+   * at all, so the horizon contract is intact, but a body sitting ON the
+   * horizon is at full strength and gets occluded by terrain rather than by
+   * arithmetic, which is what sells the scale.
+   */
+  float celFade = smoothstep(-0.012, 0.062, d.y) * (1.0 - 0.92 * pow(sd, 24.0)) * uCelGain;
 #endif
 
 #ifdef SG_BODIES
@@ -836,9 +901,26 @@ void main() {
     float cosR = uBodyDir[i].w;
     float sinR = uBodyOpt[i].w;
     float cd = dot(d, B);
-    // Cheap reject first: most of the sky is not this body.
-    if (cd <= cosR - 0.002) continue;
-
+    /**
+     * THE REJECT GUARDS THE BODY, NOT THE LOOP BODY.
+     *
+     * This used to be 'if (cd <= cosR - 0.002) continue;', which skipped the
+     * whole iteration -- and the RING block lives in this same iteration.
+     * A ring orbits at 1.2 to 1.9 body radii, entirely OUTSIDE the disc, so
+     * every pixel it occupies took the continue and the ring was clipped to
+     * the planet it orbits: a faint arc across the disc and nothing beyond
+     * the limb. Both the geometric coverage check and a hand model of the
+     * same maths said the ring filled 23% of the frame, because both modelled
+     * the ring maths and neither modelled the early-out above it. The A/B --
+     * render, zero the ring's opacity, render again, difference the two --
+     * is what found it, by showing the change confined to the disc.
+     *
+     * So: scope the reject to the body's own shading and let the iteration
+     * run on to the ring. 'disc' is the body's coverage at this pixel and is
+     * 0 outside it, which is what the ring's occlusion test wants anyway.
+     */
+    float disc = 0.0;
+    if (cd > cosR - 0.002) {
     // Position on the disc, 0 at the centre and 1 at the limb.
     vec3 o = d - B * cd;
     float t = clamp(length(o) / max(sinR, 1e-5), 0.0, 1.0);
@@ -846,8 +928,17 @@ void main() {
     float u = dot(o, T) / max(sinR, 1e-5);
     float v = dot(o, U) / max(sinR, 1e-5);
 
-    // The sphere's own normal, reconstructed from the disc coordinate.
-    vec3 nrm = normalize(B * sqrt(max(0.0, 1.0 - t * t)) + T * u + U * v);
+    /**
+     * The sphere's own normal, reconstructed from the disc coordinate -- on
+     * the hemisphere FACING THE VIEWER, which is the half that is actually on
+     * screen. The minus sign matters and was wrong: with +B the normal at the
+     * disc centre pointed away down the view ray, so the shader lit the far
+     * side of the body. The visible result was a phase that ran backwards --
+     * a body placed near the key rendered full and bright, and one placed
+     * opposite the key, where a real full moon is, rendered dark. Placement
+     * was then being chosen to satisfy the bug.
+     */
+    vec3 nrm = normalize(-B * sqrt(max(0.0, 1.0 - t * t)) + T * u + U * v);
 
     vec3 bc = uBodyCol[i].rgb;
 #ifdef SG_RICH
@@ -881,7 +972,7 @@ void main() {
     // Antialias the limb over one disc-space pixel rather than a fixed width:
     // these bodies span anything from a quarter of a degree to thirty.
     float aa = fwidth(t) + 1e-4;
-    float disc = 1.0 - smoothstep(1.0 - aa * 1.5, 1.0, t);
+    disc = 1.0 - smoothstep(1.0 - aa * 1.5, 1.0, t);
     /**
      * HAZE AND VISIBILITY ARE SEPARATE THINGS HERE, and conflating them is
      * what made the first pass invisible.
@@ -893,8 +984,9 @@ void main() {
      * tidier and produced a gas giant the same colour as the sky behind it --
      * technically correct atmospheric perspective, and no picture at all.
      */
-    float keep = 0.45 + 0.55 * clamp(celFade, 0.0, 1.0);
+    float keep = 0.58 + 0.42 * clamp(celFade, 0.0, 1.0);
     c = mix(c, mix(uFog, col, keep), disc * clamp(celFade, 0.0, 1.0));
+    }
 
 #ifdef SG_RING
     if (i == 0) {
@@ -996,7 +1088,9 @@ void main() {
     vec3 C0 = normalize(uShipDir.xyz);
     vec3 FT, FU; frame(C0, FT, FU);
     int n = int(uShipOpt.x);
-    for (int i = 0; i < 5; i++) {
+    // Nine. A GLSL loop bound must be a constant, so this is the ceiling and
+    // uShipOpt.x is the theme's actual count.
+    for (int i = 0; i < 9; i++) {
       if (i >= n) break;
       float fi = float(i);
       float hx = h31(vec3(fi, 1.7, 4.3)) - 0.5;
@@ -1477,6 +1571,19 @@ export function buildEnvironment(
     uSunDir: { value: _sunDir.clone() },
     uTime: { value: 0 },
     uSunFade: { value: 1 },
+    // The horizon band. Always present -- it is part of the base gradient now,
+    // not an optional extra -- and a theme that wants the old two-stop ramp
+    // sets horizonGain to 0 rather than leaving a branch in the shader.
+    uHorizCol: {
+      value: new THREE.Color().setHex(theme.sky.horizonColor ?? def.skyBottom),
+    },
+    uHorizSpan: {
+      value: new THREE.Vector2(
+        theme.sky.horizonSpan?.[0] ?? 0.045,
+        theme.sky.horizonSpan?.[1] ?? 0.30,
+      ),
+    },
+    uHorizGain: { value: theme.sky.horizonGain ?? 0.5 },
   }
   if (theme.sky.band === 'aurora') {
     skyUniforms.uAurLow = { value: new THREE.Color().setHex(theme.sky.auroraLow ?? 0x3bffb0) }
@@ -1561,7 +1668,7 @@ export function buildEnvironment(
       }
       skyUniforms.uShipOpt = {
         value: new THREE.Vector4(
-          Math.min(5, Math.max(1, cel.ships.count ?? 3)),
+          Math.min(9, Math.max(1, cel.ships.count ?? 3)),
           Math.sin(cel.ships.sizeDeg * Math.PI / 180),
           cel.ships.lightGain ?? 1,
           (cel.ships.driftDeg ?? 0.25) * Math.PI / 180,

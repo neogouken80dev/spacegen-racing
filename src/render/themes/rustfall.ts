@@ -607,14 +607,29 @@ export const RUSTFALL_THEME: Theme = {
    */
   sky: {
     band: 'strata',
+    // A hot dust glow lying along the skyline: this planet's light is a low
+    // sun through an atmosphere full of grit, and the band is where that gets
+    // said. Warmer and redder than the sky above it.
+    horizonColor: 0xff7a2e,
+    horizonSpan: [0.040, 0.26],
+    horizonGain: 0.58,
     celestial: {
       gain: 0.92,
       bodies: [{
         // Deliberately DARKER and more saturated than the sky it hangs in.
         // At the sky's own value it vanished: a body reads by contrast, and
         // this planet's sky is a wall of orange.
-        dir: [-0.62, 0.21, 0.75],
-        sizeDeg: 16,
+        // ON THE HORIZON, and enormous. A body high in the sky is scenery you
+        // have to go looking for; a body sitting on the skyline is in the
+        // frame the whole lap, gets occluded by the yard's own gantries and
+        // cranes, and is read against them for scale.
+        // ANTI-SOLAR. The key on this track is up and to the left; a body
+        // in that half of the sky is backlit, and the honest render of a
+        // backlit planet is a crescent. Opposite the key it is 82% lit --
+        // still a visible terminator across the lower right, but a sphere
+        // rather than a sliver.
+        dir: [0.788, 0.055, -0.613],
+        sizeDeg: 26,
         color: 0x8f4f2c,
         bandColor: 0x4a2517,
         bands: 7,
@@ -622,17 +637,34 @@ export const RUSTFALL_THEME: Theme = {
         shade: 0.74,
         limb: 0.70,
         ring: {
-          inner: 1.45, outer: 2.55, color: 0xe8c9a4, opacity: 0.68,
-          // Tilted well off edge-on: a ring seen exactly side-on is a line,
-          // and the near half crossing in front of the disc is the read that
-          // makes it a ring rather than a halo.
-          axis: [0.22, 0.90, 0.37],
+          /**
+           * PULLED IN, because the ring has to fit the same frame the giant
+           * does. At 2.55 radii the ring's top sat 20 degrees up and its
+           * sides 33 degrees out, against a viewport that is +/-16 vertical
+           * and +/-28 horizontal at this FOV: the whole annulus was outside
+           * the picture, which is why the shipped frame had a banded planet
+           * and no ring at all. 1.85 puts the far edge at 23 degrees from
+           * centre, inside both.
+           */
+          inner: 1.18, outer: 1.85, color: 0xe8c9a4, opacity: 0.62,
+          /**
+           * OPENED TO 34 DEGREES, measured against the body direction rather
+           * than eyeballed. A ring's axis near world up is only "tilted" for
+           * a body high in the sky; with the giant moved down onto the
+           * skyline that same axis became perpendicular to the view and the
+           * ring collapsed to a line -- it was absent from the shipped frame
+           * entirely. asin(dot(axis, dir)) is the opening angle, and 34
+           * degrees is a readable ellipse with the near half still crossing
+           * in front of the disc.
+           */
+          axis: [0.402, 0.861, -0.312],
         },
       }],
       // The intake queue: rubble strung around the same plane as the ring,
       // reaching across the sky toward the yard.
       belt: {
-        axis: [0.22, 0.90, 0.37],
+        // Same plane as the ring, because it is the same queue.
+        axis: [0.402, 0.861, -0.312],
         tiltDeg: 6,
         widthDeg: 2.6,
         color: 0xb08a63,
@@ -643,9 +675,9 @@ export const RUSTFALL_THEME: Theme = {
       // Derelicts under tow, dark against the haze. Barely any running lights
       // -- these are dead hulls being walked down the well, not a fleet.
       ships: {
-        dir: [-0.30, 0.22, 0.93],
-        spreadDeg: 26,
-        sizeDeg: 2.2,
+        dir: [-0.34, 0.085, 0.94],
+        spreadDeg: 30,
+        sizeDeg: 2.6,
         color: 0x2a1c16,
         lightColor: 0xff9a4a,
         lightGain: 0.30,
