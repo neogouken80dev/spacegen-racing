@@ -442,7 +442,14 @@ class FrontEndImpl implements FrontEnd {
    */
   private readonly preview: GaragePreview
   private readonly statFills: HTMLElement[] = []
+  /** The yellow pilot segment sitting on the end of each chassis bar. */
+  private readonly statBonus: HTMLElement[] = []
+  /** The pilot's own figure, printed beside the chassis one. */
+  private readonly statBVals: HTMLElement[] = []
   private readonly statVals: HTMLElement[] = []
+  private detPerk!: HTMLElement
+  private detPerkName!: HTMLElement
+  private detPerkText!: HTMLElement
   private readonly detNote: HTMLElement
 
   private readonly trkName: HTMLElement
@@ -640,8 +647,15 @@ class FrontEndImpl implements FrontEnd {
       el('span', 'sg-stat__k', row, STAT_KEYS[i].label)
       const track = el('span', 'sg-stat__track', row)
       this.statFills.push(el('span', 'sg-stat__fill', track))
-      this.statVals.push(el('span', 'sg-stat__v', row, '0'))
+      // AFTER the fill in document order so it paints over the end of it.
+      this.statBonus.push(el('span', 'sg-stat__bonus', track))
+      const vwrap = el('span', 'sg-stat__v', row, '0')
+      this.statVals.push(vwrap)
+      this.statBVals.push(el('span', 'sg-stat__b', vwrap))
     }
+    this.detPerk = el('div', 'sg-detail__perk', detail)
+    this.detPerkName = el('b', '', this.detPerk)
+    this.detPerkText = el('span', '', this.detPerk)
     this.detNote = el('div', 'sg-detail__note', detail)
 
     // pilot column
@@ -1005,10 +1019,29 @@ class FrontEndImpl implements FrontEnd {
     this.detName.textContent = def.name
     this.detNick.textContent = '"' + def.nickname + '"'
     for (let i = 0; i < STAT_KEYS.length; i++) {
-      const v = def.stats[STAT_KEYS[i].k]
-      this.statFills[i].style.setProperty('--v', String(Math.max(0, Math.min(1, v / 10))))
-      this.statVals[i].textContent = String(v)
+      const key = STAT_KEYS[i].k
+      const v = def.stats[key]
+      const add = pilot.stats[key] ?? 0
+      // The chassis bar is unchanged: the pilot EXTENDS it rather than
+      // rescaling it, so a player comparing two chassis is comparing the same
+      // quantity whichever pilot happens to be selected.
+      const base = Math.max(0, Math.min(1, v / 10))
+      this.statFills[i].style.setProperty('--v', String(base))
+      // Clamped against the same 0..10 ceiling the sim clamps to, so the yellow
+      // can never draw past the end of the track on a roster-max stat.
+      const top = Math.max(0, Math.min(1, (v + add) / 10))
+      const seg = Math.max(0, top - base)
+      this.statBonus[i].hidden = add <= 0
+      this.statBonus[i].style.setProperty('--o', String(base))
+      // A visible floor, so +0.5 is a sliver rather than a sub-pixel nothing.
+      this.statBonus[i].style.setProperty('--b', String(seg > 0 ? Math.max(0.015, seg) : 0))
+      this.statVals[i].firstChild!.textContent = String(v)
+      this.statBVals[i].textContent = add > 0 ? '+' + add.toFixed(1) : ''
     }
+    // Four of the six pilots keep most of their value in an ability, which has
+    // no bar to extend. Said in words rather than given an invented gauge.
+    this.detPerkName.textContent = pilot.name
+    this.detPerkText.textContent = pilot.perk
     this.detNote.textContent =
       LOCO_NOTE[def.locomotion] + '  //  PILOT ' + pilot.name + ' — ' + pilot.read
     // One place for both halves of the selection. selectChassis and selectPilot

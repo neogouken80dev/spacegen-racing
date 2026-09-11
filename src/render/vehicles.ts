@@ -605,22 +605,145 @@ const TAU = Math.PI * 2
 
 interface RingSpec { r: number; tube: number; arc: number; rx: number; rz: number; y: number }
 
-const PILOT_RINGS: Record<string, RingSpec[]> = {
-  // Rookie: eager, tilted halo worn like a cap.
-  pip: [{ r: 0.30, tube: 0.042, arc: TAU, rx: 1.15, rz: 0.22, y: 0.24 }],
-  // Overclocked: an equatorial band knocked off axis by the vibration.
-  volt: [{ r: 0.44, tube: 0.036, arc: TAU, rx: 0.10, rz: 0.38, y: 0.02 }],
-  // Navigation intelligence: a perfect, level halo.
-  meridian: [{ r: 0.33, tube: 0.026, arc: TAU, rx: 0, rz: 0, y: 0.40 }],
-  // Scavenger: a broken ring, welded on crooked.
-  slag: [{ r: 0.41, tube: 0.055, arc: TAU * 0.62, rx: 0.30, rz: 0.55, y: 0.10 }],
-  // Caretaker: a wide, thin, serene halo.
-  halo9: [{ r: 0.54, tube: 0.020, arc: TAU, rx: 0, rz: 0, y: 0.46 }],
-  // Derelict: two crossed containment rings.
-  null: [
-    { r: 0.44, tube: 0.028, arc: TAU, rx: 0, rz: 0.95, y: 0.04 },
-    { r: 0.44, tube: 0.028, arc: TAU, rx: 0, rz: -0.95, y: 0.04 },
-  ],
+/**
+ * THE SIX HEADS.
+ *
+ * A pilot used to be a sphere plus a ring, and the ring was the whole of its
+ * identity. Now that a pilot carries stats, the head has to say WHICH pilot at
+ * a glance -- in the garage, and from the chase camera at 40px, where a torus
+ * of a slightly different radius says nothing at all.
+ *
+ * So each archetype gets a silhouette rather than a colour variation, and every
+ * one of them is built ABOVE THE EQUATOR. That is not styling: the pilot sits
+ * in a tub sunk into the deck, so anything below the equator is inside the car,
+ * and tests/clearance.test.ts asserts a pilot swap never moves a chassis's
+ * lowest vertex -- a chin spike would fail it on every chassis at once.
+ *
+ * Budgeted like the rest of the roster: these draw on eight cars at once, so
+ * each head is a handful of boxes and at most two tori, and the whole table is
+ * gated behind `det.d <= 1` exactly as the rings were.
+ */
+type HeadBuilder = (
+  P: Parts, accent: THREE.Color, shell: THREE.Color, r: number, det: Det,
+  ox: number, oy: number, oz: number,
+) => void
+
+/** A ring, laid flat then tilted -- the old PILOT_RINGS entry, kept as a helper. */
+function headRing(
+  P: Parts, col: THREE.Color, det: Det, ring: RingSpec,
+  ox: number, oy: number, oz: number, emissive = 0.45,
+): void {
+  const g = new THREE.TorusGeometry(ring.r, ring.tube, det.ring[0], det.ring[1], ring.arc)
+  g.applyMatrix4(place(0, 0, 0, Math.PI * 0.5, 0, 0))
+  P.add(g, col, emissive, place(ox, oy + ring.y, oz, ring.rx, 0, ring.rz))
+}
+
+const PILOT_HEADS: Record<string, HeadBuilder> = {
+  /**
+   * SOCKET -- the technician. A headlamp band and a stalk of tooling.
+   * Reads as "works on the car" rather than "drives it": the lamp is the one
+   * thing on any of these heads that points where the hands would be.
+   */
+  socket: (P, accent, shell, r, det, ox, oy, oz) => {
+    // Brow lamp, proud of the dome and canted down at the work.
+    P.box(accent, 0.9, r * 0.52, r * 0.20, r * 0.16, ox, oy + r * 0.62, oz + r * 0.80, -0.45)
+    // Tool stalk with a boxy head, off to one side so the silhouette is asymmetric.
+    P.box(shell, 0, r * 0.07, r * 0.62, r * 0.07, ox + r * 0.52, oy + r * 0.92, oz - r * 0.10, 0, 0, -0.34)
+    P.box(accent, 0.5, r * 0.20, r * 0.16, r * 0.18, ox + r * 0.74, oy + r * 1.28, oz - r * 0.10)
+    // Low collar band: the "serviced" look, and it ties the head to the tub.
+    headRing(P, accent, det, { r: r * 1.00, tube: r * 0.055, arc: TAU, rx: 0, rz: 0, y: -r * 0.34 }, ox, oy, oz, 0.3)
+  },
+
+  /**
+   * VANGUARD -- the battle frame. The V, and nothing that softens it.
+   *
+   * Two blades meeting at a crest above the brow. Built from two boxes rolled
+   * apart rather than one wide plate, because the notch BETWEEN them is what
+   * makes it a V at 40px; a solid triangle reads as a cap.
+   */
+  vanguard: (P, accent, shell, r, det, ox, oy, oz) => {
+    void det
+    for (const sx of [1, -1]) {
+      P.box(accent, 0.65, r * 0.10, r * 0.86, r * 0.13,
+        ox + sx * r * 0.30, oy + r * 0.92, oz + r * 0.42, -0.22, 0, sx * 0.46)
+    }
+    // The boss the two blades spring from, and a hard brow under it.
+    P.box(accent, 0.8, r * 0.16, r * 0.16, r * 0.16, ox, oy + r * 0.66, oz + r * 0.54)
+    P.box(shell, 0, r * 0.86, r * 0.13, r * 0.30, ox, oy + r * 0.40, oz + r * 0.62, -0.24)
+    // Jaw guard: heavy at the bottom so the whole head reads forward-leaning.
+    P.box(shell, 0, r * 0.62, r * 0.22, r * 0.24, ox, oy - r * 0.14, oz + r * 0.74, 0.30)
+  },
+
+  /**
+   * AEGIS -- the armoured escort. Plated, not decorated.
+   *
+   * A heavy brow, cheek slabs and a low centre crest. Everything is shell
+   * colour rather than accent: this is the one head whose read is MASS, and
+   * bright trim would make it look light.
+   */
+  aegis: (P, accent, shell, r, det, ox, oy, oz) => {
+    void det
+    P.box(shell, 0, r * 1.02, r * 0.26, r * 0.40, ox, oy + r * 0.52, oz + r * 0.50, -0.18)
+    P.boxPair(shell, 0, r * 0.22, r * 0.52, r * 0.34, ox + r * 0.84, oy + r * 0.02, oz + r * 0.30)
+    // Centre crest, front to back over the crown.
+    P.box(shell, 0, r * 0.14, r * 0.26, r * 1.20, ox, oy + r * 0.92, oz + r * 0.05)
+    // One narrow lit slit. Armour with a visor reads as a helmet; armour with
+    // a full face reads as a rock.
+    P.box(accent, 1, r * 0.70, r * 0.07, r * 0.08, ox, oy + r * 0.30, oz + r * 0.92, -0.10)
+  },
+
+  /**
+   * ZEPHYR -- the courier. The winged hat, swept back.
+   *
+   * Wings are set HIGH and angled back so the silhouette from astern -- the
+   * only angle the chase camera ever gives -- is a widening V. A wing that
+   * pointed sideways would vanish into the car's own width.
+   */
+  zephyr: (P, accent, shell, r, det, ox, oy, oz) => {
+    void shell
+    for (const sx of [1, -1]) {
+      // Three feathers per side, each longer and further back than the last.
+      for (let i = 0; i < 3; i++) {
+        const t = i / 2
+        P.box(accent, 0.4 + 0.2 * t, r * (0.34 + 0.18 * t), r * 0.05, r * 0.12,
+          ox + sx * r * (0.52 + 0.30 * t), oy + r * (0.66 + 0.10 * i), oz - r * (0.02 + 0.26 * t),
+          0, sx * (0.30 + 0.16 * t), sx * (0.34 + 0.16 * t))
+      }
+    }
+    // The cap band the wings are pinned to.
+    headRing(P, accent, det, { r: r * 0.72, tube: r * 0.030, arc: TAU, rx: 0, rz: 0, y: r * 0.56 }, ox, oy, oz, 0.5)
+  },
+
+  /**
+   * TRIAGE -- the field medic. The cross, and a soft shell around it.
+   *
+   * The cross sits on the BROW rather than the crown: on the crown it is only
+   * legible from above, which is the one angle nobody ever has.
+   */
+  triage: (P, accent, shell, r, det, ox, oy, oz) => {
+    P.box(accent, 1, r * 0.44, r * 0.12, r * 0.08, ox, oy + r * 0.56, oz + r * 0.84, -0.28)
+    P.box(accent, 1, r * 0.12, r * 0.44, r * 0.08, ox, oy + r * 0.56, oz + r * 0.84, -0.28)
+    // Soft padded brim, wider than the dome, the shape of a field helmet.
+    headRing(P, shell, det, { r: r * 0.94, tube: r * 0.10, arc: TAU, rx: 0, rz: 0, y: r * 0.22 }, ox, oy, oz, 0)
+    // Rear lamp so a medic is identifiable from behind at speed.
+    P.box(accent, 0.9, r * 0.26, r * 0.10, r * 0.08, ox, oy + r * 0.62, oz - r * 0.82, 0.30)
+  },
+
+  /**
+   * KOAN -- the meditation unit. A halo that does not touch the head.
+   *
+   * Floating clear above the crown is the whole idea, and it is also why there
+   * are two of them at slightly different radii: one ring reads as a part, two
+   * concentric rings read as a field. Nothing else on the head at all -- the
+   * emptiness is the character.
+   */
+  koan: (P, accent, shell, r, det, ox, oy, oz) => {
+    void shell
+    headRing(P, accent, det, { r: r * 0.62, tube: r * 0.028, arc: TAU, rx: 0, rz: 0, y: r * 1.16 }, ox, oy, oz, 0.9)
+    headRing(P, accent, det, { r: r * 0.86, tube: r * 0.016, arc: TAU, rx: 0, rz: 0, y: r * 1.04 }, ox, oy, oz, 0.7)
+    // A single vertical mote under the halo, like a held breath.
+    P.box(accent, 1, r * 0.05, r * 0.30, r * 0.05, ox, oy + r * 0.78, oz)
+  },
 }
 
 function pilotDef(pilotId: string): PilotDef {
@@ -641,16 +764,15 @@ function addPilotShell(P: Parts, p: PilotDef, r: number, det: Det, ox = 0, oy = 
       place(ox, oy - r * 0.92, oz))
   }
   if (det.d <= 1) {
-    for (const ring of PILOT_RINGS[p.id] ?? PILOT_RINGS.pip) {
-      const g = new THREE.TorusGeometry(ring.r, ring.tube, det.ring[0], det.ring[1], ring.arc)
-      // Torus is authored in the XY plane; lay it flat, then apply the tilt.
-      g.applyMatrix4(place(0, 0, 0, Math.PI * 0.5, 0, 0))
-      P.add(g, accent, 0.45, place(ox, oy + ring.y, oz, ring.rx, 0, ring.rz))
-    }
-    // Ear pods and a stub antenna: identity that survives being looked at from
-    // directly behind, which is where the chase camera lives all race.
+    // The archetype's own silhouette. Falls back to the first pilot's head
+    // rather than to nothing, so an unknown id draws a pilot instead of a bald
+    // sphere -- a saved selection from before the archetype pass hits this.
+    const head = PILOT_HEADS[p.id] ?? PILOT_HEADS[PILOTS[0].id]
+    head(P, accent, shell, r, det, ox, oy, oz)
+    // Ear pods stay on every head: they are what keeps a pilot readable from
+    // DIRECTLY astern, which is where the chase camera lives all race, and the
+    // six crests above are mostly front-and-side silhouette.
     P.boxPair(accent, 0.75, r * 0.17, r * 0.34, r * 0.30, ox + r * 0.90, oy + r * 0.30, oz)
-    P.box(accent, 0.55, r * 0.09, r * 0.36, r * 0.46, ox, oy + r * 1.00, oz - r * 0.30, -0.30)
   }
 }
 
@@ -1754,8 +1876,26 @@ function foldStatics(b: LodBuild, d: number): void {
 }
 
 function getBuild(chassisId: string, pilotId: string, d: 0 | 1 | 2 | 3): LodBuild {
-  // The pilot only changes the buffers once it is merged into the body (d >= 2).
-  const key = `${chassisId}|${d}|${d >= 2 ? pilotId : '-'}`
+  /**
+   * THE PILOT IS IN THE KEY AT EVERY DETAIL LEVEL, and it has to be.
+   *
+   * This used to read `d >= 2 ? pilotId : '-'`, on the stated theory that "the
+   * pilot only changes the buffers once it is merged into the body". That was
+   * wrong, and had been since the pilot rings were written: at d <= 1 the
+   * builders put `shell: pilotShellGeo(p, ...)` INSIDE this cached LodBuild, so
+   * excluding the pilot from the key meant every pilot after the first got the
+   * first one's head.
+   *
+   * It went unnoticed because the only thing that varied back then was a torus
+   * of a slightly different radius, and nothing in the repo compared two pilots
+   * side by side. The six archetype heads made it obvious in one contact sheet:
+   * all six rendered identically apart from the face colour.
+   *
+   * The cost is cache entries -- chassis x LOD x pilot rather than
+   * chassis x LOD -- and they are bounded, small, and built lazily, so only the
+   * combinations actually raced are ever paid for.
+   */
+  const key = `${chassisId}|${d}|${pilotId}`
   let b = buildCache.get(key)
   if (!b) {
     const def = CHASSIS_BY_ID[chassisId] ?? CHASSIS[0]

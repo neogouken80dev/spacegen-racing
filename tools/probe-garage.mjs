@@ -218,13 +218,13 @@ const pick = async (col, name) => {
   await waitFrames(2)
 }
 await pick('chassis', 'Vector-7')
-await pick('pilot', 'NULL')
+await pick('pilot', 'KOAN')
 await waitFrames(3)
 await shot('2-vector7-null')
 console.log('after swap:', JSON.stringify(await debug()))
 
 await pick('chassis', 'Bulwark')
-await pick('pilot', 'HALO-9')
+await pick('pilot', 'ZEPHYR')
 await waitFrames(3)
 await shot('3-bulwark-halo9')
 

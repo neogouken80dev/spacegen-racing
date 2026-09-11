@@ -16,7 +16,6 @@ import { getLocomotion, getDerived, CHASSIS_BY_ID } from '../src/content/chassis
 import { Race } from '../src/sim/race'
 import { RUSTFALL, TRACKS_BY_ID } from '../src/content/tracks'
 const AETHERION = TRACKS_BY_ID['aetherion']
-import { PILOTS } from '../src/content/pilots'
 import { STEER_SIGN } from '../src/sim/vehicle'
 import { angleDelta } from '../src/sim/math'
 import { TUNING } from '../src/content/tuning'

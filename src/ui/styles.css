@@ -2310,6 +2310,69 @@
   transition: transform 200ms cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 
+/*
+ * THE PILOT'S CONTRIBUTION, IN YELLOW, ON THE BAR IT ACTUALLY CHANGES.
+ *
+ * Positioned with `left` and `width` rather than a scaleX like the fill beneath
+ * it, because this segment has to START where the chassis bar ends. A transform
+ * would scale from the track's own origin and the two would overlap instead of
+ * stacking, which would read as "the pilot replaces part of your car" rather
+ * than "the pilot adds to it".
+ *
+ * Width is a floor of 1.5% so a +0.5 bonus is still a visible sliver rather
+ * than a sub-pixel nothing on a phone. A pilot that contributes nothing to a
+ * stat gets `--b: 0` and is hidden outright -- an empty yellow stub on every
+ * unaffected bar would be six lies per pilot.
+ */
+.sg-stat__bonus {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--o, 0) * 100%);
+  width: calc(var(--b, 0) * 100%);
+  background: linear-gradient(90deg, #ffc53d, #ffe14d 70%, #fff4b0);
+  box-shadow: 0 0 10px rgba(255, 205, 61, 0.55);
+  transition: left 200ms cubic-bezier(0.2, 0.9, 0.25, 1),
+    width 200ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.sg-stat__bonus[hidden] {
+  display: none;
+}
+
+/* The pilot's own number, alongside the chassis one, in the same yellow. */
+.sg-stat__b {
+  font-family: var(--sg-num);
+  font-size: clamp(8px, 1.2vmin, 11px);
+  color: #ffd84d;
+  font-variant-numeric: tabular-nums;
+  margin-left: 3px;
+}
+
+/*
+ * The perk line. Four of the six pilots keep most of their value in an ability
+ * rather than in stats, and an ability has no bar to extend -- so it is said in
+ * words, in the same yellow as the segments, directly under them. Inventing a
+ * seventh gauge for "ignores one impact every 20s" would have been a made-up
+ * quantity on a panel whose whole credibility is that its numbers are real.
+ */
+.sg-detail__perk {
+  margin-top: 6px;
+  font-size: clamp(9px, 1.3vmin, 12px);
+  line-height: 1.35;
+  color: #ffd84d;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.sg-detail__perk b {
+  font-family: var(--sg-display);
+  letter-spacing: 0.1em;
+  color: #fff0a8;
+  white-space: nowrap;
+}
+
 .sg-stat__v {
   font-family: var(--sg-num);
   font-size: clamp(10px, 1.5vmin, 14px);
