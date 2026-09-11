@@ -309,7 +309,22 @@ describe('the AI', () => {
     //           600 races on Rustfall every chassis stays inside 12-30%
     //           (vector7 10.2/14.2/14.3/14.3, mean 13.3%) and the lap mean
     //           moves 56.70s -> 56.71s.
-    expect(avg).toBeCloseTo(56.27, 2)
+    //   57.56s  the Star Hopper (ex-Filament) model scaled 1.5x and its box
+    //           with it: halfExtents 0.68/0.54/1.58 -> 1.02/0.81/2.37. SLOWER,
+    //           and by the largest step in this ledger, because this is the
+    //           one that moved x: bodyInset() is `x + 0.12`, so the square-on
+    //           wall clamp went 0.80m -> 1.14m and a third of a metre of
+    //           usable road came off every barrier for that chassis.
+    //           THE COST IS NOT PAID BY THE CHASSIS THAT CHANGED. Across four
+    //           seeds of 600 races the Star Hopper itself holds at 19.8% mean,
+    //           but Vector-7 falls 14.3% -> 10.7% and sits under the 12% floor
+    //           on every seed (11.0/10.2/10.7/10.7). The reading is traffic:
+    //           Vector-7 is the widest chassis in the roster and the one that
+    //           spends a quarter of the lap airborne, so it has the least room
+    //           to give when another car's footprint grows. Flagged for a
+    //           roster decision rather than silently compensated -- see
+    //           claude/spacegen-racing-filament-redesign.md.
+    expect(avg).toBeCloseTo(57.56, 2)
   })
 })
 

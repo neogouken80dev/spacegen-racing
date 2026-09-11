@@ -20,7 +20,11 @@ export const CHASSIS: ChassisDef[] = [
     colorPrimary: 0xe8452f, colorSecondary: 0x22252c, colorEmissive: 0xffb03a,
   },
   {
-    id: 'filament', name: 'Filament', nickname: 'the scalpel',
+    // The id stays `filament`. It is the persistence key for a saved chassis
+    // selection, the handle the tuning table, the balance CLI and the tests
+    // all address this entry by, and renaming it would invalidate every one of
+    // those for a change that is copy. `name` is what a player reads.
+    id: 'filament', name: 'Star Hopper', nickname: 'the scalpel',
     locomotion: 'hover',
     // grip 4 -> 7, and nothing else. At grip 4 the AI's corner-speed model
     // asked for more than the chassis could hold: Filament finished 6.11th on
@@ -50,7 +54,20 @@ export const CHASSIS: ChassisDef[] = [
     // carry a drift closer to a barrier than it could. That is the honest
     // consequence of the car being shorter, not a buff smuggled in as art --
     // but it is a sim change and the balance gate re-ran because of it.
-    halfExtents: { x: 0.68, y: 0.54, z: 1.58 },
+    // SCALED WITH THE MODEL, 1.5x. The mesh grew by half and the box has to
+    // follow it or the car collides at two thirds of its own size.
+    //
+    // This one DOES move x, unlike the shrink that preceded it: bodyInset() is
+    // exactly `x + 0.12`, so the square-on wall clamp goes 0.80m -> 1.14m and
+    // the Filament loses a third of a metre of usable road on every barrier in
+    // the game. That is the largest single sim change this chassis has taken
+    // and it is a straight nerf; see the balance note below.
+    //
+    // At 1.02 it is still the NARROWEST chassis in the roster (Solaire 1.15,
+    // Vector-7 1.85) and mid-length at 2.37 (Solaire 2.35, Dray-9 3.15). The
+    // scalpel is still a scalpel -- it was simply half the size of everything
+    // it was being compared against.
+    halfExtents: { x: 1.02, y: 0.81, z: 2.37 },
     colorPrimary: 0x1ad6ff, colorSecondary: 0x101821, colorEmissive: 0x6ffcff,
   },
   {

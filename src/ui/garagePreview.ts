@@ -648,7 +648,7 @@ class ThreeStage implements PreviewStage {
   }
 
   /**
-   * Frame the car by its own dimensions, so the 2.05m Filament and the 3.15m
+   * Frame the car by its own dimensions, so the 2.37m Star Hopper and the 3.15m
    * Dray-9 both fill the same box.
    *
    * The two axes are solved SEPARATELY and the looser one wins, which matters

@@ -982,6 +982,21 @@ const buildSolaire: Builder = (def, p, det) => {
 // recognised by at 40px, which is why it is the widest and tallest group on
 // the vehicle.
 
+/**
+ * HALF AGAIN AS BIG, AND THE PILOT IS NOT.
+ *
+ * Every structural number below is authored at the old scale and multiplied by
+ * this on the way out. The pilot ball is NOT: it stays at the roster's 0.40,
+ * because it is a character and the same pilot has to be the same size in
+ * whichever chassis it is sitting in.
+ *
+ * That combination is the point rather than a compromise. The roster's own art
+ * rule is "a 0.8m sphere against a 2.3m-wide car"; the Filament was 1.36m wide
+ * and wore the ball like a bobble-head. At 1.5x it is 2.04m across and the
+ * pilot finally sits IN it at the proportion every other chassis has.
+ */
+const FILAMENT_SCALE = 1.5
+
 /** [span, y, z, roll, chord] per plate, innermost first. Roll is the dihedral
  *  that opens the fan; the forward sweep and the tip taper live in FAN_SHAPE,
  *  because they have to be baked into the span rather than applied as a
@@ -1005,20 +1020,23 @@ const FILAMENT_FAN: readonly (readonly [number, number, number, number, number])
  *
  *  The sweep is spanSweep and NOT a rotation about Y, and that is the whole
  *  reason this group works. Sweeping by rotation means the left plate needs
- *  the opposite rotation, which `boxPair` supplies -- but boxPair cannot
- *  mirror the SPAN SHAPING, because that is baked into the vertices along +X.
- *  So the first version had five wide rectangles with a taper running the wrong
- *  way across them, and the fan read as a cargo rack. Baking the sweep into the
+ *  the opposite rotation, which boxPair supplies -- but boxPair cannot mirror
+ *  the SPAN SHAPING, because that is baked into the vertices along +X. So the
+ *  first version had five wide rectangles with a taper running the wrong way
+ *  across them, and the fan read as a cargo rack. Baking the sweep into the
  *  span means the left plate is the same buffer rolled through PI, which
  *  mirrors the plan view without touching the winding -- the same trick
  *  Vector-7's wings use. */
-const FILAMENT_FAN_SHAPE: BoxShape = { spanZ: [1, 0.46], spanY: [1, 0.6], spanSweep: 0.46 }
+const FILAMENT_FAN_SHAPE: BoxShape = { spanZ: [1, 0.46], spanY: [1, 0.6] }
 
 /** Repulsors, moved inboard and forward with the shorter hull. */
-const FILAMENT_PODS: Slot[] = [
-  { x: 0, y: -0.30, z: 0.74 },
-  { x: 0, y: -0.26, z: -0.74 },
+const FILAMENT_PODS_UNIT: readonly (readonly [number, number, number])[] = [
+  [0, -0.30, 0.74],
+  [0, -0.26, -0.74],
 ]
+const FILAMENT_PODS: Slot[] = FILAMENT_PODS_UNIT.map(([x, y, z]) => ({
+  x: x * FILAMENT_SCALE, y: y * FILAMENT_SCALE, z: z * FILAMENT_SCALE,
+}))
 
 /** Four cans: an inboard pair standing off the spine on pylons, an outboard
  *  pair slung low at the hull corners. Mouths point aft. */
@@ -1028,27 +1046,52 @@ const FILAMENT_CANS: readonly (readonly [number, number, number, number])[] = [
   [-0.26, 0.46, -1.20, 0.145],
   [0.50, 0.00, -1.30, 0.115],
   [-0.50, 0.00, -1.30, 0.115],
-]
+].map((v) => v.map((n) => n * FILAMENT_SCALE) as [number, number, number, number])
 
 const buildFilament: Builder = (def, p, det) => {
   const c = palette(def)
   const P = new Parts()
-  const seat: Slot = { x: 0, y: 0.30, z: -0.16 }
+  const S = FILAMENT_SCALE
+  const seat: Slot = { x: 0, y: 0.30 * S, z: -0.16 * S }
+
+  /**
+   * Scaled box and scaled mirrored pair. Dimensions AND position both take the
+   * factor, and so do the two BoxShape fields that carry a length rather than
+   * a ratio: `shear` is an absolute Y offset and `spanSweep` an absolute Z one,
+   * so leaving them alone would flatten the rake and straighten the fan the
+   * moment the scale moved. The taper ratios (frontX, spanZ, topX...) are
+   * proportions and must NOT be touched.
+   */
+  const sc = (h?: BoxShape): BoxShape | undefined => h && {
+    ...h,
+    ...(h.shear === undefined ? {} : { shear: h.shear * S }),
+    ...(h.spanSweep === undefined ? {} : { spanSweep: h.spanSweep * S }),
+  }
+  const sb = (col: THREE.Color, e: number, w: number, hh: number, d: number,
+              x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, h?: BoxShape): void => {
+    P.box(col, e, w * S, hh * S, d * S, x * S, y * S, z * S, rx, ry, rz, sc(h))
+  }
+  const sp = (col: THREE.Color, e: number, w: number, hh: number, d: number,
+              x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, h?: BoxShape): void => {
+    P.boxPair(col, e, w * S, hh * S, d * S, x * S, y * S, z * S, rx, ry, rz, sc(h))
+  }
 
   if (det.d === 3) {
     // One merged silhouette: keel, deck, nose, the outermost fan plate (the
     // only one that survives at this size) and the can cluster as one box.
-    P.box(c.sec, 0, 1.22, 0.26, 3.20, 0, -0.06, 0.26, 0, 0, 0,
+    sb(c.sec, 0, 1.22, 0.26, 3.20, 0, -0.06, 0.26, 0, 0, 0,
       { frontX: 0.08, frontY: 0.32, backX: 0.74 })
-    P.box(c.prim, 0, 1.06, 0.20, 2.30, 0, 0.12, -0.02, 0, 0, 0, { frontX: 0.18, frontY: 0.46 })
-    P.box(c.emis, 1, 0.12, 0.06, 2.20, 0, 0.16, 0.42)
+    sb(c.prim, 0, 1.06, 0.20, 2.30, 0, 0.12, -0.02, 0, 0, 0, { frontX: 0.18, frontY: 0.46 })
+    sb(c.emis, 1, 0.12, 0.06, 2.20, 0, 0.16, 0.42)
     for (const r of [-0.34, Math.PI + 0.34]) {
-      P.box(c.prim, 0, 0.90, 0.07, 0.78, Math.cos(r) * 0.45, 0.00 + Math.sin(r) * 0.45, -0.82,
+      sb(c.prim, 0, 0.90, 0.07, 0.78, Math.cos(r) * 0.45, Math.sin(r) * 0.45, -0.82,
         0, 0, r, { spanZ: [1, 0.42], spanSweep: 0.40 })
     }
-    P.box(c.sec, 0, 1.10, 0.46, 0.46, 0, 0.24, -1.06)
-    P.box(c.emis, 1, 0.96, 0.09, 0.08, 0, 0.30, -1.26)
-    for (const s of FILAMENT_PODS) P.add(cyl(0.28, 0.38, 0.24, 5), c.emis, 0.8, place(s.x, s.y, s.z))
+    sb(c.sec, 0, 1.10, 0.46, 0.46, 0, 0.24, -1.06)
+    sb(c.emis, 1, 0.96, 0.09, 0.08, 0, 0.30, -1.26)
+    for (const s of FILAMENT_PODS) {
+      P.add(cyl(0.28 * S, 0.38 * S, 0.24 * S, 5), c.emis, 0.8, place(s.x, s.y, s.z))
+    }
     addPilotShell(P, p, 0.40, det, seat.x, seat.y, seat.z)
     addPilotFaceFlat(P, p, 0.40, seat.x, seat.y, seat.z)
     return { body: P.merge() }
@@ -1060,19 +1103,18 @@ const buildFilament: Builder = (def, p, det) => {
   // under the engine stack and leaves the front half a thin edge, which is
   // what makes the thing look like it is leaning into the corner even parked.
   //
-  // frontX 0.05 rather than 0 on purpose. A box tapered to a true zero-width
+  // frontX 0.11 rather than 0 on purpose. A box tapered to a true zero-width
   // edge has degenerate triangles along the whole nose seam, and they shade as
   // a black crease from the shallow chase angle.
-  P.box(c.sec, 0, 1.34, 0.26, 3.72, 0, -0.11, 0.30, 0, 0, 0,
+  sb(c.sec, 0, 1.34, 0.26, 3.72, 0, -0.11, 0.30, 0, 0, 0,
     { frontX: 0.11, frontY: 0.10, backX: 0.86, shear: -0.16 })
 
   // ---- dorsal deck: the surface the cockpit is sunk into -------------------
-  P.box(c.prim, 0, 1.20, 0.26, 2.64, 0, 0.02, -0.22, 0, 0, 0,
+  sb(c.prim, 0, 1.20, 0.26, 2.64, 0, 0.02, -0.22, 0, 0, 0,
     { frontX: 0.10, frontY: 0.22, backX: 0.90, topX: 0.90, shear: -0.10 })
   // Chine strakes: the hard edge where deck meets keel, which is what makes a
-  // flat hull read as a blade rather than a slab. They run the full length and
-  // are the widest thing forward of the fan.
-  P.boxPair(c.dark, 0, 0.13, 0.06, 2.30, 0.60, -0.12, -0.18, 0, 0, 0,
+  // flat hull read as a blade rather than a slab.
+  sp(c.dark, 0, 0.13, 0.06, 2.30, 0.60, -0.12, -0.18, 0, 0, 0,
     { frontX: 0.24, backX: 0.92, shear: -0.09 })
 
   // ---- nose ---------------------------------------------------------------
@@ -1080,29 +1122,26 @@ const buildFilament: Builder = (def, p, det) => {
   // the keel, and between it, the keel and the deck the profile carried three
   // parallel horizontal strata -- which is what made the car read as a stack
   // of slabs instead of one blade. What is left here is skin ON the keel, not
-  // another layer beside it: a top plate that shares the keel's rake, a lit
-  // spine down the crown, and two strakes lying in the keel's own flank.
-  P.box(c.prim, 0, 0.96, 0.09, 2.30, 0, -0.19, 0.96, 0, 0, 0,
+  // another layer beside it.
+  sb(c.prim, 0, 0.96, 0.09, 2.30, 0, -0.19, 0.96, 0, 0, 0,
     { frontX: 0.12, frontY: 0.30, backX: 0.96, shear: -0.10 })
-  P.box(c.emis, 1, 0.09, 0.04, 2.70, 0, -0.09, 0.56, 0, 0, 0, { frontX: 0.26, shear: -0.10 })
-  P.boxPair(c.sec, 0, 0.12, 0.05, 1.20, 0.34, -0.20, 0.82, 0, -0.09, 0, { frontX: 0.22 })
+  sb(c.emis, 1, 0.09, 0.04, 2.70, 0, -0.09, 0.56, 0, 0, 0, { frontX: 0.26, shear: -0.10 })
+  sp(c.sec, 0, 0.12, 0.05, 1.20, 0.34, -0.20, 0.82, 0, -0.09, 0, { frontX: 0.22 })
 
   // ---- cockpit: a tub sunk BETWEEN raised shoulders ------------------------
-  // The shoulders are what make this a cockpit instead of a ball resting on a
-  // deck. They stand above the pilot's equator and stop short of its rear
-  // panel, which the chase camera has to see.
-  P.box(c.dark, 0, 0.60, 0.26, 0.82, seat.x, 0.14, seat.z)
-  P.add(new THREE.TorusGeometry(0.40, 0.05, det.ring[0], det.ring[1] + 3), c.prim, 0.35,
-    place(seat.x, 0.31, seat.z, Math.PI * 0.5, 0, 0))
-  P.boxPair(c.prim, 0, 0.30, 0.36, 1.16, 0.56, 0.16, 0.10, 0, 0, -0.20,
+  // The tub, the shoulders and the coaming all scale with the hull; the COLLAR
+  // RING does not. It hugs the ball at its equator, and a ring scaled off a
+  // pilot that did not scale is a hoop floating around a head.
+  sb(c.dark, 0, 0.60, 0.26, 0.82, 0, 0.14, -0.16)
+  P.add(new THREE.TorusGeometry(0.43, 0.05 * S, det.ring[0], det.ring[1] + 3), c.prim, 0.35,
+    place(seat.x, 0.31 * S, seat.z, Math.PI * 0.5, 0, 0))
+  sp(c.prim, 0, 0.30, 0.36, 1.16, 0.56, 0.16, 0.10, 0, 0, -0.20,
     { frontY: 0.42, backY: 0.96, topX: 0.66, shear: -0.06 })
-  P.boxPair(c.emis, 1, 0.05, 0.14, 0.80, 0.70, 0.24, 0.06, 0, 0, -0.20)
+  sp(c.emis, 1, 0.05, 0.14, 0.80, 0.70, 0.24, 0.06, 0, 0, -0.20)
   // Coaming ahead of the head, low enough to leave the face plate clear.
-  P.box(c.sec, 0, 0.58, 0.13, 0.28, 0, 0.22, 0.40, -0.34, 0, 0, { frontY: 0.45 })
+  sb(c.sec, 0, 0.58, 0.13, 0.28, 0, 0.22, 0.40, -0.34, 0, 0, { frontY: 0.45 })
 
   // ---- THE FAN ------------------------------------------------------------
-  // Plates first, then their glow slivers, so the emissive sits proud of the
-  // plate in front of it rather than z-fighting the one behind.
   // Each plate is placed twice: once at its own roll, once at PI minus it.
   // shapedBox centres a plate on its span, so the centre is pushed out along
   // the rolled span axis to land the root on the hull.
@@ -1110,7 +1149,7 @@ const buildFilament: Builder = (def, p, det) => {
                  y: number, z: number, rz: number, chord: number, sweep: number): void => {
     const half = span * 0.5
     for (const r of [rz, Math.PI - rz]) {
-      P.box(col, emis, span, thick, chord,
+      sb(col, emis, span, thick, chord,
         Math.cos(r) * half, y + Math.sin(r) * half, z, 0, 0, r,
         { ...FILAMENT_FAN_SHAPE, spanSweep: sweep })
     }
@@ -1131,51 +1170,51 @@ const buildFilament: Builder = (def, p, det) => {
     plate(c.emis, 1, span * 0.62, 0.03, y + 0.05, z - chord * 0.16, rz, chord * 0.30, 0.14)
   }
 
-  // Centre spine holding the stack together, and a lit blade down its ridge.
+  // Centre spine, and a lit blade down its ridge.
   // STARTS BEHIND THE HEAD, NOT BESIDE IT. The chase camera sits about 22
   // degrees above the deck directly astern, and the pilot's rear face panel --
   // the one carrying the expression system from the angle the game is actually
   // played at -- sights back along that line. Anything standing in the cone
-  // from the head to the camera deletes it. This starts at z -0.86, half a
-  // metre behind the ball, and its top stays under the sight line the whole
-  // way to the tail.
-  P.box(c.sec, 0, 0.24, 0.56, 0.92, 0, 0.20, -0.90, 0, 0, 0, { frontY: 0.22, backY: 0.94 })
-  P.box(c.emis, 1, 0.07, 0.32, 0.10, 0, 0.46, -1.28)
+  // from the head to the camera deletes it.
+  sb(c.sec, 0, 0.24, 0.56, 0.92, 0, 0.20, -0.90, 0, 0, 0, { frontY: 0.22, backY: 0.94 })
+  sb(c.emis, 1, 0.07, 0.32, 0.10, 0, 0.46, -1.28)
 
   // ---- can cluster --------------------------------------------------------
   // Pylons before cans, so the cans read as bolted to something.
-  P.boxPair(c.sec, 0, 0.14, 0.30, 0.28, 0.26, 0.30, -1.12)
-  P.boxPair(c.dark, 0, 0.17, 0.14, 0.24, 0.50, 0.00, -1.14)
+  sp(c.sec, 0, 0.14, 0.30, 0.28, 0.26, 0.30, -1.12)
+  sp(c.dark, 0, 0.17, 0.14, 0.24, 0.50, 0.00, -1.14)
   for (const [x, y, z, r] of FILAMENT_CANS) {
-    addExhaustCan(P, det, c.sec, c.dark, c.emis, r, x, y, z, 0.40)
+    addExhaustCan(P, det, c.sec, c.dark, c.emis, r, x, y, z, 0.40 * S)
   }
 
   // ---- pod pylons ---------------------------------------------------------
-  for (const s of FILAMENT_PODS) P.box(c.sec, 0, 0.18, 0.28, 0.26, s.x, s.y + 0.24, s.z)
+  for (const s of FILAMENT_PODS) {
+    P.box(c.sec, 0, 0.18 * S, 0.28 * S, 0.26 * S, s.x, s.y + 0.24 * S, s.z)
+  }
 
   if (det.d === 0) {
     // Panel breakup on the deck, vents in the chines, tail lamps.
-    for (let i = 0; i < 3; i++) P.box(c.dark, 0, 0.42, 0.04, 0.09, 0, 0.00 - i * 0.04, 0.92 + i * 0.30)
-    P.boxPair(c.dark, 0, 0.07, 0.14, 0.34, 0.52, -0.16, 0.56, 0, -0.12, 0)
-    P.boxPair(c.sec, 0, 0.09, 0.14, 0.30, 0.44, -0.08, -0.44)
-    P.boxPair(c.emis, 1, 0.06, 0.05, 0.20, 0.20, -0.08, -1.44)
-    P.boxPair(c.dark, 0, 0.08, 0.07, 0.14, 0.38, 0.26, -0.18)
+    for (let i = 0; i < 3; i++) sb(c.dark, 0, 0.42, 0.04, 0.09, 0, -i * 0.04, 0.92 + i * 0.30)
+    sp(c.dark, 0, 0.07, 0.14, 0.34, 0.52, -0.16, 0.56, 0, -0.12, 0)
+    sp(c.sec, 0, 0.09, 0.14, 0.30, 0.44, -0.08, -0.44)
+    sp(c.emis, 1, 0.06, 0.05, 0.20, 0.20, -0.08, -1.44)
+    sp(c.dark, 0, 0.08, 0.07, 0.14, 0.38, 0.26, -0.18)
   }
 
   if (det.d === 2) addPilotShell(P, p, 0.40, det, seat.x, seat.y, seat.z)
 
   // Repulsor pods stand in for wheels: they spin and pulse instead of rolling.
   const pod = new Parts()
-  pod.add(cyl(0.28, 0.38, 0.24, det.seg), c.sec, 0, place(0, 0, 0))
-  pod.add(cyl(0.32, 0.32, 0.07, det.seg), c.emis, 1, place(0, -0.15, 0))
-  if (det.d <= 1) pod.box(c.emis, 1, 0.64, 0.05, 0.08, 0, 0.02, 0)
+  pod.add(cyl(0.28 * S, 0.38 * S, 0.24 * S, det.seg), c.sec, 0, place(0, 0, 0))
+  pod.add(cyl(0.32 * S, 0.32 * S, 0.07 * S, det.seg), c.emis, 1, place(0, -0.15 * S, 0))
+  if (det.d <= 1) pod.box(c.emis, 1, 0.64 * S, 0.05 * S, 0.08 * S, 0, 0.02 * S, 0)
 
   const out: LodBuild = {
     body: P.merge(),
     wheels: { geo: pod.merge(), slots: FILAMENT_PODS },
     nozzles: {
-      geo: nozzleGeo(0.16, det, c.emis, 0.34),
-      slots: FILAMENT_CANS.map(([x, y, z]) => ({ x, y, z: z - 0.02 })),
+      geo: nozzleGeo(0.16 * S, det, c.emis, 0.34 * S),
+      slots: FILAMENT_CANS.map(([x, y, z]) => ({ x, y, z: z - 0.02 * S })),
       gimbal: false,
     },
     pilot: {
@@ -1192,9 +1231,10 @@ const buildFilament: Builder = (def, p, det) => {
 function ribbonGeo(): THREE.BufferGeometry {
   const list: THREE.BufferGeometry[] = []
   for (const sx of [1, -1]) {
-    const g: THREE.BufferGeometry = new THREE.PlaneGeometry(0.22, 2.40, 1, 6)
+    const g: THREE.BufferGeometry = new THREE.PlaneGeometry(0.22 * FILAMENT_SCALE, 2.40 * FILAMENT_SCALE, 1, 6)
     // +Y (uv.y = 1) becomes +Z so the bright end sits at the emitter.
-    g.applyMatrix4(place(sx * 0.44, 0.22, -1.86, Math.PI * 0.5 + 0.13, sx * -0.10, 0))
+    const S = FILAMENT_SCALE
+    g.applyMatrix4(place(sx * 0.44 * S, 0.22 * S, -1.86 * S, Math.PI * 0.5 + 0.13, sx * -0.10, 0))
     list.push(g)
   }
   const m = mergeGeometries(list, false)
