@@ -49,20 +49,53 @@ export interface CameraSettings {
   /**
    * HOW LOOSELY THE RIG FOLLOWS, 0 welded to 1 fully trailing.
    *
-   * One dial over three constants -- the corner trail, the position damping
-   * and the yaw damping -- because they are not independently meaningful: a
-   * rig with a tight trail and loose yaw does not read as "half way", it
-   * reads as broken. The map is piecewise through 0.30, which reproduces the
-   * authored feel EXACTLY, so a player who never touches this gets the rig
-   * that was signed off, and moving it is a departure in a known direction.
+   * One dial over four constants -- the corner trail, the position damping,
+   * the yaw damping and the anchor's slack -- because they are not
+   * independently meaningful: a rig with a tight trail and loose yaw does not
+   * read as "half way", it reads as broken.
+   *
+   * THE ANCHOR SLACK IS WHY THIS DIAL CAN BE FELT AT ALL, and it was missing
+   * from the first version. Measured on a 120m corner, the three damping
+   * constants alone move the rig 2.0 -> 15.3 degrees off dead astern across
+   * the whole dial -- but the lens lag tracked that swing to within 0.04
+   * degrees at every stop. The screen anchor was rotating the camera by
+   * exactly as much as the rig had swung, in order to hold the car on its
+   * mark, and so cancelling the entire visible signature of the trail. The
+   * dial moved the camera and changed the picture almost not at all, which is
+   * the worst kind of control: one that teaches the player it is fake.
+   *
+   * So above the authored point the anchor is given a BUFFER -- a radius
+   * around the mark inside which the car is simply allowed to float, with the
+   * anchor correcting only the excess beyond it. That is what a player means
+   * by "tracking buffer", and it is bounded on purpose: at the maximum the car
+   * can sit at most `anchorSlack` from its mark, which is a few percent of the
+   * frame, so a loop or a jump still cannot put it anywhere unplayable. The
+   * hard guarantee that was asked for survives; only the rigidity goes.
+   *
+   * The damping map is piecewise through 0.30, which reproduces the authored
+   * feel EXACTLY, so that point on the dial is still the rig that was signed
+   * off.
    */
   tracking: number
   /**
-   * Multiplier on the vertigo shot -- the FOV punch, the camera pull-in and
-   * the composite's warp, which all ride the same impulse. 0 is a rig that
-   * never moves on a boost.
+   * Multiplier on the CAMERA half of the vertigo shot: the FOV punch and the
+   * pull-in along the view ray. 0 is a rig that never moves on a boost.
+   *
+   * This used to carry the screen warp as well, and that was a design error
+   * worth recording. The two halves answer to opposite complaints -- the
+   * camera shove is what makes a boost disorienting, the screen warp is the
+   * tunnel-vision effect people boost FOR -- so tying them to one number meant
+   * that calming the shove for motion comfort silently took two thirds of the
+   * tunnel with it, and no setting could get it back. They are separate now.
    */
   boost: number
+  /**
+   * Multiplier on the SCREEN half: the vignette walking inward, the speed
+   * streaks, the radial blur and the chromatic fringe. Costs nothing in
+   * comfort -- nothing moves, the picture is graded -- which is why it gets
+   * its own dial and a much higher ceiling than `boost`.
+   */
+  tunnel: number
 }
 
 /** The resolved constants a settings object stands for. */
@@ -73,8 +106,14 @@ interface Rig {
   trailDamp: number
   posHalfLife: number
   yawHalfLife: number
+  /**
+   * How far the car may float from its mark before the anchor catches it, in
+   * NDC. See the note on `tracking` for why this exists.
+   */
+  anchorSlack: number
   shake: number
   boost: number
+  tunnel: number
 }
 
 /**
@@ -108,8 +147,12 @@ export const DEFAULT_CAMERA_SETTINGS: Readonly<CameraSettings> = Object.freeze({
   height: C.height,
   angle: Math.round(anchorYToAngle(C.anchorY) * 2) / 2,
   shake: 1,
-  tracking: 0.30,
-  boost: 1,
+  // Set from the rig the studio head dialled in by eye and asked to be made
+  // default, not from the middle of the range. A loose tracking buffer and a
+  // boost effect above 1 are both deliberate.
+  tracking: 1,
+  boost: 1.5,
+  tunnel: 1.4,
 })
 
 /** The bounds the UI offers and any stored value is clamped into. */
@@ -126,7 +169,13 @@ export const CAMERA_LIMITS: Readonly<Record<keyof CameraSettings, [number, numbe
     angle: [7, 28, 0.5],
     shake: [0, 2, 0.1],
     tracking: [0, 1, 0.05],
-    boost: [0, 1.5, 0.1],
+    // The ceiling is above the default on both of these ON PURPOSE. A dial
+    // whose default is also its maximum is a dial the player can only turn
+    // down, and both of these arrived at their maximum with the note "I am not
+    // seeing an overall effect" -- which is exactly what running out of travel
+    // feels like from the other side.
+    boost: [0, 2.5, 0.1],
+    tunnel: [0, 2.5, 0.1],
   })
 
 const clampSetting = (k: keyof CameraSettings, v: number): number => {
@@ -181,9 +230,9 @@ export function normaliseCameraSettings(s: Partial<CameraSettings> | null | unde
 /** Newton passes in the screen-anchor solve. See apply() for the measurements. */
 const ANCHOR_PASSES = 4
 
-const LOOSE_TRAIL = 0.20
-const LOOSE_POS = 0.30
-const LOOSE_YAW = 0.42
+const LOOSE_TRAIL = 0.10
+const LOOSE_POS = 0.40
+const LOOSE_YAW = 0.55
 
 function resolveRig(s: CameraSettings): Rig {
   const t = clamp01(s.tracking)
@@ -202,8 +251,12 @@ function resolveRig(s: CameraSettings): Rig {
     trailDamp: lerp3(1, C.trailDamp, LOOSE_TRAIL),
     posHalfLife: lerp3(0.035, C.posHalfLife, LOOSE_POS),
     yawHalfLife: lerp3(0.055, C.yawHalfLife, LOOSE_YAW),
+    // Zero at and below the authored point -- the car stays welded to its mark
+    // for anyone at or under the rig that shipped -- then ramps in above it.
+    anchorSlack: t <= MID ? 0 : C.anchorSlack * ((t - MID) / (1 - MID)),
     shake: s.shake,
     boost: s.boost,
+    tunnel: s.tunnel,
   }
 }
 
@@ -226,8 +279,16 @@ export class ChaseCamera {
   private settingsValue: CameraSettings = { ...DEFAULT_CAMERA_SETTINGS }
   private rig: Rig = resolveRig(DEFAULT_CAMERA_SETTINGS)
   private shakeSeed = Math.random() * 1000
-  /** Drift-release dolly-zoom impulse, 0-1, decaying. */
+  /** Drift-release dolly-zoom impulse, 0-1, decaying. Drives the CAMERA. */
   private dolly = 0
+  /**
+   * The same impulse for the SCREEN -- the composite's warp. Separate from
+   * `dolly` and deliberately so: see CameraSettings.boost. It is raised from
+   * the same events, scaled by its own dial, and decays on its own half-life,
+   * which is longer because a graded picture can linger where a moving camera
+   * cannot.
+   */
+  private warp = 0
   /**
    * `boostMag` as of last frame, so a boost can be picked up from its RISE.
    * See TUNING.camera.boostDollyGain: most boost sources never push an event
@@ -322,6 +383,7 @@ export class ChaseCamera {
     this.driftYaw = 0
     this.shake = 0
     this.dolly = 0
+    this.warp = 0
     // The grid is a boost the camera must not react to: a rocket start is
     // resolved during the countdown, and a reset that left this at 0 would see
     // the whole of `boostMag` arrive as a rise on the first frame of the race.
@@ -463,6 +525,11 @@ export class ChaseCamera {
    */
   addDolly(amount: number): void {
     this.dolly = Math.max(this.dolly, clamp01(amount * this.rig.boost))
+    // The screen half, from the same event, with its own gain and its own
+    // dial. `warpGain` is what lets a boost punch reach a real tunnel while
+    // the camera itself stays calm -- the two used to be one number, and
+    // calming the camera took the tunnel with it.
+    this.warp = Math.max(this.warp, clamp01(amount * C.warpGain * this.rig.tunnel))
   }
 
   /**
@@ -475,6 +542,14 @@ export class ChaseCamera {
    * toggle reached the camera and not the effect it shipped.
    */
   get dollyLevel(): number { return this.dolly }
+
+  /**
+   * The live TUNNEL-VISION impulse, 0-1, for the composite pass. Read from
+   * here rather than re-derived on the other side, for exactly the reasons in
+   * `dollyLevel`: one suppression point for reduced motion, and no chance of
+   * the screen effect and the rig falling out of step.
+   */
+  get warpLevel(): number { return this.warp }
 
   update(r: RacerState, dt: number, topSpeed: number, lookBack: boolean, reduceMotion: boolean): void {
     const speed = this.gravity
@@ -562,6 +637,11 @@ export class ChaseCamera {
     // the camera running BEFORE the suppression -- has shipped once already.
     this.dolly = reduceMotion ? 0 : this.dolly * Math.pow(2, -dt / C.dollyHalfLife)
     if (this.dolly < 0.002) this.dolly = 0
+    // Same suppression, same frame, same reason -- and a longer tail, because
+    // the tunnel is a grade rather than a move and snapping it off reads as a
+    // flicker where snapping the camera off reads as calm.
+    this.warp = reduceMotion ? 0 : this.warp * Math.pow(2, -dt / C.warpHalfLife)
+    if (this.warp < 0.002) this.warp = 0
     this.fovBase = damp(this.fovBase, speedFov, C.fovHalfLife, dt)
     this.fov = damp(this.fov, speedFov + C.dollyFov * this.dolly, C.fovHalfLife, dt)
 
@@ -893,6 +973,7 @@ export class ChaseCamera {
       this.easeUp(dt, r.up.x, r.up.y, r.up.z)
       this.roll = damp(this.roll, 0, 0.18, dt)
       this.dolly = 0
+      this.warp = 0
       this.shake = 0
       this.yaw = Math.atan2(this._cineLook.x - this.pos.x, this._cineLook.z - this.pos.z)
       this.driftYaw = 0
@@ -954,6 +1035,7 @@ export class ChaseCamera {
     // there is nothing to right.
     this.roll = damp(this.roll, 0, 0.18, dt)
     this.dolly = 0
+    this.warp = 0
     this.shake = 0
     this.yaw = Math.atan2(this._cineLook.x - this.pos.x, this._cineLook.z - this.pos.z)
     this.driftYaw = 0
@@ -1125,13 +1207,27 @@ export class ChaseCamera {
         const lever = dAim > 0.05 ? dAim : cam.position.distanceTo(this._anchor)
         const tanY = Math.tan(cam.fov * 0.5 * Math.PI / 180)
         cam.matrixWorld.extractBasis(this._bR, this._bU, this._bF)
+        // THE BUFFER. Inside `anchorSlack` of the mark the car is left where
+        // it lands, and only the EXCESS beyond that radius is corrected -- so
+        // the car floats within a bounded window instead of being welded to a
+        // pixel. Scaling the error rather than gating on it keeps the response
+        // continuous: a hard cut-off would make the car stick to the rim of
+        // the buffer and jitter across it.
+        //
+        // At slack 0 -- everything at or below the authored tracking point --
+        // `k` is 1 and this is exactly the weld it replaces.
+        let ex = this._ndc.x - tx
+        let ey = this._ndc.y - ty
+        const slack = this.rig.anchorSlack
+        if (slack > 0) {
+          const mag = Math.hypot(ex, ey)
+          const k = mag > slack ? (mag - slack) / mag : 0
+          ex *= k
+          ey *= k
+        }
         // Car too far right -> look further right -> the car moves left.
-        this._aim.addScaledVector(
-          this._bR, (this._ndc.x - tx) * tanY * cam.aspect * lever * C.anchorStrength,
-        )
-        this._aim.addScaledVector(
-          this._bU, (this._ndc.y - ty) * tanY * lever * C.anchorStrength,
-        )
+        this._aim.addScaledVector(this._bR, ex * tanY * cam.aspect * lever * C.anchorStrength)
+        this._aim.addScaledVector(this._bU, ey * tanY * lever * C.anchorStrength)
       }
     } else {
       this._aim.copy(this.look)

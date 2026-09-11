@@ -119,7 +119,10 @@ check(await sec.count() > 0, 'no Camera section in the settings panel')
 const rowOf = (name) => sec.locator('.sgset-row').filter({
   has: page.locator('.sgset-row__k', { hasText: new RegExp(`^${name}$`) }),
 }).first()
-const NAMES = ['Distance', 'Height', 'Angle', 'Tracking buffer', 'Impact shake', 'Boost effect']
+const NAMES = [
+  'Distance', 'Height', 'Angle', 'Tracking buffer', 'Impact shake',
+  'Boost camera kick', 'Tunnel vision',
+]
 for (const n of NAMES) check(await rowOf(n).count() > 0, `no "${n}" row`)
 
 const valueOf = async (n) => (await rowOf(n).locator('.sgset-step__val').first().textContent())?.trim()
@@ -152,18 +155,31 @@ check(
 )
 check((await valueOf('Distance')) !== before.Distance, 'the Distance readout did not change')
 
-// Boost effect down to Off, which is the control the whole report is about.
-for (let i = 0; i < 12; i++) { await activate(plus('Boost effect')).catch(() => {}) }
-for (let i = 0; i < 30; i++) { await activate(minus('Boost effect')).catch(() => {}) }
+// The camera kick down to Off -- the control the original report is about --
+// and the tunnel left alone, which is the whole point of splitting them.
+for (let i = 0; i < 40; i++) { await activate(minus('Boost camera kick')).catch(() => {}) }
 const r2 = await rig()
-check(r2 && r2.boost === 0, `Boost effect would not reach 0 (got ${r2 && r2.boost})`)
-check((await valueOf('Boost effect')) === 'Off', 'a zeroed boost dial must read "Off"')
+check(r2 && r2.boost === 0, `Boost camera kick would not reach 0 (got ${r2 && r2.boost})`)
+check((await valueOf('Boost camera kick')) === 'Off', 'a zeroed kick dial must read "Off"')
+check(
+  r2 && r2.tunnel === r0.tunnel,
+  `zeroing the camera kick must NOT touch the tunnel (got ${r2 && r2.tunnel})`,
+)
 // At an end stop the button is aria-disabled, which also takes it out of the
 // gamepad walk -- assert the state rather than trusting it.
 check(
-  await minus('Boost effect').getAttribute('aria-disabled') === 'true',
+  await minus('Boost camera kick').getAttribute('aria-disabled') === 'true',
   'the minus button must report itself disabled at the bottom stop',
 )
+// And the tunnel has real travel left ABOVE its default -- a dial whose
+// default is its maximum is what started this.
+for (let i = 0; i < 4; i++) { await activate(plus('Tunnel vision')).catch(() => {}) }
+const r2b = await rig()
+check(
+  r2b && r2b.tunnel > r0.tunnel,
+  `the tunnel dial must have headroom above its default (got ${r2b && r2b.tunnel})`,
+)
+for (let i = 0; i < 4; i++) { await activate(minus('Tunnel vision')).catch(() => {}) }
 
 await shot('2-changed')
 
@@ -209,9 +225,14 @@ check(
 await activate(reset)
 await page.waitForTimeout(250)
 const r4 = await rig()
+// AGAINST THE RIG AS IT BOOTED, not against literals. The first version of
+// this check hardcoded `boost === 1` and failed the moment the default moved
+// to 1.5 -- reporting a broken reset when the reset was perfect. A probe that
+// re-states the values it is testing will do that every single time they are
+// retuned, which is precisely when you least want a false alarm.
 check(
-  r4 && Math.abs(r4.distance - r0.distance) < 1e-6 && r4.boost === 1,
-  `reset did not restore the defaults: ${JSON.stringify(r4)}`,
+  r4 && JSON.stringify(r4) === JSON.stringify(r0),
+  `reset did not restore the boot rig:\n    was   ${JSON.stringify(r0)}\n    after ${JSON.stringify(r4)}`,
 )
 check(
   await reset.getAttribute('aria-disabled') === 'true',

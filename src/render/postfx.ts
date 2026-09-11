@@ -361,7 +361,7 @@ void main() {
   // half does, because uBoost is a channel the toggle has never reached and
   // this is the only new thing hanging off it. At 0 the streaks are exactly
   // the shipped ones -- the escalation goes away, nothing else does.
-  float streak = clamp(uBoost * 0.55 * uScreen * uCalm + warp * 0.85, 0.0, 1.0);
+  float streak = clamp(uBoost * 0.55 * uScreen * uCalm + warp * 1.00, 0.0, 1.0);
 
   // Radial chromatic aberration, strongest at the edges and on impact.
   float ca = ((0.0008 + uBoost * 0.0038 + uHit * 0.0080) * uScreen + warp * 0.0052)
@@ -374,7 +374,11 @@ void main() {
 
   // Radial speed blur. Edge-weighted, so the middle third of the frame — the
   // vehicle, the apex, the drift sparks — stays readable at any speed.
-  float blur = (rush * rush + warp * warp * 0.55) * 0.34;
+  // The warp's share raised from 0.55: the tunnel was reported as too weak,
+  // and smear at the rim is the half of it that sells SPEED rather than
+  // darkness. Edge-weighted below, so the middle third -- car, apex, sparks --
+  // stays readable however hard this is driven.
+  float blur = (rush * rush + warp * warp * 0.95) * 0.34;
   if (blur > 0.012) {
     float edge = smoothstep(0.10, 0.62, r);
     float wsum = 1.0;
@@ -480,8 +484,21 @@ void main() {
   // Vignette, tightening under boost -- and CLOSING under a warp punch, which
   // is the tunnel-vision half of the shot. Both ends of the ramp move, so the
   // dark does not merely get darker at the rim, it walks inward.
-  float vig = 1.0 - smoothstep(0.32 - 0.15 * warp, 1.08 - 0.24 * warp, r);
-  col *= mix(1.0, vig, (0.34 + uBoost * 0.24) * uScreen + warp * 0.30);
+  //
+  // STRENGTHENED: inner 0.15 -> 0.24 and weight 0.30 -> 0.46. At a full punch
+  // the dark now starts at 0.08 of the radius instead of 0.17 and takes the
+  // rim to 54% brightness instead of 70%, which is the difference between a
+  // darker edge and an actual tunnel. It is a grade, not a move, so it costs
+  // nothing in motion comfort -- and it is the effect a player boosts FOR,
+  // which is why it is dialled up in the same pass that dialled the camera
+  // shove down.
+  //
+  // The rim is dimmed, never crushed: mix() bottoms out at 1 - weight, so even
+  // at full warp the periphery keeps over half its light. The lesson from the
+  // glare pass applies in reverse here -- a surface that still carries
+  // information must keep carrying it.
+  float vig = 1.0 - smoothstep(0.32 - 0.24 * warp, 1.08 - 0.24 * warp, r);
+  col *= mix(1.0, vig, (0.34 + uBoost * 0.24) * uScreen + warp * 0.46);
 #endif
 
   gl_FragColor = vec4(acesFilmic(max(col, 0.0)), 1.0);

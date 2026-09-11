@@ -1100,8 +1100,9 @@ class SettingsPanelImpl implements SettingsPanel {
     )
     camRow(
       'tracking', 'Tracking buffer',
-      'How loosely the camera follows. Low is bolted to the car: steady, but '
-      + 'corners read as the world rotating. High swings wide and catches up.',
+      'How loosely the camera follows. Low bolts the car to one spot on the '
+      + 'screen. High lets it drift around that spot and swing wide through '
+      + 'corners before the camera catches up.',
       (v) => (v <= 0.001 ? 'Locked' : `${Math.round(v * 100)}%`),
     )
     camRow(
@@ -1111,10 +1112,17 @@ class SettingsPanelImpl implements SettingsPanel {
       (v) => (v <= 0.001 ? 'Off' : `${Math.round(v * 100)}%`),
     )
     camRow(
-      'boost', 'Boost effect',
-      'The lens punch and screen warp on a boost or drift release. Turn it '
-      + 'down if boosting is disorienting. Off keeps the speed and the '
-      + 'streaks and removes only the camera move.',
+      'boost', 'Boost camera kick',
+      'How hard the camera lunges and the lens opens on a boost or drift '
+      + 'release. This is the part that can be disorienting — turning it down '
+      + 'does not touch the tunnel vision below.',
+      (v) => (v <= 0.001 ? 'Off' : `${Math.round(v * 100)}%`),
+    )
+    camRow(
+      'tunnel', 'Tunnel vision',
+      'The dark closing in from the edges, the speed streaks and the blur on '
+      + 'a boost. Nothing moves, so turn this up as far as you like — it is '
+      + 'the effect without the lurch.',
       (v) => (v <= 0.001 ? 'Off' : `${Math.round(v * 100)}%`),
     )
 

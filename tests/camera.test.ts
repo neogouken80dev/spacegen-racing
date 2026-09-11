@@ -224,7 +224,8 @@ describe('the vertigo shot fires on a boost, not only on a drift release', () =>
     // expectation 4.5% high and would have been "fixed" by loosening the
     // tolerance until the test stopped meaning anything.
     const want = Math.min(1, T.boost.padMag / C.boostDollyFullRise)
-      * C.boostDollyGain * Math.pow(2, -RDT / C.dollyHalfLife)
+      * C.boostDollyGain * DEFAULT_CAMERA_SETTINGS.boost
+      * Math.pow(2, -RDT / C.dollyHalfLife)
     expect(fired, 'a pad boost must fire the shot the tuning asks for')
       .toBeCloseTo(want, 4)
     // ...and it must be a real punch rather than a token one, whatever the
@@ -422,13 +423,15 @@ describe('vertigo shot: the CAR stays put while the world stretches', () => {
 // ===========================================================================
 
 describe('camera settings: the defaults ARE the authored rig', () => {
-  it('every default reproduces the tuned constant it stands for', () => {
-    // If this drifts, a player who never opens the menu is quietly playing a
-    // different game from the one that was signed off.
+  it('the rig geometry defaults track the tuning table', () => {
+    // Distance, height and angle are DERIVED from TUNING, so the table stays
+    // the single source of truth for the shipped frame. The four effect dials
+    // are not -- they are a set of choices made by eye with the live control,
+    // which is the only way a camera can be judged, so they are stated
+    // outright rather than dressed up as derived.
     expect(DEFAULT_CAMERA_SETTINGS.distance).toBe(C.distance)
     expect(DEFAULT_CAMERA_SETTINGS.height).toBe(C.height)
     expect(DEFAULT_CAMERA_SETTINGS.shake).toBe(1)
-    expect(DEFAULT_CAMERA_SETTINGS.boost).toBe(1)
     // The angle is the authored anchor, rounded onto the control's grid. The
     // rounding is allowed; drifting off the anchor is not.
     // The rounding onto the grid is worth 0.0009 of frame height, which is
@@ -443,16 +446,33 @@ describe('camera settings: the defaults ARE the authored rig', () => {
       .toBe(DEFAULT_CAMERA_SETTINGS.angle)
   })
 
-  it('the tracking default reproduces the authored damping exactly', () => {
-    // The dial maps one number onto three constants through a piecewise lerp
-    // anchored on the authored point. "Anchored" has to mean EXACTLY, not
-    // nearly: a rig that is 4% off the signed-off damping at the default is a
-    // regression nobody would ever think to look for.
+  it('tracking 0.30 still reproduces the authored damping exactly', () => {
+    // The dial maps one number onto four constants through a piecewise lerp
+    // anchored on the authored point. The DEFAULT has since moved off that
+    // point deliberately, but the point itself must keep meaning what it
+    // meant: it is the rig that was signed off, and "anchored" has to mean
+    // EXACTLY, not nearly.
     const cam = new ChaseCamera(16 / 9)
+    cam.applySettings({ tracking: 0.30 })
     const rig = (cam as unknown as { rig: Record<string, number> }).rig
     expect(rig.trailDamp).toBeCloseTo(C.trailDamp, 12)
     expect(rig.posHalfLife).toBeCloseTo(C.posHalfLife, 12)
     expect(rig.yawHalfLife).toBeCloseTo(C.yawHalfLife, 12)
+    // ...and the car is still WELDED there. The buffer only opens above it.
+    expect(rig.anchorSlack).toBe(0)
+  })
+
+  it('the buffer opens only above the authored point, and is bounded', () => {
+    const slackAt = (t: number): number => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings({ tracking: t })
+      return (cam as unknown as { rig: Record<string, number> }).rig.anchorSlack
+    }
+    expect(slackAt(0)).toBe(0)
+    expect(slackAt(0.30)).toBe(0)
+    expect(slackAt(1)).toBeCloseTo(C.anchorSlack, 12)
+    expect(slackAt(0.65)).toBeGreaterThan(0)
+    expect(slackAt(0.65)).toBeLessThan(C.anchorSlack)
   })
 
   it('every default sits on the step grid, so it can be got back to', () => {
@@ -492,6 +512,7 @@ describe('camera settings: junk in cannot produce a broken frame', () => {
     // is corrupt and guessing that the player wanted the loudest possible
     // setting is the wrong guess to make.
     expect(s.boost).toBe(DEFAULT_CAMERA_SETTINGS.boost)
+    expect(s.tunnel).toBe(DEFAULT_CAMERA_SETTINGS.tunnel)
     expect(normaliseCameraSettings(null)).toEqual({ ...DEFAULT_CAMERA_SETTINGS })
   })
 })
@@ -522,6 +543,83 @@ describe('camera settings: the dials do what they say', () => {
     // punch and the composite's warp, so a player who turns this down to stop
     // feeling ill must not be left with two thirds of the effect.
     expect(level(0), 'a zeroed dial fires nothing at all').toBe(0)
+  })
+
+  /**
+   * THE SEPARATION, PINNED.
+   *
+   * These two used to be one number, and the consequence was invisible until
+   * someone drove it: cutting the camera shove for motion comfort took two
+   * thirds of the tunnel vision with it, and no setting could bring it back.
+   * The failure mode if they are ever re-coupled is exactly that -- a quiet
+   * loss of an effect while the thing you were tuning looks fine -- so it is
+   * worth a test that would catch it on the next pass rather than the next
+   * playtest.
+   */
+  it('the camera dial moves the camera and leaves the screen alone', () => {
+    const fire = (set: Partial<CameraSettings>): { dolly: number; warp: number } => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings(set)
+      const r = fake(60)
+      cam.reset(r)
+      cam.update(r, RDT, 60, false, false)
+      r.boostMag = T.boost.padMag
+      r.boostSource = 'pad'
+      cam.update(r, RDT, 60, false, false)
+      return { dolly: cam.dollyLevel, warp: cam.warpLevel }
+    }
+    const base = fire({ boost: 1, tunnel: 1 })
+    const loudCam = fire({ boost: 2, tunnel: 1 })
+    const quietCam = fire({ boost: 0, tunnel: 1 })
+
+    expect(loudCam.dolly, 'the camera dial must move the camera')
+      .toBeCloseTo(base.dolly * 2, 6)
+    expect(loudCam.warp, 'and must NOT touch the screen warp')
+      .toBeCloseTo(base.warp, 12)
+    // The case the whole split exists for: calming the camera completely must
+    // leave the tunnel vision entirely intact.
+    expect(quietCam.dolly, 'camera dial at 0 means the camera does not move').toBe(0)
+    expect(quietCam.warp, 'camera dial at 0 must NOT remove the tunnel')
+      .toBeCloseTo(base.warp, 12)
+  })
+
+  it('the tunnel dial grades the screen and leaves the camera alone', () => {
+    const fire = (set: Partial<CameraSettings>): { dolly: number; warp: number } => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings(set)
+      const r = fake(60)
+      cam.reset(r)
+      cam.update(r, RDT, 60, false, false)
+      r.boostMag = T.boost.padMag
+      r.boostSource = 'pad'
+      cam.update(r, RDT, 60, false, false)
+      return { dolly: cam.dollyLevel, warp: cam.warpLevel }
+    }
+    // Kept under the clamp on both sides so the ratio is measurable at all.
+    const base = fire({ boost: 1, tunnel: 0.4 })
+    const loud = fire({ boost: 1, tunnel: 0.8 })
+    const off = fire({ boost: 1, tunnel: 0 })
+
+    expect(loud.warp, 'the tunnel dial must grade the screen')
+      .toBeCloseTo(base.warp * 2, 6)
+    expect(loud.dolly, 'and must NOT move the camera').toBeCloseTo(base.dolly, 12)
+    expect(off.warp, 'tunnel at 0 means no warp at all').toBe(0)
+    expect(off.dolly, 'tunnel at 0 must NOT calm the camera')
+      .toBeCloseTo(base.dolly, 12)
+  })
+
+  it('reduced motion still zeroes BOTH halves, not just the one it knew about', () => {
+    const cam = new ChaseCamera(16 / 9)
+    const r = fake(60)
+    cam.reset(r)
+    cam.update(r, RDT, 60, false, true)
+    r.boostMag = T.boost.padMag
+    r.boostSource = 'pad'
+    cam.update(r, RDT, 60, false, true)
+    expect(cam.dollyLevel).toBe(0)
+    // The new channel is the one a reduced-motion suppression is easiest to
+    // forget, because it was added after the suppression was written.
+    expect(cam.warpLevel).toBe(0)
   })
 
   it('the shake dial scales the knock, and 0 switches it off', () => {
@@ -608,21 +706,64 @@ describe('the car holds its mark at every setting', () => {
     return { worst, offMark }
   }
 
-  for (const tracking of [0, 0.15, 0.30, 0.5, 0.75, 1]) {
-    it(`tracking ${tracking}: the car stays on its mark through a long corner`, () => {
+  /**
+   * THE CONTRACT CHANGED, ON PURPOSE, AND IT IS STILL A CONTRACT.
+   *
+   * It used to be "the car is welded to its mark at every setting". That made
+   * the tracking dial unfeelable: the anchor rotated the camera by exactly as
+   * much as the rig had swung, cancelling the whole visible signature of the
+   * trail, so 15 degrees of rig movement changed the picture by under 5px.
+   *
+   * It is now: welded at or below the authored tracking point, and above it
+   * free to float inside a BOUNDED buffer that the dial sets. The guarantee
+   * that mattered -- a loop or a jump can never put the car somewhere
+   * unplayable -- survives, because the bound is a few percent of the frame
+   * and the anchor still catches everything past it.
+   */
+  for (const tracking of [0, 0.15, 0.30]) {
+    it(`tracking ${tracking}: at or below the authored point, the car is welded`, () => {
       const { worst, offMark } = corner({ tracking })
       expect(worst, 'the car must never end up behind the camera').toBe(0)
       // Half a percent of frame height -- about 4px on a 944-high frame --
-      // which is what the four-pass solve delivers at every setting in range.
-      // Before the lever-arm fix this was 0.071 at tracking 0.5, and before
-      // the re-seed fix the loose settings put the car off-screen entirely.
+      // which is what the four-pass solve delivers. Before the lever-arm fix
+      // this was 0.071 at tracking 0.5, and before the re-seed fix the loose
+      // settings put the car off-screen entirely.
       expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
     })
   }
 
+  for (const tracking of [0.5, 0.75, 1]) {
+    it(`tracking ${tracking}: the car floats, but never past the buffer`, () => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.applySettings({ tracking })
+      const slack = (cam as unknown as { rig: Record<string, number> }).rig.anchorSlack
+      const { worst, offMark } = corner({ tracking })
+      expect(worst, 'the car must never end up behind the camera').toBe(0)
+      // It MOVES -- that is the whole point of the dial, and the thing that
+      // was missing.
+      expect(offMark, 'a buffered setting must actually let the car drift')
+        .toBeGreaterThan(0.01)
+      // ...and it is bounded by the buffer plus the solver's own residual.
+      expect(
+        offMark,
+        `car ${offMark.toFixed(4)} off its mark against a ${slack.toFixed(3)} buffer`,
+      ).toBeLessThan(slack + 0.005)
+    })
+  }
+
+  it('the buffer is monotonic: more tracking, more float', () => {
+    const at = (t: number): number => corner({ tracking: t }).offMark
+    const a = at(0.3), b = at(0.6), c = at(1)
+    expect(b).toBeGreaterThan(a)
+    expect(c).toBeGreaterThan(b)
+  })
+
+  // Angle and distance are tested with the buffer CLOSED, so that what is
+  // being measured is the solve itself rather than the slack the tracking dial
+  // deliberately introduces. The buffer is covered by its own cases above.
   for (const angle of [CAMERA_LIMITS.angle[0], 14, 24, CAMERA_LIMITS.angle[1]]) {
     it(`angle ${angle} deg: the mark moves, and the car goes to it`, () => {
-      const { worst, offMark } = corner({ angle })
+      const { worst, offMark } = corner({ angle, tracking: 0.30 })
       expect(worst).toBe(0)
       expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
     })
@@ -630,7 +771,7 @@ describe('the car holds its mark at every setting', () => {
 
   for (const distance of [CAMERA_LIMITS.distance[0], CAMERA_LIMITS.distance[1]]) {
     it(`distance ${distance}m: the car still lands on its mark`, () => {
-      const { worst, offMark } = corner({ distance })
+      const { worst, offMark } = corner({ distance, tracking: 0.30 })
       expect(worst).toBe(0)
       expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
     })

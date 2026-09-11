@@ -910,7 +910,7 @@ export const TUNING = {
   camera: {
     // Tuned against a 4.7m-long chassis. At 5.2m the camera sat inside the
     // rear bumper and the car filled the lower third of the frame.
-    distance: 10.5, height: 3.6, lookAhead: 13.0,
+    distance: 14.0, height: 5.8, lookAhead: 13.0,
     /**
      * A SET DISTANCE FROM THE VEHICLE.
      *
@@ -967,7 +967,17 @@ export const TUNING = {
      * because it never asks what the orientation is.
      */
     anchorX: 0.502,
-    anchorY: 0.812,
+    /**
+     * 0.812 came off a reference frame the studio head supplied -- the car's
+     * bounding box centred there in a shot he picked. He has since sat with
+     * the live control and moved it up, to a 12-degree look-down angle; this
+     * is that angle expressed back as an anchor, to 6 places.
+     *
+     * The reference frame was the right way to START -- it turned "somewhere
+     * low" into a number -- but a still cannot tell you how much road you want
+     * to see at 90 m/s. Someone driving it can.
+     */
+    anchorY: 0.676877,
     /** 0 disables the anchor and restores the raw look-ahead aim. */
     anchorStrength: 1,
     /**
@@ -986,6 +996,24 @@ export const TUNING = {
      * behind it.
      */
     trailDamp: 0.72,
+    /**
+     * HOW FAR THE CAR MAY FLOAT FROM ITS MARK at the loosest tracking setting,
+     * as a radius in NDC (so 0.16 is 16% of the half-frame, about 8% of frame
+     * height).
+     *
+     * Without this the tracking dial was almost unfeelable, and for a reason
+     * that is worth keeping written down: the anchor holds the car on its mark
+     * by rotating the camera exactly as far as the rig has swung, so it
+     * cancels the visible signature of its own trail. Measured over the whole
+     * dial, the rig moved 2.0 -> 15.3 degrees off astern while the lens lag
+     * followed it to within 0.04 degrees. The picture barely changed.
+     *
+     * Bounded on purpose. The whole reason the anchor exists is that a loop or
+     * a jump used to put the car somewhere unplayable; a buffer this size can
+     * move it by a few percent of the frame and no more, so the guarantee
+     * holds and only the rigidity goes.
+     */
+    anchorSlack: 0.16,
     /**
      * The same lock on the HEIGHT component, and 0 on purpose.
      *
@@ -1073,6 +1101,45 @@ export const TUNING = {
     dollyPull: 0.85,
     /** Impulse decay half-life, seconds. Short: this is a punch, not a state. */
     dollyHalfLife: 0.26,
+    /**
+     * THE SCREEN HALF OF THE SHOT, which used to be the same number as the
+     * camera half and should never have been.
+     *
+     * `dolly` moves the camera and opens the lens; that is the half that makes
+     * a boost disorienting, and it was cut from 0.55 to 0.30 for exactly that
+     * reason. The composite's warp -- the vignette walking inward, the
+     * streaks, the blur -- rode the same value, so calming the camera took
+     * two thirds of the tunnel vision with it, and no setting could bring it
+     * back: at the dial's old maximum a boost punch was still only 88% of the
+     * warp it used to produce.
+     *
+     * `warpGain` is the multiplier that separates them, and 1.2 is chosen
+     * against a CEILING rather than for raw strength. The warp is clamped to
+     * 1, and the impulses that feed it span 0.30 (a pad boost, a Tier-0
+     * release) to 1.00 (Tier 3). Push the gain hard enough to make the low end
+     * loud and everything above Tier 1 pins at the clamp -- measured at 2.4,
+     * a pad boost and a Tier-3 release produced an IDENTICAL frame, which
+     * throws away the drift ladder and re-creates the original complaint
+     * ("I am not seeing an overall effect") one control further along.
+     *
+     * At 1.2 the ladder survives: at a dial of 1.0 only Tier 3 saturates, and
+     * at the shipped default of 1.4 Tiers 2 and 3 share the ceiling, which is
+     * a fair trade for a louder floor and is recoverable by turning the dial
+     * down. The strength comes from the SHADER being stronger per unit of warp
+     * (see postfx.ts) rather than from shoving more warp at a clamp.
+     *
+     * Measured, pad boost, vignette inner radius (smaller = tunnel further in;
+     * before this pass it was 0.218):
+     *   dial  50%   0.241      dial 140%   0.166   <- default
+     *   dial 100%   0.196      dial 250%   0.096
+     *
+     * The longer half-life is the same reasoning as the separation itself. A
+     * camera move has to stop promptly or it reads as drift; a grade can fade,
+     * and cutting it on the same 0.26s as the camera made the tunnel flicker
+     * rather than breathe.
+     */
+    warpGain: 1.2,
+    warpHalfLife: 0.42,
     /** Impulse per drift tier cashed in. Tier 0 barely registers by design. */
     dollyPerTier: [0.30, 0.55, 0.80, 1.0],
     /**
