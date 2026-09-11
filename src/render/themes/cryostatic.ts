@@ -908,6 +908,44 @@ export const CRYOSTATIC_THEME: Theme = {
     auroraLow: 0x36ffa2,
     auroraHigh: 0x3f6bff,
     auroraGain: 0.75,
+    /**
+     * A SHATTERED MOON, AND THE REASON THE AURORA IS THERE.
+     *
+     * The moon broke and its debris is still coming down -- which is a
+     * one-image explanation for a planet that is frozen, magnetically
+     * hammered, and lit by curtains. It sits HIGH and opposite the aurora's
+     * brightest band so the two do not fight: the aurora owns the low sky
+     * between d.y 0.02 and 0.55, and the moon is above it.
+     *
+     * Cold and heavily mottled, with the terminator soft -- this far out the
+     * key is weak and a hard day/night line would read as a cue ball.
+     */
+    celestial: {
+      gain: 0.85,
+      bodies: [{
+        // BRIGHTER than the sky rather than the same value as it. Against an
+        // aurora and a haze this pale, a realistic dirty-grey moon is a
+        // smudge; the contrast has to come from somewhere and up is the only
+        // direction left.
+        dir: [0.44, 0.70, -0.56],
+        sizeDeg: 7.6,
+        color: 0xf4f9ff,
+        mottle: 0.62,
+        shade: 0.82,
+        limb: 0.20,
+      }],
+      belt: {
+        // The debris still lies in the plane the moon broke in, so the belt
+        // runs through the body rather than around the planet.
+        axis: [0.30, 0.62, 0.72],
+        tiltDeg: 4,
+        widthDeg: 1.9,
+        color: 0xdce9f7,
+        density: 0.16,
+        driftDeg: 0.30,
+        gain: 0.75,
+      },
+    },
   },
 
   /**

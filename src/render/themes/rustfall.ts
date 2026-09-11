@@ -592,7 +592,68 @@ export const RUSTFALL_THEME: Theme = {
     alpha: 0.5, fall: 0, streak: 0,
     color: (pal, fog) => new THREE.Color().setHex(pal.b).lerp(fog, 0.45),
   },
-  sky: { band: 'strata' },
+  /**
+   * THE SKY OVER A SHIPBREAKING YARD.
+   *
+   * Rustfall's whole premise is that things come here to be taken apart, and
+   * the sky says so before the track does: a ringed gas giant low over the
+   * horizon, and the ring is not ice -- it is the yard's own intake, a belt of
+   * hulls waiting to come down. The giant sits LOW and large because the
+   * planet's own dust haze is the thing that sells scale, and a body near the
+   * horizon is read against the terrain rather than floating in empty sky.
+   *
+   * Colour is pulled toward the track's own rust so it belongs to this
+   * palette; a cold blue giant over an orange planet reads as two pictures.
+   */
+  sky: {
+    band: 'strata',
+    celestial: {
+      gain: 0.92,
+      bodies: [{
+        // Deliberately DARKER and more saturated than the sky it hangs in.
+        // At the sky's own value it vanished: a body reads by contrast, and
+        // this planet's sky is a wall of orange.
+        dir: [-0.62, 0.21, 0.75],
+        sizeDeg: 16,
+        color: 0x8f4f2c,
+        bandColor: 0x4a2517,
+        bands: 7,
+        mottle: 0.36,
+        shade: 0.74,
+        limb: 0.70,
+        ring: {
+          inner: 1.45, outer: 2.55, color: 0xe8c9a4, opacity: 0.68,
+          // Tilted well off edge-on: a ring seen exactly side-on is a line,
+          // and the near half crossing in front of the disc is the read that
+          // makes it a ring rather than a halo.
+          axis: [0.22, 0.90, 0.37],
+        },
+      }],
+      // The intake queue: rubble strung around the same plane as the ring,
+      // reaching across the sky toward the yard.
+      belt: {
+        axis: [0.22, 0.90, 0.37],
+        tiltDeg: 6,
+        widthDeg: 2.6,
+        color: 0xb08a63,
+        density: 0.11,
+        driftDeg: 0.22,
+        gain: 0.85,
+      },
+      // Derelicts under tow, dark against the haze. Barely any running lights
+      // -- these are dead hulls being walked down the well, not a fleet.
+      ships: {
+        dir: [-0.30, 0.22, 0.93],
+        spreadDeg: 26,
+        sizeDeg: 2.2,
+        color: 0x2a1c16,
+        lightColor: 0xff9a4a,
+        lightGain: 0.30,
+        count: 4,
+        driftDeg: 0.10,
+      },
+    },
+  },
   fogBanks: null,
   weather: null,
   road: 'industrial',

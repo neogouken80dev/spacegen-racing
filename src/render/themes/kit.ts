@@ -266,6 +266,141 @@ export const DEFAULT_DEBRIS: DebrisStyle = {
 }
 
 /** Sky dome extras layered on top of the shared gradient. */
+/**
+ * ===========================================================================
+ * THE CELESTIAL LAYER — what is in the sky besides sky.
+ * ===========================================================================
+ *
+ * Everything here is drawn IN THE DOME'S FRAGMENT SHADER, as a function of the
+ * view direction, and that is the whole design:
+ *
+ *  - It costs no draw calls, no geometry and no depth work. The dome already
+ *    shades every pixel in the frame; a moon is a few more instructions on
+ *    pixels that were being shaded anyway.
+ *  - It is at infinity by construction. Real geometry at a plausible distance
+ *    has to be camera-locked, kept inside the far plane, excluded from fog and
+ *    sorted against the terrain shell -- four ways to get a seam. A direction
+ *    has none of those problems.
+ *  - It cannot be driven past, clipped into, or left behind on a jump.
+ *
+ * The cost is that a subject has to be expressible as a function of direction.
+ * A moon and a ring and an accretion disc are; a detailed hull is not, which is
+ * why `ships` are silhouettes with running lights rather than models.
+ *
+ * EVERY FIELD IS OPTIONAL AND EACH ONE COMPILES A #define. A planet pays for
+ * exactly what it declares and nothing for the rest -- the same rule the
+ * `band` variants already follow.
+ */
+
+/** A lit sphere in the sky: a moon, or a gas giant. */
+export interface SkyBody {
+  /** Direction from the track to the body. Normalised on load; need not be. */
+  dir: [number, number, number]
+  /** Angular RADIUS in degrees. The moon from Earth is about 0.26. */
+  sizeDeg: number
+  color: number
+  /**
+   * How hard the terminator bites, 0..1. 0 is a flat disc (a light source,
+   * or something so far away it reads as one); 1 is a hard day/night line.
+   * The body is lit from the scene's own sun direction, so a moon cannot be
+   * lit from a direction the track's own shadows disagree with.
+   */
+  shade?: number
+  /** Latitude bands, for a gas giant. 0 or absent = a plain sphere. */
+  bands?: number
+  bandColor?: number
+  /** Surface mottling — maria, cratering, storm cells. 0..1. */
+  mottle?: number
+  /** A thin bright limb where the atmosphere catches the light. 0..1. */
+  limb?: number
+  /**
+   * A RING SYSTEM, in multiples of the body's own radius. Rings are drawn on
+   * the first body that declares them and are the one piece of this that is
+   * genuinely 3D: the ring plane passes IN FRONT of the body on one side and
+   * BEHIND it on the other, which is the read that makes it a ring rather
+   * than a halo.
+   */
+  ring?: {
+    inner: number
+    outer: number
+    color: number
+    /** 0..1. Rings are translucent; this is the thickest part. */
+    opacity: number
+    /** Ring-plane axis. Defaults to a tilt off the body's own direction. */
+    axis?: [number, number, number]
+  }
+}
+
+/** A debris belt: rubble strung around an axis, seen edge-on from the track. */
+export interface SkyBelt {
+  /** The axis the belt orbits about. */
+  axis: [number, number, number]
+  /** Angular radius of the belt from that axis, degrees from the equator. */
+  tiltDeg: number
+  /** How thick the band is, degrees. */
+  widthDeg: number
+  color: number
+  /** 0..1. How many cells hold a rock. */
+  density: number
+  /** Degrees per second the belt rotates about its axis. Tiny. */
+  driftDeg?: number
+  gain?: number
+}
+
+/** Capital ships holding station. Silhouettes with running lights. */
+export interface SkyShips {
+  /** Direction to the middle of the formation. */
+  dir: [number, number, number]
+  /** How far the formation spreads, degrees. */
+  spreadDeg: number
+  /** Angular LENGTH of the largest hull, degrees. */
+  sizeDeg: number
+  /** Hull colour — these are silhouettes, so this is usually near-black. */
+  color: number
+  /** Running-light colour and strength. */
+  lightColor?: number
+  lightGain?: number
+  /** How many hulls, 1..5. */
+  count?: number
+  /** Degrees per second of station-keeping drift. Tiny. */
+  driftDeg?: number
+}
+
+/**
+ * A BLACK HOLE, with the one feature that makes it unmistakable: it bends the
+ * sky around itself.
+ *
+ * Implemented as a deflection applied to the view direction BEFORE anything
+ * else samples it -- the gradient, the stars, the bodies, the belt. That
+ * ordering is the whole effect: lensing that only distorts a local sprite is a
+ * smudge, and lensing that moves the actual starfield is a black hole.
+ */
+export interface SkyHole {
+  dir: [number, number, number]
+  /** Angular radius of the shadow (the event horizon as drawn), degrees. */
+  sizeDeg: number
+  /** How far out the deflection reaches and how hard, 0..2. */
+  lensing?: number
+  /** Accretion disc colour, inner and outer. */
+  discInner?: number
+  discOuter?: number
+  /** Disc extent in multiples of the shadow radius. */
+  discOut?: number
+  /** Disc plane axis. */
+  axis?: [number, number, number]
+  gain?: number
+}
+
+export interface Celestial {
+  /** Up to two. More than that and a sky reads as a diagram of a solar system. */
+  bodies?: SkyBody[]
+  belt?: SkyBelt
+  ships?: SkyShips
+  hole?: SkyHole
+  /** Master dimmer for the whole layer, so a track can pull it back at once. */
+  gain?: number
+}
+
 export interface SkyStyle {
   /**
    * 'strata' = drifting dust bands. 'aurora' = animated polar curtains.
@@ -306,6 +441,11 @@ export interface SkyStyle {
    */
   starGain?: number
   starHorizon?: number
+  /**
+   * WHAT ELSE IS UP THERE. See the Celestial block above: moons, rings, belts,
+   * capital ships, a black hole. Absent on a track that wants only weather.
+   */
+  celestial?: Celestial
 }
 
 /**

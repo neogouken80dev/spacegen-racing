@@ -2240,7 +2240,47 @@ export const AETHERION_THEME: Theme = {
       .lerp(fog, 0.25),
   },
 
-  sky: { band: 'strata' },
+  /**
+   * AN ARKSHIP ARMADA, HOLDING STATION OVER THE CITY.
+   *
+   * Aetherion Prime is ancient-futurist and inhabited, and the sky is where
+   * that gets stated: the city is not a ruin, something enormous is still
+   * parked above it. Held high and spread wide so the hulls are seen between
+   * the towers rather than sitting on the skyline, and lit warm against the
+   * planet's cool haze.
+   *
+   * DELIBERATELY GENERIC IN FORM. The original brief named a well-known
+   * faction as a tonal target and there is still a legal read outstanding on
+   * the concept art (see the design index). These are plain dagger hulls with
+   * running lights -- a silhouette language as old as the genre -- and carry
+   * none of that reference's shapes, colours or motifs.
+   */
+  sky: {
+    band: 'strata',
+    celestial: {
+      gain: 1.0,
+      ships: {
+        dir: [0.22, 0.38, -0.90],
+        spreadDeg: 34,
+        sizeDeg: 5.2,
+        color: 0x1d2434,
+        lightColor: 0xffd9a8,
+        lightGain: 1.35,
+        count: 5,
+        driftDeg: 0.18,
+      },
+      // A single pale moon far off the armada, so the eye has somewhere to
+      // rest and the ships have something to be scaled against.
+      bodies: [{
+        dir: [-0.80, 0.44, 0.41],
+        sizeDeg: 3.1,
+        color: 0xbfc9dd,
+        mottle: 0.38,
+        shade: 0.88,
+        limb: 0.22,
+      }],
+    },
+  },
 
   /**
    * Haze lying in the terraces, and ONLY there: the band is entirely below the

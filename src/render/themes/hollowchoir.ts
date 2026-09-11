@@ -2049,6 +2049,36 @@ export const HOLLOWCHOIR_THEME: Theme = {
     // or the Breach opens onto grey. See SkyStyle.domeLow.
     domeLow: 0x0a1018,
     starGain: 1.9,
+    /**
+     * WHAT THE WRECK IS FALLING INTO.
+     *
+     * The Hollow Choir is a derelict megastructure in vacuum and the one
+     * question its silence asks is why it was abandoned. The answer is out
+     * through the Breach: it is in a decaying orbit around a black hole.
+     *
+     * This is the track the lensing is FOR. The starfield here is the
+     * brightest in the game (starGain 1.9, surviving almost to the horizon),
+     * so bending it around the shadow moves something the player can actually
+     * see move -- on a hazy planet the same code would distort nothing and
+     * cost the same.
+     *
+     * Placed high and to one side rather than down the road: dead ahead it
+     * would sit behind the racing line for a third of the lap and the shadow
+     * is the one element here that genuinely eats contrast.
+     */
+    celestial: {
+      gain: 1.0,
+      hole: {
+        dir: [0.66, 0.46, -0.60],
+        sizeDeg: 3.2,
+        lensing: 1.15,
+        discInner: 0xffe6b0,
+        discOuter: 0xff4d1f,
+        discOut: 6.0,
+        axis: [0.12, 0.86, 0.50],
+        gain: 1.0,
+      },
+    },
     // Almost to the horizon. What little haze this wreck outgasses reaches a
     // couple of degrees up and no further, so the field survives right down to
     // the fog line -- which is what makes the tear read as an opening rather

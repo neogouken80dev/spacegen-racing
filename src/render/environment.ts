@@ -604,6 +604,54 @@ uniform float uAurGain;
 uniform float uStarGain;
 uniform float uStarHorizon;
 #endif
+
+/* ---------------------------------------------------------------- celestial
+ * Everything below is drawn as a function of the VIEW DIRECTION. See the
+ * Celestial block in themes/kit.ts for why it lives in this shader rather than
+ * in the scene graph. Each subject is behind its own #define, so a planet pays
+ * for what it declares and nothing for the rest.
+ *
+ * uCelGain is the master dimmer AND the reduced-motion/tier hook: drift terms
+ * read uCelTime, which the CPU stops advancing when the player has asked for
+ * less motion, so a still sky costs the same instructions and simply does not
+ * move.
+ */
+#if defined(SG_BODIES) || defined(SG_BELT) || defined(SG_SHIPS) || defined(SG_HOLE)
+uniform float uCelGain;
+uniform float uCelTime;
+#endif
+#ifdef SG_BODIES
+// xyz direction, w cos(angular radius)
+uniform vec4 uBodyDir[SG_BODIES];
+// rgb colour, w terminator hardness
+uniform vec4 uBodyCol[SG_BODIES];
+// x bands, y mottle, z limb, w sin(angular radius)
+uniform vec4 uBodyOpt[SG_BODIES];
+uniform vec3 uBandCol[SG_BODIES];
+#endif
+#ifdef SG_RING
+uniform vec4 uRingAxis;   // xyz plane normal, w opacity
+uniform vec2 uRingSpan;   // inner, outer, in body radii
+uniform vec3 uRingCol;
+#endif
+#ifdef SG_BELT
+uniform vec4 uBeltAxis;   // xyz axis, w cos(tilt from the axis)
+uniform vec4 uBeltOpt;    // x half-width in cosine, y density, z drift, w gain
+uniform vec3 uBeltCol;
+#endif
+#ifdef SG_SHIPS
+uniform vec4 uShipDir;    // xyz formation centre, w spread (radians)
+uniform vec4 uShipOpt;    // x count, y sin(size), z light gain, w drift
+uniform vec3 uShipCol;
+uniform vec3 uShipLight;
+#endif
+#ifdef SG_HOLE
+uniform vec4 uHoleDir;    // xyz direction, w angular radius (radians)
+uniform vec4 uHoleOpt;    // x lensing, y disc outer (in radii), z gain, w unused
+uniform vec4 uHoleAxis;   // xyz disc plane normal, w unused
+uniform vec3 uDiscIn;
+uniform vec3 uDiscOut;
+#endif
 varying vec3 vDir;
 
 /** Interleaved gradient noise: fine, isotropic, and far less blotchy than a
@@ -629,8 +677,54 @@ float n3(vec3 p) {
   return mix(a, b, f.z);
 }
 
+// SG_HOLE is in this guard because the ACCRETION DISC needs a tangent frame
+// too. It was left out, and the Hollow Choir -- the one track with a hole and
+// no bodies and no ships -- failed to compile its sky. three.js logs a shader
+// error and carries on, so the game still ran, still raced and still passed
+// every test; the only symptom was a sky that quietly fell back to nothing.
+#if defined(SG_BODIES) || defined(SG_SHIPS) || defined(SG_HOLE)
+/** Any pair of axes perpendicular to n. Branchless, and never degenerate. */
+void frame(vec3 n, out vec3 t, out vec3 b) {
+  vec3 a = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  t = normalize(cross(a, n));
+  b = cross(n, t);
+}
+#endif
+
 void main() {
   vec3 d = normalize(vDir);
+
+#ifdef SG_LENS
+  /**
+   * GRAVITATIONAL LENSING, APPLIED FIRST.
+   *
+   * This is the whole reason a black hole reads as a black hole rather than a
+   * dark circle: the sky BEHIND it is dragged around the shadow. So the
+   * deflection is applied to the view direction before anything else samples
+   * it -- the gradient, the starfield, the bodies, the belt all see the bent
+   * direction and bend with it. Distorting a local sprite instead would be a
+   * smudge.
+   *
+   * The deflection falls as 1/angle, which is the real weak-field form, and is
+   * clamped well short of the photon sphere: the exact solution diverges there
+   * and a shader that follows it puts a ring of garbage around the shadow.
+   */
+  vec3 hd = normalize(uHoleDir.xyz);
+  float hcos = clamp(dot(d, hd), -1.0, 1.0);
+  float hang = acos(hcos);
+  if (hang < 1.35 && hang > 1e-4) {
+    float defl = uHoleOpt.x * uHoleDir.w * uHoleDir.w / max(hang, uHoleDir.w * 0.55);
+    // Away from the hole: the background appears pulled TOWARD it.
+    vec3 away = normalize(d - hd * hcos);
+    d = normalize(d + away * defl);
+  }
+#endif
+/* SG_LENS rather than SG_HOLE, because the low tier still draws the shadow and
+ * the disc and must NOT pay for the deflection: an acos and a normalize on
+ * every pixel of the sky is the single most expensive thing in this shader.
+ * It was gated on a uniform at first, which set the deflection to zero and ran
+ * every instruction anyway -- a compile-time claim that was not true. */
+
   float up = clamp(d.y, 0.0, 1.0);
 
   // THE HORIZON CONTRACT: at d.y == 0 the sky is EXACTLY the fog colour.
@@ -718,6 +812,299 @@ void main() {
   vec3 q = vec3(d.x, d.y * 4.2, d.z);
   float strata = n3(q * 2.4) * 0.62 + n3(q * 6.3) * 0.38;
   c *= 1.0 + 0.085 * (strata - 0.5) * (0.30 + 0.70 * (1.0 - up));
+#endif
+
+#if defined(SG_BODIES) || defined(SG_BELT) || defined(SG_SHIPS) || defined(SG_HOLE)
+  /**
+   * ATMOSPHERIC PERSPECTIVE FOR THINGS AT INFINITY.
+   *
+   * Everything celestial is faded into the horizon haze on the way down, and
+   * killed outright below the eye line. Without it a moon sits on the ground
+   * at the point where the terrain shell ends, which is the exact seam the
+   * horizon contract at the top of this shader exists to hide.
+   *
+   * The sun exclusion is the same rule the starfield already follows: nothing
+   * survives inside the key's own scatter, because a moon crossing the sun is
+   * a compositing error, not an eclipse.
+   */
+  float celFade = smoothstep(-0.02, 0.20, d.y) * (1.0 - 0.9 * pow(sd, 3.0)) * uCelGain;
+#endif
+
+#ifdef SG_BODIES
+  for (int i = 0; i < SG_BODIES; i++) {
+    vec3 B = normalize(uBodyDir[i].xyz);
+    float cosR = uBodyDir[i].w;
+    float sinR = uBodyOpt[i].w;
+    float cd = dot(d, B);
+    // Cheap reject first: most of the sky is not this body.
+    if (cd <= cosR - 0.002) continue;
+
+    // Position on the disc, 0 at the centre and 1 at the limb.
+    vec3 o = d - B * cd;
+    float t = clamp(length(o) / max(sinR, 1e-5), 0.0, 1.0);
+    vec3 T, U; frame(B, T, U);
+    float u = dot(o, T) / max(sinR, 1e-5);
+    float v = dot(o, U) / max(sinR, 1e-5);
+
+    // The sphere's own normal, reconstructed from the disc coordinate.
+    vec3 nrm = normalize(B * sqrt(max(0.0, 1.0 - t * t)) + T * u + U * v);
+
+    vec3 bc = uBodyCol[i].rgb;
+#ifdef SG_RICH
+    // LATITUDE BANDS. Measured along the body's own v axis, which is a real
+    // latitude on the reconstructed sphere rather than a stripe painted on a
+    // flat disc -- so the bands crowd toward the poles the way they should.
+    float bands = uBodyOpt[i].x;
+    if (bands > 0.5) {
+      float lat = asin(clamp(dot(nrm, U), -1.0, 1.0));
+      float bw = sin(lat * bands) * 0.5 + 0.5;
+      bw = smoothstep(0.28, 0.72, bw + (n3(nrm * 3.1 + uCelTime * 0.004) - 0.5) * 0.45);
+      bc = mix(bc, uBandCol[i], bw * 0.75);
+    }
+    // Mottling: maria on a moon, storm cells on a giant.
+    float mot = uBodyOpt[i].y;
+    if (mot > 0.001) {
+      float m = n3(nrm * 4.3) * 0.6 + n3(nrm * 11.0) * 0.4;
+      bc *= 1.0 - mot * (0.5 - m) * 1.4;
+    }
+#endif
+
+    // ONE KEY, THE SCENE'S OWN. A moon lit from a direction the track's
+    // shadows disagree with is the tell that the sky is a painting.
+    float lam = max(dot(nrm, uSunDir), 0.0);
+    float shade = uBodyCol[i].w;
+    float lit = mix(1.0, lam * 0.92 + 0.08, shade);
+    vec3 col = bc * lit;
+    // A lit limb where an atmosphere catches the light edge-on.
+    col += bc * uBodyOpt[i].z * pow(t, 7.0) * (0.25 + 0.75 * lam);
+
+    // Antialias the limb over one disc-space pixel rather than a fixed width:
+    // these bodies span anything from a quarter of a degree to thirty.
+    float aa = fwidth(t) + 1e-4;
+    float disc = 1.0 - smoothstep(1.0 - aa * 1.5, 1.0, t);
+    /**
+     * HAZE AND VISIBILITY ARE SEPARATE THINGS HERE, and conflating them is
+     * what made the first pass invisible.
+     *
+     * The ALPHA still rides celFade all the way to zero, so a body is fully
+     * gone below the eye line and the horizon contract is untouched. But the
+     * COLOUR only hazes partway: a body low in the sky keeps 45% of itself
+     * whatever the fog is doing. Mixing both by the same factor is physically
+     * tidier and produced a gas giant the same colour as the sky behind it --
+     * technically correct atmospheric perspective, and no picture at all.
+     */
+    float keep = 0.45 + 0.55 * clamp(celFade, 0.0, 1.0);
+    c = mix(c, mix(uFog, col, keep), disc * clamp(celFade, 0.0, 1.0));
+
+#ifdef SG_RING
+    if (i == 0) {
+      /**
+       * A RING, AND THE ONE THING THAT MAKES IT A RING.
+       *
+       * The body sits at unit distance in direction B and the ring is a flat
+       * annulus around it. Intersecting the view ray with that plane gives a
+       * hit point whose distance from B is the ring radius -- and, crucially,
+       * whether that point is NEARER than the body's own centre plane. The
+       * near half draws over the body, the far half is hidden behind it. Draw
+       * it as a plain annulus in angle instead and you get a halo.
+       */
+      vec3 A = normalize(uRingAxis.xyz);
+      float den = dot(d, A);
+      float num = dot(B, A);
+      if (abs(den) > 1e-4) {
+        float k = num / den;
+        if (k > 0.0) {
+          vec3 P = d * k;
+          float rr = length(P - B) / max(sinR, 1e-5);
+          float inR = uRingSpan.x, outR = uRingSpan.y;
+          if (rr > inR && rr < outR) {
+            float span = max(outR - inR, 1e-3);
+            float g = (rr - inR) / span;
+            // Cassini-ish gap plus fine banding, so it is not a flat washer.
+            float gap = smoothstep(0.02, 0.09, abs(g - 0.42));
+            float fine = 0.72 + 0.28 * sin(g * 46.0);
+            float edge = smoothstep(0.0, 0.06, g) * (1.0 - smoothstep(0.94, 1.0, g));
+            // Rings are thin: they nearly vanish when seen edge-on.
+            float open = clamp(abs(den) * 3.4, 0.12, 1.0);
+            float a = uRingAxis.w * gap * fine * edge * open;
+            // The far half is occluded by the body it orbits.
+            bool near = dot(P, B) < 1.0;
+            float vis = near ? 1.0 : (1.0 - disc);
+            // Lit by the same key, and dimmed in the body's own shadow.
+            float rl = 0.35 + 0.65 * max(dot(A, uSunDir), 0.0);
+            c = mix(c, mix(uFog, uRingCol * rl, clamp(celFade, 0.0, 1.0)),
+                    clamp(a * vis * celFade, 0.0, 1.0));
+          }
+        }
+      }
+    }
+#endif
+  }
+#endif
+
+#ifdef SG_BELT
+  {
+    /**
+     * A DEBRIS BELT. A band at a fixed angle from an axis -- so it is a great
+     * circle seen obliquely, which is what a ring of rubble looks like from
+     * inside the system rather than from above it.
+     *
+     * The rocks are cell-hashed ALONG the band rather than scattered in a
+     * volume: a belt is a queue, and hashing in two dimensions makes a cloud.
+     */
+    vec3 A = normalize(uBeltAxis.xyz);
+    float ca = dot(d, A);
+    float band = 1.0 - smoothstep(0.0, uBeltOpt.x, abs(ca - uBeltAxis.w));
+    if (band > 0.001) {
+      vec3 T, U; frame(A, T, U);
+      // Angle around the belt, plus the slow rotation.
+      float ang = atan(dot(d, U), dot(d, T)) + uCelTime * uBeltOpt.z;
+      float cells = 260.0;
+      float g = ang * cells / 6.2831853;
+      float gi = floor(g), gf = fract(g);
+      float rock = 0.0;
+      for (int L = 0; L < 2; L++) {
+        float off = float(L) * 0.5;
+        float h1 = h31(vec3(gi + off, 3.7, 9.1));
+        float h2 = h31(vec3(gi + off, 11.3, 2.4));
+        float live = step(1.0 - uBeltOpt.y, h1);
+        // Sub-cell position and a per-rock offset across the band's width.
+        float dx = (gf - (0.2 + 0.6 * h2)) * 2.4;
+        float dy = (ca - uBeltAxis.w) / max(uBeltOpt.x, 1e-4) - (h1 - 0.5) * 1.5;
+        float r = length(vec2(dx, dy)) / (0.16 + 0.5 * h2);
+        rock += live * (1.0 - smoothstep(0.0, 1.0, r)) * (0.4 + 0.9 * h2);
+      }
+      // A faint continuous haze under the rocks: a belt has dust as well.
+      float haze = band * band * 0.16;
+      c += uBeltCol * (rock * band + haze) * uBeltOpt.w * celFade;
+    }
+  }
+#endif
+
+#ifdef SG_SHIPS
+  {
+    /**
+     * CAPITAL SHIPS, AS SILHOUETTES.
+     *
+     * A hull is not a function of direction, so this does not try to be a
+     * model: it is an elongated profile in the tangent plane with a dorsal
+     * spine and a row of running lights. At the angular size these things
+     * occupy -- a couple of degrees, held at station kilometres up -- that is
+     * what a ship actually reads as, and it costs no geometry, no draw call
+     * and no depth sorting.
+     */
+    vec3 C0 = normalize(uShipDir.xyz);
+    vec3 FT, FU; frame(C0, FT, FU);
+    int n = int(uShipOpt.x);
+    for (int i = 0; i < 5; i++) {
+      if (i >= n) break;
+      float fi = float(i);
+      float hx = h31(vec3(fi, 1.7, 4.3)) - 0.5;
+      float hy = h31(vec3(fi, 8.1, 0.9)) - 0.5;
+      float hs = 0.45 + 0.55 * h31(vec3(fi, 5.5, 6.2));
+      // Station-keeping: a slow, tiny sway, not a patrol.
+      float sway = sin(uCelTime * uShipOpt.w + fi * 2.1) * 0.004;
+      vec3 S = normalize(C0
+        + FT * (hx * uShipDir.w + sway)
+        + FU * (hy * uShipDir.w * 0.42 + sway * 0.5));
+      float sz = uShipOpt.y * hs;
+      float cd = dot(d, S);
+      if (cd <= 1.0 - sz * sz * 1.6) continue;
+      vec3 T, U; frame(S, T, U);
+      vec3 o = d - S * cd;
+      float u = dot(o, T) / sz;
+      float v = dot(o, U) / sz;
+      if (abs(u) > 1.0) continue;
+
+      /**
+       * A LONG SLAB WITH A TOWER AFT.
+       *
+       * The first profile was a symmetric wedge with a dorsal spine, and it
+       * read as a stingray: the widest point was the middle and both ends came
+       * to a point, which is a fish. A capital ship is mostly PARALLEL -- a
+       * long hull of nearly constant depth, tapering only near the bow, with
+       * the superstructure standing off the dorsal line behind midships. Two
+       * smoothsteps buy the whole silhouette.
+       */
+      float au = abs(u);
+      float bow = 1.0 - smoothstep(0.30, 1.0, u);
+      float stern = 1.0 - smoothstep(0.62, 1.0, -u);
+      float prof = 0.075 * bow * stern;
+      float tower = 1.0 - smoothstep(0.0, 0.32, abs(u + 0.28));
+      float top = v > 0.0 ? prof + 0.095 * tower * bow : prof;
+      float hull = step(abs(v), top);
+      if (hull < 0.5) continue;
+
+      // Running lights: a hashed row along the hull, breathing out of phase.
+      float lights = 0.0;
+      float lg = u * 16.0;
+      float li = floor(lg), lf = fract(lg);
+      float lh = h31(vec3(li, fi, 2.2));
+      if (lh > 0.55) {
+        float pulse = 0.55 + 0.45 * sin(uCelTime * 0.9 + lh * 12.0);
+        lights = (1.0 - smoothstep(0.0, 0.45, abs(lf - 0.5))) * pulse
+               * (1.0 - smoothstep(0.0, 0.55, abs(v / max(top, 1e-4))));
+      }
+      float lam = max(dot(S, uSunDir), 0.0);
+      vec3 hullCol = uShipCol * (0.35 + 0.65 * lam);
+      vec3 col = hullCol + uShipLight * lights * uShipOpt.z;
+      c = mix(c, mix(uFog, col, clamp(celFade, 0.0, 1.0)), clamp(celFade, 0.0, 1.0));
+    }
+  }
+#endif
+
+#ifdef SG_HOLE
+  {
+    /**
+     * THE SHADOW AND THE DISC, drawn from the UNBENT direction.
+     *
+     * The lensing above moved everything else; the hole itself has not moved,
+     * so it is measured against the original ray: vDir rather than d.
+     */
+    vec3 d0 = normalize(vDir);
+    vec3 H = normalize(uHoleDir.xyz);
+    float R = uHoleDir.w;
+    float ang = acos(clamp(dot(d0, H), -1.0, 1.0));
+    float gain = uHoleOpt.z * celFade;
+
+    // The accretion disc, as a plane through the hole. Same near/far logic as
+    // a planetary ring -- the far side is the half that famously bends up over
+    // the top, and here it is simply drawn without being occluded, which reads
+    // correctly because the shadow is painted over it afterwards.
+    vec3 A = normalize(uHoleAxis.xyz);
+    float den = dot(d0, A);
+    float num = dot(H, A);
+    if (abs(den) > 1e-4) {
+      float k = num / den;
+      if (k > 0.0) {
+        vec3 P = d0 * k;
+        float rr = length(P - H) / max(R, 1e-5);
+        float inR = 2.2, outR = uHoleOpt.y;
+        if (rr > inR && rr < outR) {
+          float g = (rr - inR) / max(outR - inR, 1e-3);
+          // Hotter and faster on the inside.
+          vec3 dc = mix(uDiscIn, uDiscOut, sqrt(g));
+          vec3 T, U; frame(A, T, U);
+          float th = atan(dot(P - H, U), dot(P - H, T));
+          float swirl = n3(vec3(cos(th) * 2.0, sin(th) * 2.0, g * 6.0)
+                           + vec3(uCelTime * 0.05, 0.0, -uCelTime * 0.09 / max(g, 0.2)));
+          float body = (1.0 - smoothstep(0.0, 1.0, g)) * (0.55 + 0.9 * swirl);
+          float open = clamp(abs(den) * 4.0, 0.16, 1.0);
+          c += dc * body * open * gain * 1.6;
+        }
+      }
+    }
+
+    // The photon ring: a thin, very bright circle just outside the shadow.
+#ifdef SG_RICH
+    float ring = 1.0 - smoothstep(0.0, R * 0.22, abs(ang - R * 1.18));
+    c += uDiscIn * ring * gain * 2.4;
+#endif
+
+    // The shadow itself, painted last and over everything.
+    float sh = 1.0 - smoothstep(R * 0.93, R * 1.03, ang);
+    c = mix(c, vec3(0.0), clamp(sh * clamp(uCelGain, 0.0, 1.0), 0.0, 1.0));
+  }
 #endif
 
   // Dither. Multiplicative so it tracks the local brightness through ACES,
@@ -1100,13 +1487,128 @@ export function buildEnvironment(
     skyUniforms.uStarGain = { value: theme.sky.starGain ?? 1.0 }
     skyUniforms.uStarHorizon = { value: theme.sky.starHorizon ?? 0.16 }
   }
+  /* ------------------------------------------------------------ celestial
+   * The theme's declaration, turned into defines and uniforms.
+   *
+   * TIER SCALING IS COMPILE-TIME, not a uniform the shader branches on. The
+   * dome has no depth test, so it shades every pixel in the frame; a runtime
+   * branch on a low-end GPU costs the whole frame whether it is taken or not.
+   * `SG_RICH` carries banding, mottling, the photon ring and the second belt
+   * layer, and the low tier drops the celestial layer to bodies alone -- which
+   * is still a moon in the sky, just not a moon with weather on it.
+   */
+  const skyDefines: Record<string, string> = theme.sky.band === 'aurora'
+    ? { SG_AURORA: '' }
+    : theme.sky.band === 'stars' ? { SG_STARS: '' } : {}
+  const cel = theme.sky.celestial
+  const rich = quality.tier === 'high'
+  if (cel) {
+    const bodies = (cel.bodies ?? []).slice(0, 2)
+    if (bodies.length > 0) {
+      skyDefines.SG_BODIES = String(bodies.length)
+      const dirs: THREE.Vector4[] = []
+      const cols: THREE.Vector4[] = []
+      const opts: THREE.Vector4[] = []
+      const bandCols: THREE.Color[] = []
+      for (const b of bodies) {
+        const v = new THREE.Vector3(b.dir[0], b.dir[1], b.dir[2]).normalize()
+        const r = Math.max(0.02, b.sizeDeg) * Math.PI / 180
+        dirs.push(new THREE.Vector4(v.x, v.y, v.z, Math.cos(r)))
+        const c3 = new THREE.Color().setHex(b.color)
+        cols.push(new THREE.Vector4(c3.r, c3.g, c3.b, b.shade ?? 0.85))
+        opts.push(new THREE.Vector4(b.bands ?? 0, b.mottle ?? 0, b.limb ?? 0, Math.sin(r)))
+        bandCols.push(new THREE.Color().setHex(b.bandColor ?? b.color))
+      }
+      skyUniforms.uBodyDir = { value: dirs }
+      skyUniforms.uBodyCol = { value: cols }
+      skyUniforms.uBodyOpt = { value: opts }
+      skyUniforms.uBandCol = { value: bandCols }
+
+      const ring = bodies[0].ring
+      if (ring && quality.tier !== 'low') {
+        skyDefines.SG_RING = ''
+        const ax = ring.axis
+          ? new THREE.Vector3(ring.axis[0], ring.axis[1], ring.axis[2]).normalize()
+          // No axis given: tilt off the body's own direction so the ring is
+          // seen obliquely rather than exactly edge-on, which is the one
+          // orientation that makes a ring system invisible.
+          : new THREE.Vector3(0.30, 0.86, 0.41).normalize()
+        skyUniforms.uRingAxis = { value: new THREE.Vector4(ax.x, ax.y, ax.z, ring.opacity) }
+        skyUniforms.uRingSpan = { value: new THREE.Vector2(ring.inner, ring.outer) }
+        skyUniforms.uRingCol = { value: new THREE.Color().setHex(ring.color) }
+      }
+    }
+    if (cel.belt && quality.tier !== 'low') {
+      skyDefines.SG_BELT = ''
+      const a = new THREE.Vector3(cel.belt.axis[0], cel.belt.axis[1], cel.belt.axis[2]).normalize()
+      const tilt = cel.belt.tiltDeg * Math.PI / 180
+      skyUniforms.uBeltAxis = { value: new THREE.Vector4(a.x, a.y, a.z, Math.cos(Math.PI / 2 - tilt)) }
+      skyUniforms.uBeltOpt = {
+        value: new THREE.Vector4(
+          Math.max(0.004, cel.belt.widthDeg * Math.PI / 180),
+          cel.belt.density,
+          (cel.belt.driftDeg ?? 0.4) * Math.PI / 180,
+          cel.belt.gain ?? 1,
+        ),
+      }
+      skyUniforms.uBeltCol = { value: new THREE.Color().setHex(cel.belt.color) }
+    }
+    if (cel.ships) {
+      skyDefines.SG_SHIPS = ''
+      const v = new THREE.Vector3(cel.ships.dir[0], cel.ships.dir[1], cel.ships.dir[2]).normalize()
+      skyUniforms.uShipDir = {
+        value: new THREE.Vector4(v.x, v.y, v.z, cel.ships.spreadDeg * Math.PI / 180),
+      }
+      skyUniforms.uShipOpt = {
+        value: new THREE.Vector4(
+          Math.min(5, Math.max(1, cel.ships.count ?? 3)),
+          Math.sin(cel.ships.sizeDeg * Math.PI / 180),
+          cel.ships.lightGain ?? 1,
+          (cel.ships.driftDeg ?? 0.25) * Math.PI / 180,
+        ),
+      }
+      skyUniforms.uShipCol = { value: new THREE.Color().setHex(cel.ships.color) }
+      skyUniforms.uShipLight = { value: new THREE.Color().setHex(cel.ships.lightColor ?? 0x9fd8ff) }
+    }
+    if (cel.hole) {
+      skyDefines.SG_HOLE = ''
+      const v = new THREE.Vector3(cel.hole.dir[0], cel.hole.dir[1], cel.hole.dir[2]).normalize()
+      skyUniforms.uHoleDir = {
+        value: new THREE.Vector4(v.x, v.y, v.z, cel.hole.sizeDeg * Math.PI / 180),
+      }
+      // Lensing is the most expensive thing in this shader, so the low tier
+      // gets the shadow and the disc with the sky left straight behind them --
+      // and gets them by not COMPILING the deflection, not by zeroing it.
+      if (quality.tier !== 'low' && (cel.hole.lensing ?? 1) > 0) skyDefines.SG_LENS = ''
+      skyUniforms.uHoleOpt = {
+        value: new THREE.Vector4(
+          cel.hole.lensing ?? 1,
+          cel.hole.discOut ?? 5.5,
+          cel.hole.gain ?? 1,
+          0,
+        ),
+      }
+      const ha = cel.hole.axis
+        ? new THREE.Vector3(cel.hole.axis[0], cel.hole.axis[1], cel.hole.axis[2]).normalize()
+        : new THREE.Vector3(0.18, 0.94, 0.29).normalize()
+      skyUniforms.uHoleAxis = { value: new THREE.Vector4(ha.x, ha.y, ha.z, 0) }
+      skyUniforms.uDiscIn = { value: new THREE.Color().setHex(cel.hole.discInner ?? 0xffd9a0) }
+      skyUniforms.uDiscOut = { value: new THREE.Color().setHex(cel.hole.discOuter ?? 0xff5a2a) }
+    }
+    if (skyDefines.SG_BODIES || skyDefines.SG_BELT !== undefined
+      || skyDefines.SG_SHIPS !== undefined || skyDefines.SG_HOLE !== undefined) {
+      skyUniforms.uCelGain = { value: cel.gain ?? 1 }
+      skyUniforms.uCelTime = { value: 0 }
+      if (rich) skyDefines.SG_RICH = ''
+    }
+  }
+
   const skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     depthTest: false,
     fog: false,
-    defines: theme.sky.band === 'aurora' ? { SG_AURORA: '' }
-      : theme.sky.band === 'stars' ? { SG_STARS: '' } : {},
+    defines: skyDefines,
     uniforms: skyUniforms as unknown as { [k: string]: THREE.IUniform },
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
@@ -1500,6 +2002,19 @@ export function buildEnvironment(
   const moteWindU = moteMat.uniforms.uWind as { value: number }
   const moteAlphaU = moteMat.uniforms.uAlpha as { value: number }
   const skyTimeU = skyUniforms.uTime as { value: number }
+  /**
+   * CELESTIAL DRIFT runs on its OWN clock, accumulated here rather than taken
+   * from the caller's `time`.
+   *
+   * That is what makes reduced motion work without a second code path: a
+   * player who has asked for less motion simply stops this clock, and the belt
+   * and the accretion disc hold their pose. Re-deriving the pose from a frozen
+   * `time` would have been the same thing, but the moment the toggle came back
+   * on the sky would JUMP to wherever the race clock had got to -- so the
+   * accumulator is the honest shape, and it costs one add a frame.
+   */
+  const celTimeU = (skyUniforms.uCelTime ?? null) as { value: number } | null
+  let celClock = 0
   const skySunU = skyUniforms.uSunFade as { value: number }
   const frame: FrameInfo = { dt: 0, time: 0, camX: 0, camY: 0, camZ: 0, wind: 0, crack: 0 }
   let windNow = 0
@@ -1526,6 +2041,13 @@ export function buildEnvironment(
       // to move here — which also means it cannot be left stale by a frame that
       // renders without calling update().
       skyTimeU.value = time
+      if (celTimeU) {
+        // `wind` is absent for the headless cost probe and the terrain
+        // fixtures, and those have nobody to be considerate to: default to
+        // moving, which is what every other layer here does without one.
+        if (!(wind?.reduceMotion ?? false)) celClock += dt
+        celTimeU.value = celClock
+      }
       moteCamU.set(cameraPos.x, cameraPos.y, cameraPos.z)
       moteTimeU.value = time
       if (bankCamU) bankCamU.set(cameraPos.x, cameraPos.y, cameraPos.z)
