@@ -601,6 +601,11 @@ class FrontEndImpl implements FrontEnd {
       el('span', 'sg-card__sub', body, def.nickname)
       const tag = el('span', 'sg-card__tag', card, def.locomotion)
       tag.dataset.loco = def.locomotion
+      // Addressable by ID. A probe that picks this card by matching its
+      // visible text picks by a label that art and copy passes both move, and
+      // this repo has already lost a pass to a probe that matched a row by
+      // substring and drove the wrong control.
+      card.dataset.chassis = def.id
       card.addEventListener('click', () => this.selectChassis(def.id))
       this.chassisCards.push(card)
     }

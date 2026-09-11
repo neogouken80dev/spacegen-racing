@@ -34,7 +34,23 @@ export const CHASSIS: ChassisDef[] = [
     // mass 2 are the scalpel's actual signature and both stay; accel was the
     // third roster-max stat on one chassis.
     stats: { topSpeed: 7, accel: 8, grip: 7, mass: 2, drift: 6, handling: 9 },
-    halfExtents: { x: 0.68, y: 0.62, z: 2.05 },
+    // SHORTENED WITH THE HULL. The Filament was redesigned from a 4.1m needle
+    // to a 3.2m blade, and a box that no longer matches its mesh is a car that
+    // clips barriers a metre before it touches them.
+    //
+    // x is DELIBERATELY UNCHANGED. Half-width is the most load-bearing number
+    // here -- bodyInset() is exactly `x + 0.12`, so it sets the wall clamp for
+    // every square-on contact in the game, and the redesign keeps the hull
+    // core inside the old width (only the fan plates reach wider, and those
+    // are thin swept decoration, the same licence Vector-7's wings take).
+    //
+    // z 2.05 -> 1.58 and y 0.62 -> 0.54 feed orientedInset(), which projects
+    // the box onto the wall normal. So this is a real change, and in one
+    // direction: a CRABBED Filament now presents a smaller corner and can
+    // carry a drift closer to a barrier than it could. That is the honest
+    // consequence of the car being shorter, not a buff smuggled in as art --
+    // but it is a sim change and the balance gate re-ran because of it.
+    halfExtents: { x: 0.68, y: 0.54, z: 1.58 },
     colorPrimary: 0x1ad6ff, colorSecondary: 0x101821, colorEmissive: 0x6ffcff,
   },
   {

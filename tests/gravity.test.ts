@@ -297,7 +297,19 @@ describe('the AI', () => {
     //           thrower -- and the AI drove into it. Dropping it behind takes
     //           those hits out of the lap, which is where the 0.72s comes from;
     //           the mine is otherwise unchanged. See src/sim/race.ts.
-    expect(avg).toBeCloseTo(57.06, 2)
+    //   56.27s  the Filament's collision box shrank with its hull -- the
+    //           chassis was redesigned from a 4.1m needle to a 3.2m blade, and
+    //           halfExtents went 0.62/2.05 -> 0.54/1.58 to match it. z feeds
+    //           orientedInset(), so a CRABBED Filament now presents a smaller
+    //           corner to a barrier and can hold a drift closer to it. x was
+    //           left alone deliberately: it is bodyInset() exactly, and it
+    //           sets the clamp for every square-on contact in the game.
+    //           Verified as the cause by A/B -- restoring the old box restores
+    //           57.06 byte for byte. Balance is unmoved: across four seeds of
+    //           600 races on Rustfall every chassis stays inside 12-30%
+    //           (vector7 10.2/14.2/14.3/14.3, mean 13.3%) and the lap mean
+    //           moves 56.70s -> 56.71s.
+    expect(avg).toBeCloseTo(56.27, 2)
   })
 })
 

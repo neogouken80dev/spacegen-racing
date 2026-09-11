@@ -136,6 +136,15 @@ export class Turntable {
     this.dragging = false
     this.idle = 0
   }
+
+  /** Park at an exact yaw and hold it. Resets the idle timer to zero, which
+   *  is what the auto-spin measures from, so the car does not creep off the
+   *  angle between being set and being photographed. */
+  park(yaw: number): void {
+    this.dragging = false
+    this.yaw = wrapAngle(yaw)
+    this.idle = 0
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +828,14 @@ class GaragePreviewImpl implements GaragePreview {
           ...this.core.selection,
           ...(this.core.stats() ?? {}),
         }),
+        /** Park the turntable at an exact yaw and stop it drifting off it.
+         *  Art probes need a REPEATABLE angle: driving the preview by
+         *  synthesised drags, which is the only other way in, lands within a
+         *  few degrees of where it was aimed and the auto-spin then walks it
+         *  further between the set and the screenshot. Two photographs of the
+         *  same chassis taken a pass apart have to be comparable or the
+         *  iteration is guesswork. */
+        setYaw: (y: number): void => { this.core.turntable.park(y) },
       }
     }
   }
