@@ -1104,6 +1104,25 @@
 /* The tool bar is 38px on compact rather than 44, so the pill comes up with
    it. Tighter all round: it must never be wide enough to crowd the minimap
    on a 412px frame. */
+/* POSITION AND LAP ON ONE LINE, HARD AGAINST THE TOP.
+   Stacked, this block ran position -> lap chip -> lap splits straight down the
+   left of the frame and the lap chip sat about a fifth of the way into the
+   picture -- squarely in the road ahead on a short landscape viewport, which
+   is the one part of the screen a driver is actually reading.
+
+   Laid out as a row it is one strip along the very top edge: same
+   information, none of it below the skyline. Baseline-aligned so the chip
+   hangs off the ordinal rather than floating beside the numeral's full
+   height. */
+.sg-compact .sg-hud__pos {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.sg-compact .sg-lap {
+  margin-top: 0;
+}
+
 .sg-compact .sg-hud__wind {
   gap: 6px;
   padding: 2px 9px 3px;
@@ -1111,28 +1130,37 @@
   margin-top: 46px;
 }
 
-/* THE ITEM SLOTS, ON THE LEFT EDGE AT EYE LEVEL.
+/* THE ITEM SLOTS, ALONG THE TOP BESIDE THE TOOL BUTTONS.
    Bottom-left is where they live on desktop and it is the one place they
-   cannot go here: that corner is a thumb. They used to tuck under the position
-   block at the TOP of the middle-left cell, which on a tablet reads as "hidden
-   in a corner" -- it is the furthest point from where a driver is looking.
-   Centred in the cell puts the item you are about to fire beside the car
-   rather than above the horizon, and it is still clear of both thumb
-   clusters. */
+   cannot go here: that corner is a thumb. They then spent a pass centred on
+   the LEFT EDGE, which put them beside the car but clipped hard against the
+   frame -- on a 915px landscape phone the box ran off the gutter and what a
+   player saw of their own item was a sliver.
+
+   The top strip is the one band of this layout nothing else competes for. The
+   tool cluster (.sg-tools) is absolutely positioned and centred on the
+   VIEWPORT, which is the centre of this cell, so `justify-self: end` parks the
+   slots between it and the minimap: clear of the notch, clear of both thumb
+   columns, above the horizon rather than across it, and in full view instead
+   of half off-screen. */
 .sg-compact .sg-hud__items {
-  grid-area: ml;
-  align-self: center;
-  justify-self: start;
+  grid-area: tc;
+  align-self: start;
+  justify-self: end;
   flex-direction: row;
   align-items: center;
+  gap: 6px;
 }
+/* Smaller than the eye-level version was: this strip is shared with the tool
+   buttons on one side and the minimap on the other, and the slots have to fit
+   between them on the narrowest frame rather than push either aside. */
 .sg-compact .sg-slot__box {
-  width: clamp(58px, 15vmin, 84px);
-  height: clamp(58px, 15vmin, 84px);
+  width: clamp(46px, 11.5vmin, 62px);
+  height: clamp(46px, 11.5vmin, 62px);
 }
 .sg-compact .sg-slot--alt .sg-slot__box {
-  width: clamp(42px, 11vmin, 62px);
-  height: clamp(42px, 11vmin, 62px);
+  width: clamp(34px, 8.5vmin, 46px);
+  height: clamp(34px, 8.5vmin, 46px);
 }
 .sg-compact .sg-slot__name {
   display: none;

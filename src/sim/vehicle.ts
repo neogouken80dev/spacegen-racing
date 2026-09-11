@@ -1206,6 +1206,33 @@ export function stepVehicle(
     // Flight: driven toward the target altitude rather than by gravity.
     const wasHigh = altNow > loco.rideHeight * 2.2
     dampAlt(r, targetAlt, 0.22)
+    /**
+     * THE FLOOR THIS BRANCH NEVER HAD.
+     *
+     * Every other arm of this chain clamps: the ballistic launch, the fall
+     * branch and the spring branch all refuse to leave a racer inside the
+     * road. This one only damped toward a target with a 0.22s half-life --
+     * about 21% of the gap per frame -- so a chassis that arrived below the
+     * deck drove along underneath it for several tenths of a second on the way
+     * back out.
+     *
+     * And this is the FLIGHT class's permanent branch: gapCross is 999, so
+     * `hovering` is true for Vector-7 on every frame the deck exists. Measured
+     * over 18 races on three tracks, the bodywork was inside the road on 2669
+     * to 3499 frames per track, as deep as 2.38m -- the whole car swallowed.
+     * The grounded chassis alongside it never exceed 0.12m, and that 0.12m is
+     * static tread geometry sitting on the surface by design.
+     *
+     * Reported from play as the flying vehicle clipping into the track when it
+     * gets close to ground level, which is exactly right: near the ground is
+     * where this branch's missing clamp is the only thing that mattered.
+     *
+     * A hard clamp rather than a snap to rideHeight, so the damp above still
+     * reads as a smooth descent -- this only refuses the last few centimetres.
+     */
+    if (overRoad && !deckGone && altOf(r) < loco.minAltitude) {
+      setAlt(r, loco.minAltitude)
+    }
     r.vertVel = 0
     r.grounded = altNow < loco.rideHeight * 1.8
     // Descending back to hover height counts as a landing, so the flight class
@@ -1243,8 +1270,39 @@ export function stepVehicle(
     // A landing is a landing whether the car came down to the road or the road
     // came up to the car, so this fires the same events the ballistic branch
     // does rather than silently teleporting the car back out.
+    /**
+     * MEASURED FROM THE ROAD, NOT FROM THE RIDE HEIGHT.
+     *
+     * `under` is how far the car is below where it wants to float, and it is
+     * what decides whether to pull the car back up. `sink` is how far it is
+     * below the DECK, and it is what decides whether this is a recoverable
+     * penetration or a genuine fall. Those are different questions and this
+     * used to answer both with `under`.
+     *
+     * The consequence was that the allowance was spent by the ride height
+     * before the car had sunk at all. Protection below the road surface was
+     * `groundSnapDistance - rideHeight`, so it ran:
+     *
+     *   grounded  0.55 ride -> 1.85m of protection
+     *   hover     1.00 ride -> 1.40m
+     *   flight    1.50 ride -> 0.90m
+     *
+     * -- the exact inverse of what anyone would choose. The class that flies,
+     * descends fastest and spends a quarter of the lap airborne got half the
+     * margin of the one with wheels on the ground, and at 34 m/s^2 a 0.90m
+     * window is blown through by a descent of about 54 m/s where 1.85m needs
+     * 111 m/s. Reported from play as the flying vehicle clipping into the track
+     * when it gets near ground level, which is precisely when `under` is large
+     * for a flight chassis and `sink` is still zero.
+     *
+     * Measured from the deck, every locomotion class now gets the same window.
+     * `groundSnapDistance` was re-based 2.4 -> 1.85 in the same change so the
+     * GROUNDED class is bit-identical to before: 0.55 + 1.85 == 2.4 exactly.
+     * Hover gains 0.45m and flight gains 0.95m; nothing loses any.
+     */
     const under = loco.rideHeight - altOf(r)
-    if (overRoad && !deckGone && under > 0 && under < T.sim.groundSnapDistance && r.vertVel <= 0) {
+    const sink = -altOf(r)
+    if (overRoad && !deckGone && under > 0 && sink < T.sim.groundSnapDistance && r.vertVel <= 0) {
       setAlt(r, loco.rideHeight)
       r.vertVel = 0
       r.grounded = true
@@ -1271,8 +1329,11 @@ export function stepVehicle(
     // branch above has just floored, a racer-vs-racer shove, a surface that
     // steps up between two samples -- would otherwise take eight to ten frames
     // to ease back out, which is exactly long enough to see through the road.
+    // Same rule as the ballistic branch above: pull up on `under`, but decide
+    // recoverable-vs-fall on depth below the DECK. See the note there.
     const under = loco.rideHeight - altOf(r)
-    if (overRoad && !deckGone && under > 0 && under < T.sim.groundSnapDistance) setAlt(r, loco.rideHeight)
+    const sink = -altOf(r)
+    if (overRoad && !deckGone && under > 0 && sink < T.sim.groundSnapDistance) setAlt(r, loco.rideHeight)
     r.vertVel = 0
     r.grounded = true
     if (wasAir) {

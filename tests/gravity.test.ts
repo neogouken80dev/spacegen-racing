@@ -324,7 +324,22 @@ describe('the AI', () => {
     //           to give when another car's footprint grows. Flagged for a
     //           roster decision rather than silently compensated -- see
     //           claude/spacegen-racing-filament-redesign.md.
-    expect(avg).toBeCloseTo(57.56, 2)
+    //   56.70s  the hovering branch got the floor it never had, and hover's
+    //           rideHeight went 1.00 -> 1.15. FASTER, and mostly for one
+    //           reason: Vector-7 is the flight class, `hovering` is its
+    //           permanent branch (gapCross 999), and that branch was the only
+    //           arm of the altitude chain with no clamp -- so it had been
+    //           driving through the deck and losing time in it. Measured over
+    //           18 races on three tracks, its bodywork was inside the road on
+    //           2669-3499 frames per track, as deep as 2.38m. After the floor:
+    //           zero, on every track.
+    //           `groundSnapDistance` was also re-based 2.4 -> 1.85 when the
+    //           comparison it feeds moved from "below the ride height" to
+    //           "below the road"; that part is deliberately a no-op for the
+    //           grounded class (0.55 + 1.85 == 2.4) and measured as changing
+    //           no sub-deck frame on any track. It is a coherence fix, not the
+    //           one that mattered.
+    expect(avg).toBeCloseTo(56.70, 2)
   })
 })
 

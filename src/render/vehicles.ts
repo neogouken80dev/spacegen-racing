@@ -1025,8 +1025,13 @@ const FILAMENT_FAN: readonly (readonly [number, number, number, number, number])
   [1.11, 0.10, -0.60, -0.054, 1.06],
   [1.32, 0.03, -0.70, -0.083, 0.96],
   [1.50, -0.04, -0.80, -0.116, 0.86],
-  [1.59, -0.11, -0.90, -0.149, 0.74],
-  [1.56, -0.18, -1.00, -0.194, 0.62],
+  // THE BOTTOM TWO ARE 25% SHORTER than the three above them. They carry the
+  // most anhedral, so they are the pair that reaches down toward the road, and
+  // they were the pair scraping it. Shortening only these keeps the fan's
+  // spread -- the widest point is still plate 3 at full length -- while taking
+  // the lowest corner of the silhouette up off the deck.
+  [1.19, -0.11, -0.90, -0.149, 0.74],
+  [1.17, -0.18, -1.00, -0.194, 0.62],
 ]
 
 /** Every plate is a feather: full chord and thickness at the root, half the

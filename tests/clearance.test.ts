@@ -136,6 +136,33 @@ describe('no vehicle is drawn through the road it is driving on', () => {
     }
   })
 
+  /**
+   * THE SIM'S FLOOR AND THE ART MUST AGREE.
+   *
+   * `minAltitude` is what sim/vehicle.ts clamps the hovering branch to, and it
+   * is a copy of a fact that lives in the geometry: how far the body hangs
+   * below the origin. Two places holding the same number is how they end up
+   * disagreeing, and the failure is silent -- the floor keeps working, it just
+   * stops being in the right place, and a chassis starts dipping its bodywork
+   * into the road again exactly as Vector-7 did.
+   *
+   * So assert the relationship rather than the number: whatever the art does,
+   * the floor has to sit at or below it.
+   */
+  it('every locomotion floor is deep enough for the deepest body that uses it', () => {
+    for (const def of CHASSIS) {
+      if (def.locomotion === 'grounded') continue   // wheels touch; see above
+      const loco = getLocomotion(def.id)
+      const depth = -lowestVertexFor(def.id, PILOTS[0].id)
+      expect(
+        loco.minAltitude,
+        `${def.name}: body hangs ${depth.toFixed(3)}m below the origin but the `
+        + `${def.locomotion} floor is ${loco.minAltitude} -- raise minAltitude in `
+        + 'tuning.ts, or the bodywork will sit inside the road',
+      ).toBeGreaterThanOrEqual(depth)
+    }
+  })
+
   function lowestVertexFor(chassisId: string, pilotId: string): number {
     const v = createVehicleVisual(chassisId, pilotId, QUALITY_PRESETS.high)
     const y = lowestVertex(v.group)

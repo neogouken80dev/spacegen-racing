@@ -10,7 +10,17 @@ export const TUNING = {
     maxSubSteps: 5,
     gravity: -34.0,          // exaggerated for arcade jump arcs
     airDrag: 0.24,
-    groundSnapDistance: 2.4,
+    /**
+     * How far BELOW THE DECK a racer may be and still be caught and set back
+     * on the surface, rather than treated as falling off the track.
+     *
+     * Re-based 2.4 -> 1.85 when the comparison it feeds moved from "below the
+     * ride height" to "below the road" -- see the note in sim/vehicle.ts. The
+     * grounded class rides at 0.55 and 0.55 + 1.85 == 2.4, so a wheeled car
+     * behaves exactly as it did; hover and flight stop being punished for
+     * floating higher.
+     */
+    groundSnapDistance: 1.85,
   },
 
   /** stat (1-10) -> physical value */
@@ -611,6 +621,9 @@ export const TUNING = {
       rideHeight: 0.55, maxLift: 0, surfaceFrictionInfluence: 1.0,
       driftChargeMult: 1.00, driftArcMult: 1.00, gripMult: 1.00,
       knockbackMult: 1.00, fieldForceMult: 1.00, gapCross: 0,
+      // Wheels are SUPPOSED to touch: a grounded chassis never takes the
+      // hovering branch this floors (gapCross 0, no lift), so this is 0.
+      minAltitude: 0,
       liftCapacity: 0, liftRegen: 0, cleanLandingTolerance: 0,
       // A wheel in vacuum still has a wheel, a contact patch and all of its
       // mass pressing it down -- spin gravity does not care whether there is
@@ -657,9 +670,15 @@ export const TUNING = {
       // on two tracks at once; gripMult is the same term with usable
       // granularity, so the fine trim lives here. See the wall-model pass in
       // claude/spacegen-racing-build-status.md.
-      rideHeight: 1.00, maxLift: 0, surfaceFrictionInfluence: 1.0,
+      // 1.00 -> 1.15. The hover class floats a little higher, which buys the
+      // Star Hopper's fan real daylight under it rather than the 2.5cm it had
+      // after the 1.5x scale. Small enough not to change what the cushion
+      // feels like; see the Rustfall lap ledger for what it did cost.
+      rideHeight: 1.15, maxLift: 0, surfaceFrictionInfluence: 1.0,
       driftChargeMult: 0.95, driftArcMult: 0.95, gripMult: 1.04,
       knockbackMult: 1.25, fieldForceMult: 1.50, gapCross: 4.0,
+      // Star Hopper's lowest vertex is 0.748 below the origin.
+      minAltitude: 0.78,
       liftCapacity: 0, liftRegen: 0, cleanLandingTolerance: 0,
       // HOVER IS THE CLASS THE VACUUM IS AIMED AT, and it is the one case
       // where the fiction and the mechanic agree without being argued into
@@ -740,6 +759,8 @@ export const TUNING = {
       // before the cap, including its long-documented marginal Bulwark.
       driftChargeMult: 0.90, driftArcMult: 0.85, gripMult: 0.98,
       knockbackMult: 1.60, fieldForceMult: 1.80, gapCross: 999,
+      // Vector-7's lowest vertex is 0.769 below the origin.
+      minAltitude: 0.80,
       liftCapacity: 4.0, liftRegen: 0.625, cleanLandingTolerance: 0.21,
       // Flight gains most, which is the GDD's contract and is expressed here
       // as losing least: a chassis that is already flying is the one least

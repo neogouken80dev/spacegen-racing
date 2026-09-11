@@ -548,6 +548,20 @@ describe('the flat tracks cannot reach any of this', () => {
     //             wind, and pinning gripMult back at 1.01 reproduces 29ca22ed
     //             exactly with both of them still in. This move is the flight
     //             trim and nothing else.
-    expect(race.hash()).toBe('b1d19475')
+    //   27ad749b  the hovering branch got a floor, and hover's rideHeight went
+    //             1.00 -> 1.15. Rustfall authors no bridges and no vacuum, so
+    //             neither of those is what moved it -- what moved it is that
+    //             Vector-7 and the Star Hopper are on this grid and both ride
+    //             on the altitude code that changed. The flight class had been
+    //             driving through the deck (measured: bodywork inside the road
+    //             on 2669 frames of 18 Rustfall races, as deep as 1.80m) and
+    //             now cannot, so its line and its lap time both move.
+    //             groundSnapDistance 2.4 -> 1.85 rides along in the same
+    //             change and is PROVABLY INERT: the comparison it feeds moved
+    //             from "below the ride height" to "below the road" in the same
+    //             edit, 0.55 + 1.85 == 2.4 exactly for the grounded class, and
+    //             an A/B of the two rules produced identical sub-deck frame
+    //             counts on all three measured tracks.
+    expect(race.hash()).toBe('27ad749b')
   })
 })

@@ -28,6 +28,17 @@ export interface LocomotionProfile {
   vacuumGripLoss: number
   /** Max gap width crossable without a ramp, metres. 0 = none. */
   gapCross: number
+  /**
+   * The lowest altitude this class's body may ever sit at over solid road.
+   *
+   * Altitude is measured to the model ORIGIN, and every chassis hangs some
+   * bodywork below that, so "not below zero" is not the same as "not inside
+   * the road". This is that depth, per class, and it is the floor for the
+   * hovering branch in sim/vehicle.ts -- the one branch that had none.
+   * tests/clearance.test.ts asserts it against the real geometry so the two
+   * cannot drift apart.
+   */
+  minAltitude: number
   /** Seconds of Lift available (flight only). */
   liftCapacity: number
   /** Lift units regenerated per second. */
