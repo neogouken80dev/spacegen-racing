@@ -3,9 +3,53 @@
  * expects: no doctype/html/head/body wrapper (the host supplies a skeleton),
  * no references to external files (the host blocks them).
  */
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, stat } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 
-const src = await readFile('dist-single/index.html', 'utf8')
+/**
+ * THIS SCRIPT ONLY RESHAPES. IT DOES NOT BUILD.
+ *
+ * Its input is `dist-single/index.html`, which comes from a SEPARATE vite
+ * config (`vite.single.config.ts`) that `npm run build` does not run. That is
+ * a trap, and it has already been walked into: a full `vite build`, a green
+ * test suite and a clean smoke run all pass while `dist-single/` still holds
+ * whatever was there weeks ago -- and this script cheerfully reshapes it and
+ * hands back an artifact of the OLD GAME, at almost exactly the same file size.
+ * It was published before anyone noticed.
+ *
+ * So: refuse to run on an input older than the newest source file. The fix is
+ * always the same one line, and it is in the error.
+ */
+const SRC = 'dist-single/index.html'
+async function newestSource(dir, acc = { t: 0, f: '' }) {
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) continue
+    const p = `${dir}/${e.name}`
+    if (e.isDirectory()) await newestSource(p, acc)
+    else {
+      const m = (await stat(p)).mtimeMs
+      if (m > acc.t) { acc.t = m; acc.f = p }
+    }
+  }
+  return acc
+}
+{
+  let built = 0
+  try { built = (await stat(SRC)).mtimeMs } catch {
+    throw new Error(`${SRC} does not exist.\n  Run: npx vite build --config vite.single.config.ts`)
+  }
+  const newest = await newestSource('src')
+  if (newest.t > built) {
+    const age = ((newest.t - built) / 60000).toFixed(0)
+    throw new Error(
+      `${SRC} is STALE -- ${newest.f} is ${age} minutes newer.\n`
+      + '  This script only reshapes; it does not build. Run:\n'
+      + '    npx vite build --config vite.single.config.ts',
+    )
+  }
+}
+
+const src = await readFile(SRC, 'utf8')
 const head = /<head>([\s\S]*?)<\/head>/.exec(src)?.[1] ?? ''
 const body = /<body>([\s\S]*?)<\/body>/.exec(src)?.[1] ?? ''
 if (!head || !body) throw new Error('could not parse the single-file build')
