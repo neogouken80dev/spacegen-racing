@@ -37,22 +37,54 @@ export const ITEM_PARAMS = {
   empBomb:       { stunTime: 1.1, stunTimeBoosting: 0.6 },
   overdriveCore: { mag: 0.50, duration: 6.0, contactSpin: 1.6 },
   gravityWell:   { radius: 8.0, life: 12, slowMag: 0.45, slowTime: 2.0, massMult: 1.4 },
+  /**
+   * THE PULSE GATLING FIRES ROUNDS, not a hitscan cone.
+   *
+   * It used to pick the nearest racer inside a 0.115rad cone out to 130m and
+   * apply the hit instantly, with the tracer drawn afterwards as decoration.
+   * Two things were wrong with that. The shot could not miss in any way a
+   * player could see or learn from, and the decorative tracer was a flat ray
+   * in the CAR'S OWN FRAME -- so on any rise in the road it drew a stream of
+   * sparks straight into the deck a few metres ahead, which is what got
+   * reported.
+   *
+   * A real projectile fixes both: it rides the surface like every other shot
+   * in the game (see stepProjectiles), so it follows the road instead of
+   * burying itself, and it has a flight time, so leading a moving target is a
+   * skill rather than a formality.
+   */
   laserGatling: {
     /** Seconds of continuous auto-fire once activated. */
     fireTime: 3.0,
-    /** Shots per second. */
-    fireRate: 14,
-    range: 130,
-    /** Half-angle of the hit cone, radians. Tight enough that aim matters. */
-    cone: 0.115,
+    /**
+     * Shots per second. Down from 14: every round is now an entity that can
+     * miss, so the burst is metered rather than sprayed, and 30 rounds over
+     * the three seconds is plenty to track someone with.
+     */
+    fireRate: 10,
+    /**
+     * MUCH faster than anything else fired -- rail is 90, alpha 110. A round
+     * that a target can out-drive is not a bullet, and at this speed the lead
+     * required at 60m is about a car length, which is readable.
+     */
+    speed: 240,
+    /** 240 * 0.62 is about 149m of reach, near the old cone's 130. */
+    life: 0.62,
+    /**
+     * THIN. Rail is 2.6 and seeker 2.8; this is less than half either, which
+     * is what makes a burst about tracking rather than about pointing.
+     */
+    radius: 1.1,
+    /** Rounds on one target before it spins out. */
+    hitsToBreak: 4,
     /** Speed removed per hit, as a fraction of current speed. */
     chip: 0.030,
     /** Sideways shove per hit, m/s. */
     nudge: 1.5,
-    /** Accumulated beam seconds on one target before it spins out. */
+    /** Accumulated charge on one target before it spins out. */
     breakAt: 0.80,
     spinTime: 1.0,
-    /** Accumulated beam bleeds off this fast when fire stops. */
+    /** Accumulated charge bleeds off this fast when fire stops. */
     decay: 1.30,
   },
 } as const

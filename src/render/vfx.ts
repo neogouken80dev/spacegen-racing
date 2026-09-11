@@ -269,6 +269,7 @@ const PROJ_RGB: Record<string, Float32Array> = {
   rail: makeRgb(0xffd23f, 1.35),
   seeker: makeRgb(0xff8b2f, 1.25),
   alpha: makeRgb(0xff2f5e, 1.45),
+  bullet: makeRgb(0x35ff9e, 1.55),
 }
 
 const WELL_RGB = makeRgb(0x8f6bff, 1.0)
@@ -1122,6 +1123,8 @@ class RacerFx {
   // --- pulse gatling ---------------------------------------------------
   /** Barrel angle, advanced one detent per shot. Drives the rotary flash. */
   gatSpin = 0
+  /** Shot counter for the firing-lens throttle; see gatlingShot. */
+  gatWarp = 0
   /** Previous gatlingTime, for spin-up / spin-down one-shots. */
   prevGatling = 0
   /** Muzzle idle-glow cadence while the budget is running. */
@@ -1956,15 +1959,11 @@ class Vfx implements VfxSystem {
           if (it.item === 'laserGatling') this.gatlingSpinUp(fx)
           break
         case 'beamFire': {
-          // The sim pushes beamHit immediately after the beamFire of the same
-          // shot, and only when that shot connected. Peeking one event ahead
-          // is what lets a hitscan tracer stop at the target instead of
-          // punching through it, without the renderer re-running the trace.
-          const nxt = e + 1 < ev.length ? ev[e + 1] : null
-          const tgt = nxt !== null && nxt.t === 'beamHit'
-            ? this.racerById(state, nxt.targetId)
-            : null
-          this.gatlingShot(fx, tgt)
+          // No longer peeks ahead for the matching beamHit. It had to when the
+          // shot was hitscan and the tracer needed to know where to stop; a
+          // beamHit now arrives whenever a ROUND FIRED EARLIER connects, which
+          // is a different frame and usually a different shot entirely.
+          this.gatlingShot(fx)
           break
         }
         case 'beamHit': {
@@ -3436,15 +3435,15 @@ class Vfx implements VfxSystem {
   }
 
   /**
-   * One round. Muzzle, recoil ejecta and the tracer.
+   * One round leaving the barrel: muzzle flash, recoil ejecta, and the
+   * firing distortion. Nothing downrange -- the round is a real projectile and
+   * draws its own tracer from wherever it actually is.
    *
-   * `target` is the racer this shot connected with, resolved by the caller
-   * from the beamHit that the sim pushes immediately after the beamFire of the
-   * same shot, or null for a miss.
+   * It used to take the racer the shot connected with, because a hitscan
+   * tracer had to know where to stop. There is no hitscan any more.
    */
-  private gatlingShot(fx: RacerFx, target: RacerState | null): void {
+  private gatlingShot(fx: RacerFx): void {
     const q = _bQ
-    const P = ITEM_PARAMS.laserGatling
     const mU = _bHy * 0.58
     const mx = pX(_bHz, 0, mU)
     const my = pY(_bHz, 0, mU)
@@ -3466,6 +3465,23 @@ class Vfx implements VfxSystem {
     )
     this.flash(mx, my, mz, BEAM_RGB, 0.55, 0.045, 0.34)
 
+    /**
+     * THE ROUND'S OWN FIRING LENS -- small, brief, and only every third shot.
+     *
+     * Every weapon that leaves the car bends the picture on the way out (see
+     * FIRE_WARP), and this is the gatling's share of that. It has to be the
+     * smallest in the game for the same reason its round is the thinnest: it
+     * is a tenth of a missile and it fires ten times a second.
+     *
+     * Throttled to one in three because the distortion pool is four slots.
+     * Untethered, one burst is thirty requests in three seconds and every
+     * explosion in the firefight around it loses its lens. Every third round
+     * at 0.07s still reads as a continuous shimmer at the muzzle and leaves
+     * the pool free for the things that actually explode.
+     */
+    fx.gatWarp = (fx.gatWarp + 1) % 3
+    if (fx.gatWarp === 0) this.spawnDistortion(mx, my, mz, 0.45, 4.0, 0.07)
+
     // ---- recoil --------------------------------------------------------
     // The chassis mesh belongs to vehicles.ts, so the shudder is read off the
     // ejecta rather than off the vehicle: hot spent energy thrown DOWN and
@@ -3486,64 +3502,16 @@ class Vfx implements VfxSystem {
       )
     }
 
-    // ---- tracer --------------------------------------------------------
-    // Hitscan: the round is already there. So this is a short-lived streak
-    // along the ray, not a projectile with a flight time. Every term is
-    // jittered per shot — length, segment count, gain, lateral wander — so a
-    // three-second burst reads as forty-two rounds rather than as one static
-    // line drawn forty-two times.
-    let ex: number, ey: number, ez: number
-    if (target !== null) {
-      // Lifted along the TARGET's up, not the shooter's and not the world's:
-      // two cars on opposite walls of a corkscrew disagree about which way is
-      // up, and the tracer has to end on the car it actually hit.
-      const tu = this.gravity ? target.up : UP_Y
-      ex = target.pos.x + tu.x * 0.35
-      ey = target.pos.y + tu.y * 0.35
-      ez = target.pos.z + tu.z * 0.35
-    } else {
-      const reach = P.range * (0.45 + rnd() * 0.55)
-      const spread = Math.tan(P.cone) * reach * rnd2() * 0.8
-      const rise = rnd2() * 0.6
-      ex = mx + dX(reach, spread, rise)
-      ey = my + dY(reach, spread, rise)
-      ez = mz + dZ(reach, spread, rise)
-    }
-    let dx = ex - mx, dy = ey - my, dz = ez - mz
-    const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
-    if (len < 1e-3) return
-    dx /= len; dy /= len; dz /= len
-
-    // One dash every ~7m, capped so a 130m miss cannot eat the frame budget.
-    const segs = Math.max(2, Math.min(Math.round(len / 7), Math.round(14 * q) + 2))
-    const step = len / segs
-    const jitter = 0.05 + rnd() * 0.10
-    const gain = 1.5 + rnd() * 0.9
-    for (let i = 0; i < segs; i++) {
-      const d = (i + rnd() * 0.7) * step
-      // Wander perpendicular to the RAY, in the car's own (right, up) plane.
-      const js = rnd2() * jitter, ju = rnd2() * jitter
-      this.spawn(
-        mx + dx * d + dX(0, js, ju),
-        my + dy * d + dY(0, js, ju),
-        mz + dz * d + dZ(0, js, ju),
-        dx * 120, dy * 120, dz * 120,
-        BEAM_RGB[0] * gain, BEAM_RGB[1] * gain, BEAM_RGB[2] * gain,
-        0.045 + rnd() * 0.035, 0.055 + rnd() * 0.030, 0, 0, 0, K_SPARK,
-      )
-    }
-
-    // Weapon-hot screen tension for the shooter. Deliberately tiny: this is
-    // driven at 14Hz and boostIntensity also drives the composite's forward
-    // zoom, so anything larger strobes the entire frame for three seconds.
-    if (_bLocal) this.boostIntensity = Math.max(this.boostIntensity, 0.11)
+    // ---- no tracer here --------------------------------------------------
+    // There used to be one: forty-two dashes laid along a hitscan ray every
+    // burst. It was wrong twice over. The round is a real projectile now, so
+    // the streak belongs to the projectile (see updateProjectiles) which is
+    // the only thing that knows where it actually got to -- and the old ray
+    // was drawn FLAT IN THE CAR'S OWN FRAME out to 130m, which on any rise in
+    // the road planted a stream of sparks in the deck a few metres ahead.
+    // That was the "it shoots into the ground" report.
   }
 
-  /**
-   * A round connecting, drawn ON THE TARGET. Called from inside the SHOOTER's
-   * event loop, so the module basis still describes the shooter — which is
-   * exactly what is wanted for spraying the impact back down the line of fire.
-   */
   private gatlingImpact(t: RacerState, lethal: boolean): void {
     const chassis = CHASSIS_BY_ID[t.chassisId]
     const hy = chassis ? chassis.halfExtents.y : 0.6
@@ -3566,8 +3534,15 @@ class Vfx implements VfxSystem {
     const bz = -_bFwdZ + tu.z * 0.35
 
     if (!lethal) {
-      this.burst(px, py, pz, bx, by, bz, Math.round(5 * q) + 2, 11, 0.75, BEAM_RGB, 0.85, 0.20, 0.075, K_SPARK, -13, 2.4)
-      this.flash(px, py, pz, BEAM_RGB, 0.85, 0.075, 0.55)
+      /**
+       * BIGGER THAN IT WAS, because a hit is worth four times what it was.
+       * The cone version needed 11 connecting shots to break a racer, so each
+       * one had to be a tick; a round is now a quarter of a kill, and a
+       * quarter of a kill should throw sparks off the panel it struck.
+       */
+      this.burst(px, py, pz, bx, by, bz, Math.round(11 * q) + 4, 16, 0.85, BEAM_RGB, 1.15, 0.26, 0.085, K_SPARK, -13, 2.4)
+      this.burst(px, py, pz, bx, by, bz, Math.round(4 * q) + 2, 24, 0.45, BEAM_HOT, 1.5, 0.14, 0.05, K_SPARK, -20, 3.0)
+      this.flash(px, py, pz, BEAM_RGB, 1.25, 0.085, 0.70)
       // Hit marker: a small hard ring that snaps open and dies inside an
       // eighth of a second, so the shooter can tell a connecting burst from a
       // missing one at a hundred metres without any HUD.
@@ -4086,6 +4061,37 @@ class Vfx implements VfxSystem {
   }
 
   /** Launch signature for each weapon. */
+  /**
+   * THE FIRING LENS, SIZED BY WHAT IS BEING FIRED.
+   *
+   * [initial radius, growth m/s, life s] per weapon. Everything that leaves
+   * the car bends the picture on the way out, and how much is the weapon's
+   * own weight: an Alpha Missile full-stops the leader and gets a lens you
+   * cannot miss; a Void Mine is rolled out of the back and barely ripples.
+   *
+   * The numbers are ordered off the sim, not chosen by eye -- spin time and
+   * blast radius are what "power" means here:
+   *
+   *   alpha   spin 2.0, radius 4.0, full stop   -> 2.6 / 15 / 0.30
+   *   seeker  spin 1.4, radius 2.8              -> 1.7 / 11 / 0.22
+   *   rail    spin 1.2, radius 2.6              -> 1.5 / 10 / 0.20
+   *   emp     stun 1.1, whole field             -> 2.0 / 17 / 0.26  (wide, soft)
+   *   well    deployed, no impact               -> 1.2 /  7 / 0.18
+   *   mine    deployed, arms later              -> 1.0 /  6 / 0.16
+   *
+   * Nitro and the Overdrive Core are deliberately absent. They are not fired
+   * at anyone, and both already drive the boost warp in the composite -- a
+   * second lens on top of that fights an effect this renderer already has.
+   */
+  private static readonly FIRE_WARP: Partial<Record<ItemId, readonly [number, number, number]>> = {
+    alphaMissile: [2.6, 15, 0.30],
+    seekerMissile: [1.7, 11, 0.22],
+    railMissile: [1.5, 10, 0.20],
+    empBomb: [2.0, 17, 0.26],
+    gravityWell: [1.2, 7, 0.18],
+    voidMine: [1.0, 6, 0.16],
+  }
+
   private muzzle(
     item: ItemId, hz: number, hy: number, q: number,
   ): void {
@@ -4123,6 +4129,14 @@ class Vfx implements VfxSystem {
       default:
         this.flash(mx, my, mz, col, 2.0, 0.14, 1.2)
         this.burst(mx, my, mz, dX(1, 0, 0.15), dY(1, 0, 0.15), dZ(1, 0, 0.15), Math.round(12 * q), 12, 0.7, col, 1.3, 0.26, 0.12, K_SPARK, -6, 1.6)
+    }
+
+    // The lens goes where the thing actually left from: off the nose for a
+    // shot, off the tail for anything dropped.
+    const w = Vfx.FIRE_WARP[item]
+    if (w) {
+      const back = item === 'voidMine' || item === 'gravityWell'
+      this.spawnDistortion(back ? dx : mx, back ? dy : my, back ? dz : mz, w[0], w[1], w[2])
     }
   }
 
@@ -4514,9 +4528,38 @@ class Vfx implements VfxSystem {
       const ux = p.vel.x / vl, uy = p.vel.y / vl, uz = p.vel.z / vl
 
       // Head glow. Always present so the projectile reads even without a body.
-      this.spawn(sx, sy, sz, 0, 0, 0, col[0] * 2.4, col[1] * 2.4, col[2] * 2.4, 0.07, p.kind === 'alpha' ? 1.6 : 1.15, 0, 0, 0, K_SPRITE)
+      const headSize = p.kind === 'alpha' ? 1.6 : p.kind === 'bullet' ? 0.42 : 1.15
+      this.spawn(sx, sy, sz, 0, 0, 0, col[0] * 2.4, col[1] * 2.4, col[2] * 2.4, 0.07, headSize, 0, 0, 0, K_SPRITE)
 
-      if (p.kind === 'rail') {
+      if (p.kind === 'bullet') {
+        /**
+         * A TRACER, DRAWN ALONG THE GROUND IT ACTUALLY COVERED.
+         *
+         * At 240 m/s a round moves four metres in a frame, so a point sprite
+         * at p.pos is a dotted line at 60fps and a row of disconnected dashes
+         * at 20. The streak is laid back along -vel across exactly one frame
+         * of travel, which is what makes it read as a continuous line at any
+         * frame rate -- and it is why this has to be drawn from the projectile
+         * rather than from the muzzle: only the projectile knows where it got
+         * to.
+         *
+         * No smoke, no spark shower, no drag: it is thin and it is gone. The
+         * whole identity of this weapon against the missiles is that you see a
+         * line, not an object.
+         */
+        const cnt = Math.max(2, Math.round(5 * q))
+        const span = vl * dt
+        for (let k = 0; k < cnt; k++) {
+          const t = (k / cnt) * span
+          const fade = 1 - (k / cnt) * 0.72
+          this.spawn(
+            sx - ux * t, sy - uy * t, sz - uz * t,
+            0, 0, 0,
+            col[0] * 2.0 * fade, col[1] * 2.0 * fade, col[2] * 2.0 * fade,
+            0.055, 0.30 * fade + 0.06, 0, 0, 0, K_SPARK,
+          )
+        }
+      } else if (p.kind === 'rail') {
         const cnt = Math.max(1, Math.round(3 * q))
         for (let k = 0; k < cnt; k++) {
           const t = (k / cnt) * dt
@@ -5032,13 +5075,27 @@ class Vfx implements VfxSystem {
     }
   }
 
+  /**
+   * EVICTS THE MOST FADED, NOT THE FRESHEST.
+   *
+   * This used to keep the slot with the LARGEST remaining life and overwrite
+   * it, which is backwards: with the pool full, every new blast landed on the
+   * newest lens and the three oldest ones sat there running out. Four
+   * explosions in quick succession showed the first, the second, and then a
+   * single slot thrashing between the third and fourth.
+   *
+   * Nobody noticed while only explosions used this. The gatling fires ten
+   * rounds a second and each one asks for a lens, so with the old rule a
+   * three-second burst would have pinned one slot and starved every blast in
+   * the firefight around it.
+   */
   private spawnDistortion(x: number, y: number, z: number, r0: number, growth: number, life: number): void {
     let slot = 0
-    let worst = -1
+    let worst = Infinity
     for (let i = 0; i < MAX_DISTORT; i++) {
-      if (this.distLife[i] <= 0) { slot = i; worst = -1; break }
+      if (this.distLife[i] <= 0) { slot = i; break }
       const rem = 1 - this.distAge[i] / this.distLife[i]
-      if (rem > worst) { worst = rem; slot = i }
+      if (rem < worst) { worst = rem; slot = i }
     }
     this.distAge[slot] = 0
     this.distLife[slot] = life

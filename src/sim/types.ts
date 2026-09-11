@@ -128,7 +128,9 @@ export type ItemId =
   | 'overdriveCore'
   | 'gravityWell'
 
-export type ProjectileKind = 'rail' | 'seeker' | 'alpha'
+/** `bullet` is the Pulse Gatling's round. It is a real projectile like the
+ *  rest, not a hitscan ray -- see the note on the gatling in race.ts. */
+export type ProjectileKind = 'rail' | 'seeker' | 'alpha' | 'bullet'
 export type FieldKind = 'mine' | 'well'
 
 export interface Projectile {

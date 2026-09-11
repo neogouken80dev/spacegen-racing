@@ -82,13 +82,30 @@ describe('Pulse Gatling', () => {
     shooter.item = 'laserGatling'; shooter.itemCharges = 1; shooter.rouletteTime = 0
     const fire = emptyInput(); fire.item = true
     const idle = emptyInput()
-    for (let f = 0; f < 36; f++) {
+    /**
+     * SIXTEEN FRAMES, not thirty-six.
+     *
+     * The window has to end with the victim PARTLY charged, because partial
+     * charge is the thing that bleeds -- a broken racer's charge is reset by
+     * the break itself and there is nothing left to measure.
+     *
+     * 36 frames was right when the gatling was hitscan at 14 rounds a second
+     * and needed eleven connecting shots to break someone. It is a projectile
+     * weapon now: 10 rounds a second, four hits to break, plus about an eighth
+     * of a second of flight time at 30m. Over 36 frames that is a full break
+     * and a reset to zero, which read as "no charge ever accumulated".
+     * 16 frames lands two rounds, for half the bar.
+     */
+    for (let f = 0; f < 16; f++) {
       race.setInput(0, f === 0 ? fire : idle); race.setInput(1, idle)
       pin()
       race.step()
     }
     const charged = victim.beamCharge
-    expect(charged).toBeGreaterThan(0.1)
+    expect(charged, `partial charge after 16 frames: ${charged.toFixed(3)}`)
+      .toBeGreaterThan(0.1)
+    expect(charged, 'must not have broken already, or there is nothing to bleed')
+      .toBeLessThan(ITEM_PARAMS.laserGatling.breakAt)
     // Break line of sight: put the victim far off the firing axis.
     for (let f = 0; f < 90; f++) {
       race.setInput(0, idle); race.setInput(1, idle)

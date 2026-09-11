@@ -35,6 +35,39 @@ const ALPHA_RIDE = 2.0
 const _pdir = v3()
 const _paim = v3()
 
+/**
+ * DISTANCE FROM A POINT TO THE SEGMENT A PROJECTILE COVERED THIS FRAME.
+ *
+ * A point-vs-sphere test at the projectile's new position assumes it was never
+ * anywhere in between, which holds only while the step is short against the
+ * capture radius. The gatling round breaks that badly: 240 m/s is 4m per
+ * frame against a 2.6m capture, so a round can start in front of a car and
+ * end behind it having never been tested inside. Measured as the weapon
+ * scoring zero hits on a target held 30m dead ahead.
+ *
+ * Sweeping the segment is exact for a straight step and costs one dot product
+ * and a clamp. Only the bullet needs it today -- rail moves 1.5m a frame
+ * against a 4.1m capture -- but the cost is small enough that the next fast
+ * thing gets it for free.
+ */
+function segDist(
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number,
+  pt: { x: number; y: number; z: number },
+): number {
+  const dx = bx - ax, dy = by - ay, dz = bz - az
+  const len2 = dx * dx + dy * dy + dz * dz
+  let t = 0
+  if (len2 > 1e-9) {
+    t = ((pt.x - ax) * dx + (pt.y - ay) * dy + (pt.z - az) * dz) / len2
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+  }
+  const cx = ax + dx * t - pt.x
+  const cy = ay + dy * t - pt.y
+  const cz = az + dz * t - pt.z
+  return Math.sqrt(cx * cx + cy * cy + cz * cz)
+}
+
 export class Race {
   readonly track: Track
   readonly state: RaceState
@@ -787,6 +820,7 @@ export class Race {
         }
       }
 
+      const prevX = p.pos.x, prevY = p.pos.y, prevZ = p.pos.z
       if (p.kind !== 'alpha') {
         p.pos.x += p.vel.x * DT
         if (this.grav) p.pos.y += p.vel.y * DT
@@ -847,9 +881,54 @@ export class Race {
         if (!p.alive) continue
       }
 
+      /**
+       * A BULLET IS NOT A MISSILE, so it resolves on its own terms: it chips
+       * and shoves rather than spinning, and only the round that fills the
+       * target's charge bar knocks them out. Handled before the missile block
+       * because `hit()` is the wrong verb for it entirely.
+       */
+      if (p.kind === 'bullet') {
+        const G = ITEM_PARAMS.laserGatling
+        const owner = s.racers[p.ownerId]
+        for (const r of s.racers) {
+          if (r.finished || r.id === p.ownerId || r.respawnTime > 0) continue
+          if (r.invincibleTime > 0 || r.immuneTime > 0) continue
+          if (segDist(prevX, prevY, prevZ, p.pos.x, p.pos.y, p.pos.z, r.pos) > G.radius + 1.5) continue
+
+          r.vel.x *= 1 - G.chip
+          if (this.grav) r.vel.y *= 1 - G.chip
+          r.vel.z *= 1 - G.chip
+          // Shoved along the ROUND's own line of flight, so a burst walks a
+          // tracked car off its line in the direction it was shot from. The
+          // cone version shoved along the shooter's right, which was the only
+          // direction available to it when there was no round to take a
+          // heading from.
+          const sp = Math.hypot(p.vel.x, p.vel.y, p.vel.z) || 1
+          r.vel.x += (p.vel.x / sp) * G.nudge
+          if (this.grav) r.vel.y += (p.vel.y / sp) * G.nudge
+          r.vel.z += (p.vel.z / sp) * G.nudge
+
+          r.beamCharge += G.breakAt / G.hitsToBreak
+          r.beamGrace = BEAM_GRACE
+          const lethal = r.beamCharge >= G.breakAt - 1e-6
+          if (lethal) {
+            r.beamCharge = 0
+            this.hit(r, 'laserGatling', G.spinTime)
+          }
+          // Reported on the SHOOTER, which is where the VFX reads it from and
+          // who the hit marker belongs to.
+          if (owner) owner.events.push({ t: 'beamHit', targetId: r.id, lethal })
+          p.alive = false
+          break
+        }
+        if (!p.alive) continue
+      }
+
       const radius = p.kind === 'rail' ? ITEM_PARAMS.railMissile.radius
         : p.kind === 'seeker' ? ITEM_PARAMS.seekerMissile.radius
-          : ITEM_PARAMS.alphaMissile.radius
+          : p.kind === 'bullet' ? ITEM_PARAMS.laserGatling.radius
+            : ITEM_PARAMS.alphaMissile.radius
+      if (p.kind === 'bullet') continue
       for (const r of s.racers) {
         if (r.finished || r.id === p.ownerId) continue
         if (p.kind === 'alpha' && r.id !== p.targetId) continue
@@ -866,7 +945,10 @@ export class Race {
         break
       }
     }
-    if (s.projectiles.length > 24) s.projectiles = s.projectiles.filter((p) => p.alive)
+    // 24 was sized for a world where only missiles existed. One gatling burst
+    // is 30 rounds and eight cars can be firing, so compacting at 24 would run
+    // almost every frame of a firefight.
+    if (s.projectiles.length > 96) s.projectiles = s.projectiles.filter((p) => p.alive)
   }
 
   private stepFields(): void {
@@ -917,12 +999,13 @@ export class Race {
   private stepGatling(): void {
     const s = this.state
     const P = ITEM_PARAMS.laserGatling
-    const shotValue = 1 / P.fireRate
-
-    // The grace window must be LONGER than the interval between shots. At 14
-    // rounds a second the beam only lands on roughly one frame in four, so
-    // decaying on every other frame cancels each hit almost exactly and
-    // `breakAt` becomes unreachable no matter how well the player tracks.
+    /**
+     * FIRE A ROUND. The scan that used to live here picked the nearest racer
+     * inside a cone and applied the hit in the same frame -- a shot that could
+     * not miss, and whose tracer was drawn afterwards as decoration. The round
+     * is an entity now; whether it connects is settled in stepProjectiles like
+     * every other shot in the game.
+     */
     for (const r of s.racers) {
       if (r.gatlingTime <= 0) continue
       if (r.finished || r.spinTime > 0 || r.stunTime > 0) { r.gatlingTime = 0; continue }
@@ -933,65 +1016,14 @@ export class Race {
       r.gatlingCooldown += 1 / P.fireRate
       r.events.push({ t: 'beamFire' })
 
-      // THE AIMING FRAME. Flat: the compass nose, a cone in world XZ, and a
-      // "same height" gate on world Y. On a gravity track every one of those
-      // three is the wrong axis -- two cars stacked six metres apart up a
-      // vertical wall are SIDE BY SIDE on the road, and the `dy > 6` gate
-      // refuses the shot; the cone is measured in a plane the road does not
-      // lie in; and the shove goes into the wall instead of across it.
-      const gr = this.grav
-      const fx = gr ? r.fwd.x : Math.sin(r.yaw)
-      const fy = gr ? r.fwd.y : 0
-      const fz = gr ? r.fwd.z : Math.cos(r.yaw)
-      // right = forward x up, the convention Track, the vehicle and the camera
-      // all share. Flat with up = +Y that is (-cos yaw, 0, sin yaw).
-      const rx = gr ? fy * r.up.z - fz * r.up.y : -Math.cos(r.yaw)
-      const ry = gr ? fz * r.up.x - fx * r.up.z : 0
-      const rz = gr ? fx * r.up.y - fy * r.up.x : Math.sin(r.yaw)
-      let best: RacerState | null = null
-      let bestDist = Infinity
-      for (const o of s.racers) {
-        if (o.id === r.id || o.finished || o.respawnTime > 0) continue
-        if (o.invincibleTime > 0 || o.immuneTime > 0) continue
-        let dx = o.pos.x - r.pos.x, dy = o.pos.y - r.pos.y, dz = o.pos.z - r.pos.z
-        let off: number
-        if (gr) {
-          // Split the offset into "in the shooter's road plane" and "out of
-          // it". The out-of-plane part is what the flat `dy` gate was really
-          // testing for: a car on another deck entirely.
-          off = dx * r.up.x + dy * r.up.y + dz * r.up.z
-          dx -= r.up.x * off; dy -= r.up.y * off; dz -= r.up.z * off
-        } else {
-          off = dy
-          dy = 0
-        }
-        if (Math.abs(off) > 6) continue
-        const dist = gr ? Math.hypot(dx, dy, dz) : Math.hypot(dx, dz)
-        if (dist < 2 || dist > P.range) continue
-        const along = (dx * fx + dy * fy + dz * fz) / dist
-        if (along < Math.cos(P.cone)) continue
-        if (dist < bestDist) { bestDist = dist; best = o }
-      }
-      if (!best) continue
-
-      best.vel.x *= 1 - P.chip
-      if (gr) best.vel.y *= 1 - P.chip
-      best.vel.z *= 1 - P.chip
-      // Shove along the shooter's right, so a tracked target drifts off line.
-      const nudge = P.nudge * DT * P.fireRate
-      best.vel.x += rx * nudge
-      if (gr) best.vel.y += ry * nudge
-      best.vel.z += rz * nudge
-      best.beamCharge += shotValue
-
-      best.beamGrace = BEAM_GRACE
-
-      const lethal = best.beamCharge >= P.breakAt
-      if (lethal) {
-        best.beamCharge = 0
-        this.hit(best, 'laserGatling', P.spinTime)
-      }
-      r.events.push({ t: 'beamHit', targetId: best.id, lethal })
+      // Straight down the nose, on the racer's own frame. On a gravity track
+      // that is the road's forward, not a compass bearing -- the same reason
+      // the rail missile uses r.fwd rather than yaw.
+      const g = this.grav
+      const fx = g ? r.fwd.x : Math.sin(r.yaw)
+      const fy = g ? r.fwd.y : 0
+      const fz = g ? r.fwd.z : Math.cos(r.yaw)
+      s.projectiles.push(this.mkProjectile('bullet', r, -1, fx, fy, fz, P.speed, P.life))
     }
 
     // Anyone who has not taken a round inside the grace window bleeds off.

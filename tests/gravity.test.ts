@@ -339,7 +339,13 @@ describe('the AI', () => {
     //           grounded class (0.55 + 1.85 == 2.4) and measured as changing
     //           no sub-deck frame on any track. It is a coherence fix, not the
     //           one that mattered.
-    expect(avg).toBeCloseTo(56.70, 2)
+    //   56.63s  the Pulse Gatling became a projectile weapon. It used to pick
+    //           a target inside a cone and apply the hit in the same frame --
+    //           a shot that could not miss. Rounds now fly at 240 m/s and can
+    //           be led, dodged or simply fired at nothing, so the AI's bursts
+    //           no longer chip every car in front of them and the field is
+    //           marginally quicker. Fire rate also dropped 14 -> 10.
+    expect(avg).toBeCloseTo(56.63, 2)
   })
 })
 
