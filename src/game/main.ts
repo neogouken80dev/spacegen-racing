@@ -10,7 +10,7 @@ import { Race } from '../sim/race'
 import { Track } from '../sim/track'
 import { resetAI } from '../sim/ai'
 import { TRACKS_BY_ID, RUSTFALL } from '../content/tracks'
-import { CHASSIS, CHASSIS_BY_ID, getDerived } from '../content/chassis'
+import { CHASSIS, CHASSIS_BY_ID, getDerived, getLocomotion } from '../content/chassis'
 import { PILOTS } from '../content/pilots'
 import { TUNING as T } from '../content/tuning'
 import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types'
@@ -28,6 +28,11 @@ import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
 import { installCompactLayout, type CompactLayout } from '../ui/compact'
 import { createInput, isTouchScheme, type InputManager } from './input'
 import { ChaseCamera } from './camera'
+import { themeFor } from '../render/themes'
+import {
+  ATTRACT_TRACK, attractPose, attractRacerCount, makeAttractPose, shotFor,
+  spreadField, type AttractPose,
+} from './attract'
 import { clamp01 } from '../sim/math'
 import type { VfxSystem, TrackVisual, EnvironmentVisual, CrosswindFrame } from '../render/api'
 
@@ -41,7 +46,7 @@ const RACER_COUNT = 8
  * is deliberately a phase of its own rather than a flag on `racing`, because
  * every branch that asks "is the player driving" has to answer no.
  */
-type Phase = 'menu' | 'racing' | 'ceremony' | 'paused' | 'results'
+type Phase = 'menu' | 'attract' | 'racing' | 'ceremony' | 'paused' | 'results'
 
 interface RenderRacer {
   visual: VehicleVisualEx
@@ -90,6 +95,15 @@ export class Game {
   private pausedBySettings = false
 
   private phase: Phase = 'menu'
+  /**
+   * Seconds the attract shot has been running. Its own clock rather than the
+   * sim's: the camera's push is a property of how long the player has been
+   * looking at the title screen, not of how far through a race the AI field is.
+   */
+  private attractT = 0
+  private readonly attractBuf: AttractPose = makeAttractPose()
+  /** True while the document is hidden, so the title race stops burning a phone. */
+  private docHidden = false
   private accumulator = 0
   /** Per-racer one-shot events accumulated across the sub-steps of one render
    *  frame. See the carry block in loop(). */
@@ -251,6 +265,30 @@ export class Game {
     }
     document.addEventListener('visibilitychange', this.onVisibility)
 
+    /**
+     * THE TITLE SCREEN OWNS A RACE, AND ONLY THE TITLE SCREEN.
+     *
+     * Two reasons it stops the moment any other screen comes up, and only one
+     * of them is thrift:
+     *
+     *   The garage builds a SECOND WebGL context for its vehicle preview. A
+     *   full race rendering underneath that is exactly the pair of contexts
+     *   garagePreview.ts exists to prevent -- see its header.
+     *
+     *   Every other screen is opaque. Rendering a circuit nobody can see is a
+     *   phone's battery spent on nothing.
+     *
+     * Coming back to the title builds a fresh race rather than resuming the old
+     * one, which costs a track rebuild. That is the deliberate trade: the cost
+     * lands on a rare back-navigation instead of on every frame of a screen the
+     * player is going to leave, and a new grid each visit is the better attract
+     * screen anyway.
+     */
+    this.frontEnd.onScreen = (screen) => {
+      if (screen === 'title') this.startAttract()
+      else this.stopAttract()
+    }
+
     this.onResize()
     this.tools.hidden = true
     this.frontEnd.show('title')
@@ -391,7 +429,112 @@ export class Game {
   }
 
   // -------------------------------------------------------------------------
+  // THE TITLE SCREEN'S RACE
+  //
+  // Not a cutscene, not a video, not a pre-rendered plate: an actual race with
+  // an actual field, on the same sim the player is about to drive. Everything
+  // that makes the game look like itself -- the drift ribbons, the sparks, the
+  // sky, the overtakes -- is already built and already tuned, so the honest
+  // representation of this game is a frame of it, and the cheapest way to get
+  // one is to run it.
+  //
+  // THREE THINGS THIS IS NOT ALLOWED TO DO
+  //
+  //   Cost a phone its first impression. The field scales with the tier the
+  //   device already detected (see attractRacerCount): the sim is arithmetic
+  //   and free, the vehicles are the draw calls, so the pack shrinks rather
+  //   than the feature being gated off mobile.
+  //
+  //   Take the player's input. Every racer here is AI -- localRacerIndex is
+  //   -1 -- and the loop does not call setInput at all in this phase, so a
+  //   keypress on the title screen cannot nudge a car.
+  //
+  //   Keep running when nobody is looking. See the visibilitychange handler:
+  //   a backgrounded tab stops stepping entirely rather than relying on the
+  //   browser to throttle rAF generously.
+  // -------------------------------------------------------------------------
+  private startAttract(): void {
+    if (this.phase === 'attract') return
+    resetAI()
+    this.setTrack(ATTRACT_TRACK)
+    this.applyRenderScale()
+    this.buildWorld()
+    this.eventCarry.length = 0
+
+    const n = attractRacerCount(this.tier)
+    // A varied grid rather than the player's garage selection: this is a shop
+    // window for the roster, so it should show as much of the roster as it has
+    // slots for.
+    const config: SimConfig = {
+      seed: (Math.random() * 0xffffffff) >>> 0,
+      totalLaps: 9,   // long enough that the title screen never runs out of race
+      racerCount: n,
+      trackId: this.track.def.id,
+      chassisIds: Array.from({ length: n }, (_, i) => CHASSIS[i % CHASSIS.length].id),
+      pilotIds: Array.from({ length: n }, (_, i) => PILOTS[i % PILOTS.length].id),
+      localRacerIndex: -1,
+      aiSkill: Array.from({ length: n }, (_, i) => 2 + (i % 3)),
+    }
+
+    this.race = new Race(this.track, config)
+    // Deal the field around the lap before it steps. A grid starts bunched and
+    // therefore leaves bunched, which from a fixed camera is one convoy and
+    // then most of a lap of empty road -- the probe measured exactly that, zero
+    // cars on screen from t+25s. See spreadField.
+    //
+    // Offset a third of a lap back from the camera so the first thing the
+    // player sees is cars ARRIVING, not the backs of cars already leaving.
+    spreadField(
+      this.race.state.racers, this.track,
+      shotFor(this.track.def.id).s - this.track.length / 3,
+      {
+        rideHeightOf: (id) => getLocomotion(id).rideHeight,
+        topSpeedOf: (id) => getDerived(id).topSpeed,
+      },
+    )
+    // Not a player, just an index the render path reads for topSpeed and wind.
+    // Everything that would treat it as the player is gated on the phase.
+    this.localId = 0
+    this.spawnRacerVisuals()
+
+    this.chase.gravity = this.track.hasGravity
+    this.chase.endCinematic()
+    this.accumulator = 0
+    this.attractT = 0
+    this.input.setPadsVisible(false)
+    this.hud.root.style.display = 'none'
+    this.tools.hidden = true
+    this.phase = 'attract'
+  }
+
+  /**
+   * The active circuit's theme.
+   *
+   * Exists for tools/probe-attract.mjs, which has to ask where the hero sky
+   * body actually is in order to check the title camera is pointed at it. The
+   * alternative was a second copy of that direction vector living in the probe,
+   * which would be correct right up until somebody moved the black hole -- and
+   * would then keep reporting a pass while the shot quietly pointed at nothing.
+   * One accessor is cheaper than that class of bug.
+   */
+  get theme(): ReturnType<typeof themeFor> { return themeFor(this.track.def.id) }
+
+  /** Tear the title race down. Idempotent: safe to call from any phase. */
+  private stopAttract(): void {
+    if (this.phase !== 'attract') return
+    this.phase = 'menu'
+    this.race = null
+    this.teardownWorld()
+  }
+
+  // -------------------------------------------------------------------------
   private startRace(): void {
+    // FIRST, AND NOT LATER. startRace() calls frontEnd.hide() further down,
+    // which fires onScreen(null), which stops the attract race -- and at that
+    // point `phase` is still 'attract', so stopAttract() would happily null the
+    // race THIS call had just built and tear its world down under it. Ending
+    // the title race up here leaves that callback a no-op.
+    this.stopAttract()
     resetAI()
     this.applyRenderScale()
     this.buildWorld()
@@ -595,8 +738,14 @@ export class Game {
 
     this.trackFrame(rawDt)
 
-    const simming = (this.phase === 'racing' || this.phase === 'ceremony') && this.race !== null
+    // The title race steps like any other, with one extra condition: a hidden
+    // tab stops entirely. rAF throttling in a background tab is a courtesy, not
+    // a guarantee, and this is a loop that would otherwise run a full race sim
+    // on a phone in someone's pocket.
+    const simming = (this.phase === 'racing' || this.phase === 'ceremony'
+      || (this.phase === 'attract' && !this.docHidden)) && this.race !== null
     if (this.phase === 'ceremony') this.cerT += rawDt
+    if (this.phase === 'attract' && !this.docHidden) this.attractT += rawDt
 
     if (simming && this.race) {
       this.accumulator += rawDt
@@ -611,13 +760,20 @@ export class Game {
             rr.prevUX = r.up.x; rr.prevUY = r.up.y; rr.prevUZ = r.up.z
           }
         }
-        const frame: InputFrame = this.input.sample()
-        this.lastInput.lookBack = frame.lookBack
-        this.lastInput.item = frame.item
-        this.lastInput.drift = frame.drift
-        this.lastInput.brake = frame.brake
-        this.lastInput.lift = frame.lift
-        this.race.setInput(this.localId, frame)
+        // NOT IN ATTRACT. Every racer on the title screen is AI, and a player
+        // mashing keys at the menu must not reach one of them. Skipping the
+        // sample outright is the guard -- there is then no path from the
+        // keyboard into the title race at all, rather than a flag that some
+        // later edit could read the wrong way round.
+        if (this.phase !== 'attract') {
+          const frame: InputFrame = this.input.sample()
+          this.lastInput.lookBack = frame.lookBack
+          this.lastInput.item = frame.item
+          this.lastInput.drift = frame.drift
+          this.lastInput.brake = frame.brake
+          this.lastInput.lift = frame.lift
+          this.race.setInput(this.localId, frame)
+        }
         this.race.step()
         // The victory lap. A separate pass, deliberately: the headless
         // determinism gate and the balance harness call step() and nothing
@@ -747,7 +903,23 @@ export class Game {
       const topSpeed = getDerived(local.chassisId).topSpeed
       const lookBack = this.lastInput.lookBack
       const localView = this.renderRacers[this.localId].view
-      if (this.phase === 'ceremony') {
+      if (this.phase === 'attract') {
+        // THE FIXED SHOT.
+        //
+        // Written straight onto the chase rig's own camera rather than onto a
+        // second PerspectiveCamera, and that is load-bearing: the post chain is
+        // built against `this.chase.camera` (see buildWorld), so a camera
+        // swapped in here would render the scene through the old one and every
+        // bloom pass would be composited from the wrong view.
+        const pose = attractPose(
+          shotFor(this.track.def.id), this.track, this.attractT, this.reduceMotion,
+          this.attractBuf,
+        )
+        const cam = this.chase.camera
+        cam.position.copy(pose.pos)
+        cam.lookAt(pose.target)
+        if (cam.fov !== pose.fov) { cam.fov = pose.fov; cam.updateProjectionMatrix() }
+      } else if (this.phase === 'ceremony') {
         // The finish shot. It needs the track because "above the ground" on a
         // banked, climbing circuit is not a constant -- see camera.ts.
         this.chase.updateCinematic(localView, dt, this.track, this.reduceMotion)
@@ -798,19 +970,25 @@ export class Game {
       // running to refresh what it would read.
       if (this.phase === 'racing') this.cheer.update(st, local, dt)
       this.hud.setDriftReleaseTaken(this.phase === 'racing' && this.cheer.tookDriftRelease)
-      this.hud.update(st, this.localId, this.track, this.fps)
+      // The attract screen has no HUD -- it is display:none -- so updating it
+      // would be laying out a lap counter and a minimap nobody can see, every
+      // frame, on the device least able to spare it.
+      if (this.phase !== 'attract') this.hud.update(st, this.localId, this.track, this.fps)
 
       // Neither impulse belongs to the finish shot: a camera shake and a
       // vertigo punch are both answers to something the PLAYER did, and during
-      // the ceremony the car is under AI.
-      if (this.phase !== 'ceremony' && this.vfx && this.vfx.hitFlash > 0.4 && !this.reduceMotion) {
+      // the ceremony the car is under AI. The same argument retires both from
+      // the attract shot, twice over -- there is no player there at all, and
+      // the whole premise of the shot is that the camera is locked off.
+      const impulsive = this.phase !== 'ceremony' && this.phase !== 'attract'
+      if (impulsive && this.vfx && this.vfx.hitFlash > 0.4 && !this.reduceMotion) {
         this.chase.addShake(this.vfx.hitFlash * T.camera.shakeHit)
       }
       // Vertigo shot on a cashed-in drift. Consumed here, not in the camera:
       // the VFX pass owns the sim-frame guard, so the impulse fires exactly
       // once per release however fast the display refreshes.
       if (this.vfx && this.vfx.dollyRequest > 0) {
-        if (this.phase !== 'ceremony') this.chase.addDolly(this.vfx.dollyRequest)
+        if (impulsive) this.chase.addDolly(this.vfx.dollyRequest)
         this.vfx.dollyRequest = 0
       }
 
@@ -934,6 +1112,11 @@ export class Game {
     // so returning to the tab does not drop into a cinematic mid-shot.
     if (document.hidden && this.phase === 'racing') this.pause()
     else if (document.hidden && this.phase === 'ceremony') this.finishRace()
+    // The title race has no pause menu to raise, so it is gated on this flag
+    // instead: the loop stops stepping and stops advancing the shot's clock,
+    // and picks both up where they left off. Read here rather than calling
+    // document.hidden per frame in the loop.
+    this.docHidden = document.hidden
     this.lastTime = performance.now()
   }
 

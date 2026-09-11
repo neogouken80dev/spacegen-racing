@@ -1412,6 +1412,48 @@
   display: none;
 }
 
+/*
+ * THE TITLE SCREEN SITS OVER A LIVE RACE TOO.
+ *
+ * Same argument as the pause screen, and the same treatment -- the CSS grid
+ * horizon and the scanline grain were standing in for a world that is now
+ * actually there, so both come off.
+ *
+ * The scrim is NOT the pause screen's flat 30% wash. This has to hold white
+ * display type and a pink sub-rule legible over a moving, self-lit scene with
+ * a 6-degree accretion disc in it, and a flat wash either loses that fight or
+ * hides the race. So it is a gradient: near-opaque at top and bottom where the
+ * logo and the PLAY button live, and almost clear across the middle band where
+ * the track and the hole are. The type gets its contrast, the race keeps its
+ * picture, and neither is negotiating with the other.
+ */
+.sg-fe[data-screen="title"] {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(3, 6, 14, 0.82) 0%,
+      rgba(3, 6, 14, 0.34) 26%,
+      rgba(3, 6, 14, 0.12) 46%,
+      rgba(3, 6, 14, 0.42) 72%,
+      rgba(3, 6, 14, 0.88) 100%
+    ),
+    radial-gradient(
+      120% 90% at 50% -10%,
+      rgba(34, 211, 255, 0.13) 0%,
+      rgba(0, 0, 0, 0) 55%
+    );
+}
+
+.sg-fe[data-screen="title"] .sg-fe__grid {
+  display: none;
+}
+
+/* The grain stays, at a fraction: it is what ties the UI layer to the render
+   layer so the type does not look pasted onto a video. */
+.sg-fe[data-screen="title"] .sg-fe__grain {
+  opacity: 0.26;
+}
+
 .sg-fe__grain {
   position: absolute;
   inset: 0;

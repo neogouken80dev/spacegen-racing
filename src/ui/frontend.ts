@@ -45,6 +45,15 @@ export interface FrontEnd {
   onResume: () => void
   onRestart: () => void
   onQuit: () => void
+  /**
+   * Fired on every screen change, hide() included (which reports null).
+   *
+   * The host needs this because the title screen is no longer just a panel: it
+   * has a live race running behind it, and the thing that owns that race is the
+   * Game, not the front end. Rather than let the Game poll for "is the title up"
+   * every frame, the front end says so once, when it changes.
+   */
+  onScreen: (screen: ScreenId | null) => void
   showResults(state: RaceState, localId: number): void
   dispose(): void
 }
@@ -410,6 +419,7 @@ class FrontEndImpl implements FrontEnd {
   onResume: () => void = () => {}
   onRestart: () => void = () => {}
   onQuit: () => void = () => {}
+  onScreen: (screen: ScreenId | null) => void = () => {}
 
   private screen: ScreenId = 'title'
 
@@ -799,6 +809,7 @@ class FrontEndImpl implements FrontEnd {
     // down, so no second context is ever alive while the game is rendering.
     if (screen === 'garage') this.preview.show()
     else this.preview.hide()
+    this.onScreen(screen)
     // Focus the primary action so Enter / Space always does the obvious thing.
     const target =
       screen === 'title' ? this.playBtn
@@ -817,6 +828,7 @@ class FrontEndImpl implements FrontEnd {
   hide(): void {
     this.root.classList.add('is-hidden')
     this.preview.hide()
+    this.onScreen(null)
     this.padStop()
     const active = document.activeElement
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur()
