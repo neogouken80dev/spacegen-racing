@@ -150,7 +150,7 @@ export const TUNING = {
     arcCounter: -0.34,
     /**
      * How much of the speed falloff a committed drift is excused while boosting,
-     * at pad-strength boost. 0 restores the old behaviour exactly.
+     * at pad-strength boost. 0 restores the pre-bae3e08 behaviour exactly.
      *
      * `speedYawFalloff` is there to keep the STEERING WHEEL calm at speed, and
      * it should be. Applied to a drift arc it also made the drift stop working
@@ -159,12 +159,52 @@ export const TUNING = {
      * the boost window and always felt dead. The car was drifting the whole
      * time -- it just was not turning.
      *
-     * 0.85 rather than 1.0 so a boosting drift is still very slightly wider
-     * than a cold one. The car is going faster; some of that should be felt.
-     * Ordinary steering is untouched, so this cannot make a boosting car darty
-     * on a straight -- the relief has to be bought by committing to a slide.
+     * WAS 0.85, AND 0.85 WAS TOO MUCH TURN-IN. Measured by tools/probe-turnin.ts
+     * on the shape that actually matters -- hold a slide, release it, and drift
+     * straight into the next corner inside the boost that release just granted
+     * -- as mean yaw rate over the first 0.8s of that follow-up slide, against
+     * the same manoeuvre with the relief switched off:
+     *
+     *   relief   solaire  filament  bulwark  dray9  vector7
+     *   0.25      1.41x     1.31x    1.40x   1.32x   1.31x
+     *   0.45      1.75x     1.56x    1.73x   1.57x   1.56x
+     *   0.65      2.08x     1.81x    2.05x   1.82x   1.81x
+     *   0.85      2.41x     2.06x    2.37x   2.07x   2.06x
+     *
+     * At 0.85 a boosted drift turns in more than TWICE as hard as the same
+     * drift did before the relief existed, on every chassis. That is not a
+     * dead mechanic coming back to life, it is a different mechanic, and it
+     * reads as the car darting into the corner. 0.45 lands at 1.56-1.75x: the
+     * boosted drift is unmistakably alive -- which was the entire point, since
+     * chaining releases means most drifts in a good lap are boosted ones -- but
+     * the turn-in stays recognisably the same move the player already knows.
+     *
+     * Still not 1.0, and still not 0, for the original reason: the car is going
+     * faster and some of that should be felt, but ordinary steering is
+     * untouched, so this cannot make a boosting car darty on a straight. The
+     * relief has to be bought by committing to a slide.
+     *
+     * BALANCE IS UNMOVED, and better where it moves. Same seed base, 2000 races
+     * on Rustfall, the relief as the only variable -- win share at 0.85 -> 0.45:
+     *
+     *   solaire 27.9 -> 27.8   filament 16.8 -> 17.8   bulwark 28.3 -> 25.7
+     *   dray9   18.9 -> 20.3   vector7   8.2 ->  8.5
+     *
+     * The spread tightens: Bulwark comes off the 30% ceiling and the two
+     * mid-field chassis move toward the middle. Lead retention 49.1 -> 49.6%
+     * (band 45-55), lap mean 55.48 -> 55.71s (target 55-75). Vector-7 is under
+     * the 12% floor on BOTH sides of this change and is the standing roster
+     * issue recorded against the Star Hopper rescale, not something the relief
+     * caused.
+     *
+     * NOT the re-entry threshold, which is the other thing bae3e08 changed and
+     * the obvious suspect. Measured through the real keyboard ramp (cross
+     * 0.055s, attack 0.120s) the whole re-entry window is worth ONE FRAME --
+     * release-to-opposite-drift is 4 frames at 0.45 and 5 with no help at all,
+     * identical on all five chassis. A 17ms difference is not something a
+     * player feels as aggression; a 2.4x yaw rate is.
      */
-    boostArcRelief: 0.85,
+    boostArcRelief: 0.45,
     /** Seconds after a drift release during which re-entry is easier. */
     reentryWindow: 0.45,
     /**

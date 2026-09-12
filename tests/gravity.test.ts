@@ -352,7 +352,22 @@ describe('the AI', () => {
     //           drifts through roughly half its corners. A change meant to make
     //           boosted cornering work that left lap times untouched would have
     //           been a change that did nothing.
-    expect(avg).toBeCloseTo(55.91, 2)
+    //   56.85s  boostArcRelief pulled back 0.85 -> 0.45. SLOWER by 0.94s, which
+    //           is more than the 0.72s the relief bought in the first place,
+    //           and that asymmetry is worth reading rather than averaging away.
+    //           The AI drifts through roughly half its corners and 42-54% of
+    //           those drift frames are inside a boost (tools/probe-aiarc.ts),
+    //           so it lives in this term more than a player does -- but its own
+    //           `driftStick` inversion in ai.ts does NOT undo the relief, only
+    //           the bare speed falloff. It therefore asks for a cold-drift arc
+    //           and gets a boosted one, by a mean factor of 1.23-1.33x. Moving
+    //           the relief moves the size of a mismatch the AI cannot see, so
+    //           its lap time answers non-monotonically and this line should not
+    //           be read as "the field got 0.94s worse at driving".
+    //           The inversion fix is deliberately NOT in this commit: it is a
+    //           second change to the same mechanic, and bundling it would make
+    //           the feel change unattributable. Balance was re-run and holds.
+    expect(avg).toBeCloseTo(56.85, 2)
   })
 })
 
