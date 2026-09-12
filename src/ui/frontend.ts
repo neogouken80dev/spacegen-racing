@@ -22,6 +22,7 @@ import { CHASSIS } from '../content/chassis'
 import type { ScoreEntry } from '../score/api'
 import { createTabs, type TabStrip } from './tabs'
 import { RECORD_ORDER, type RecordId, type TrackRecords } from '../score/records'
+import type { GlobalBoard } from '../score/global'
 import { PILOTS } from '../content/pilots'
 import { TRACKS } from '../content/tracks'
 import { Track, type SurfaceKind, type TrackDef } from '../sim/track'
@@ -76,6 +77,8 @@ export interface FrontEnd {
    * which get highlighted and put a marker on the tab.
    */
   setRecords(records: TrackRecords, broken: readonly RecordId[]): void
+  /** Fill the global page. An offline board renders as a stated fact. */
+  setGlobal(board: GlobalBoard): void
   /** The player named a qualifying run. */
   onSaveScore: (name: string) => void
   dispose(): void
@@ -513,6 +516,9 @@ class FrontEndImpl implements FrontEnd {
   private readonly boardRows: HTMLElement
   private readonly recWrap: HTMLElement
   private readonly recRows: HTMLElement
+  private readonly gloWrap: HTMLElement
+  private readonly gloRows: HTMLElement
+  private readonly gloNote: HTMLElement
   private readonly tabs: TabStrip
   private readonly boardNote: HTMLElement
 
@@ -753,9 +759,11 @@ class FrontEndImpl implements FrontEnd {
     this.tabs = createTabs(results, [
       { id: 'results', label: 'Results' },
       { id: 'records', label: 'Records' },
+      { id: 'global', label: 'Global' },
     ])
     const tabResults = this.tabs.panel('results')
     const tabRecords = this.tabs.panel('records')
+    const tabGlobal = this.tabs.panel('global')
 
     const rowHost = el('div', 'sg-results__rows', tabResults)
     for (let i = 0; i < MAX_ROWS; i++) {
@@ -811,11 +819,11 @@ class FrontEndImpl implements FrontEnd {
     // questions: a record is "what is possible here, and in what car", the
     // board is "whose runs were best". The first is the one a driver reads to
     // decide what to go and try.
-    this.recWrap = el('div', 'sg-results__records', tabRecords)
+    this.recWrap = el('div', 'sg-results__records sg-panel sg-table', tabRecords)
     el('div', 'sg-board__title', this.recWrap, 'TRACK RECORDS')
     this.recRows = el('div', 'sg-rec__rows', this.recWrap)
 
-    this.boardWrap = el('div', 'sg-results__board', tabRecords)
+    this.boardWrap = el('div', 'sg-results__board sg-panel sg-table', tabRecords)
     el('div', 'sg-board__title', this.boardWrap, 'TOP 10 — THIS TRACK')
     this.boardRows = el('div', 'sg-board__rows', this.boardWrap)
     // Stated plainly rather than implied. A player who believes they are on a
@@ -824,6 +832,14 @@ class FrontEndImpl implements FrontEnd {
     this.boardNote = el('div', 'sg-board__note', this.boardWrap,
       'Saved on this device only.')
     this.boardNote.hidden = false
+    // --- GLOBAL PAGE ------------------------------------------------------
+    // Same section shape as the other two -- one title, one column of rows,
+    // one note underneath -- so the three pages read as one screen.
+    this.gloWrap = el('div', 'sg-results__global sg-panel sg-table', tabGlobal)
+    el('div', 'sg-board__title', this.gloWrap, 'FASTEST LAPS — WORLDWIDE')
+    this.gloRows = el('div', 'sg-board__rows', this.gloWrap)
+    this.gloNote = el('div', 'sg-board__note', this.gloWrap, '')
+
     const cta = el('div', 'sg-results__cta', results)
     this.rematchBtn = button('sg-btn sg-btn--gold sg-btn--huge', cta, 'Rematch')
     const toGarage = button('sg-btn sg-btn--ghost', cta, 'Garage')
@@ -1022,6 +1038,42 @@ class FrontEndImpl implements FrontEnd {
       if (broken.includes(id)) el('span', 'sg-rec__new', row, 'NEW')
     }
     if (broken.length > 0) this.tabs.setMarked('records', true)
+  }
+
+
+  setGlobal(board: GlobalBoard): void {
+    this.gloRows.textContent = ''
+    if (board.status === 'loading') {
+      el('div', 'sg-board__empty', this.gloRows, 'Reading the board…')
+      this.gloNote.textContent = ''
+      return
+    }
+    if (board.status !== 'ok') {
+      // Said plainly. A board that silently shows nothing is indistinguishable
+      // from a board nobody has set a time on, and the player deserves to know
+      // which of those they are looking at.
+      el('div', 'sg-board__empty', this.gloRows, 'Global board unreachable.')
+      this.gloNote.textContent = 'Your times are still saved on this device.'
+      return
+    }
+    if (board.rows.length === 0) {
+      el('div', 'sg-board__empty', this.gloRows, 'No times on this circuit yet.')
+    }
+    for (let i = 0; i < board.rows.length; i++) {
+      const e = board.rows[i]
+      const row = el('div', 'sg-board__row', this.gloRows)
+      if (board.rank > 0 && i === board.rank - 1) row.classList.add('is-you')
+      el('span', 'sg-board__n', row, String(i + 1))
+      el('span', 'sg-board__name', row, e.name || '---')
+      el('span', 'sg-board__car', row, FrontEndImpl.carName(e.chassisId))
+      el('span', 'sg-board__score', row, fmtTime(e.lap))
+    }
+    // The honest caveat. Runs are posted by a web page and bounds-checked, not
+    // proven; saying so is cheaper than implying a trust the board lacks.
+    this.gloNote.textContent = board.rows.length > 0
+      ? 'Unverified — times are submitted by players.'
+      : ''
+    if (board.rank > 0) this.tabs.setMarked('global', true)
   }
 
   setBoard(rows: readonly ScoreEntry[], rank: number, qualifies: boolean): void {

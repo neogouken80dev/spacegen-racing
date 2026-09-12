@@ -48,6 +48,8 @@ export class Scorer {
   private lastDrift = 0
   private knockCooldown = 0
   private driftRate = 0
+  /** Points banked by the slide being held right now. See ScoreState. */
+  private banked = 0
   private best = 1
   private finished = false
 
@@ -64,6 +66,7 @@ export class Scorer {
     this.lastDrift = 0
     this.knockCooldown = 0
     this.driftRate = 0
+    this.banked = 0
     this.best = 1
     this.finished = false
   }
@@ -110,6 +113,12 @@ export class Scorer {
             this.combo = Math.min(COMBO_MAX, this.combo + COMBO_PER_CHAIN)
           }
           this.award(awards, 'driftStart', DRIFT_START)
+          // A new slide starts its own tally. The chain bonus above is counted
+          // into it deliberately: linking IS part of what this slide is worth.
+          this.banked = 0
+          for (const a of awards) {
+            if (a.kind === 'driftStart' || a.kind === 'chain') this.banked += a.points
+          }
           break
         }
         case 'driftEnd': {
@@ -227,7 +236,9 @@ export class Scorer {
         c1 = Math.min(COMBO_MAX, c0 + growth * slid)
         avg = (c0 + c1) * 0.5
       }
-      this.total += DRIFT_RATE[tierIdx] * avg * slid
+      const paid = DRIFT_RATE[tierIdx] * avg * slid
+      this.total += paid
+      this.banked += paid
       this.combo = c1
       // The DISPLAYED rate is the live one, not the averaged one: the player is
       // watching what the next second is worth, not what the last frame paid.
@@ -257,6 +268,8 @@ export class Scorer {
       chainLeft: this.chainLeft,
       drifting: sliding,
       driftRate: this.driftRate,
+      driftBanked: Math.round(this.banked),
+      driftTier: sliding ? local.driftTier : -2,
       awards,
       rungs,
     }

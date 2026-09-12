@@ -32,3 +32,12 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# ---------------------------------------------------------------------------
+# The global leaderboard endpoint. Functions are bundled with esbuild so the
+# handler can import the shared validator out of src/ rather than keeping a
+# second copy of the bounds that would drift from the first.
+# ---------------------------------------------------------------------------
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

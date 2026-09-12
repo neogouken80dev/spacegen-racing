@@ -268,8 +268,25 @@ const page = await ctx.newPage()
 
 const errors = []
 const warnings = []
+
+/**
+ * ONE KNOWN-ABSENT PATH, IGNORED ON PURPOSE.
+ *
+ * The global leaderboard lives at /api/leaderboard, which is a Netlify
+ * FUNCTION. This harness serves the static `dist` directory, where by
+ * definition no function exists, so the browser logs a 404 for it on every run
+ * -- and smoke fails the build on any console error.
+ *
+ * Suppressed by exact path rather than by relaxing the gate, because the gate
+ * is the point: a blanket "ignore 404s" would have hidden the audio assets
+ * being absent, which is a bug this repo actually shipped. The client treats an
+ * unreachable board as an ordinary offline state, and tools/probe-tabs.mjs
+ * serves a stub so that path is exercised rather than merely tolerated.
+ */
+const IGNORED = [/\/api\/leaderboard/]
 page.on('console', (m) => {
   const t = m.text()
+  if (IGNORED.some((re) => re.test(t))) return
   if (m.type() === 'error') errors.push(t)
   else if (m.type() === 'warning') warnings.push(t)
 })

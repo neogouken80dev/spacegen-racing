@@ -77,9 +77,11 @@ const readHud = () => page.evaluate(() => {
   if (!root) return { missing: true }
   const val = document.querySelector('.sg-score__value')
   const combo = document.querySelector('.sg-score__combo')
-  const rate = document.querySelector('.sg-score__rate')
+  const ev = document.querySelector('.sg-score__line--event')
   const cs = getComputedStyle(root)
   const b = root.getBoundingClientRect()
+  const vw = document.documentElement.clientWidth
+  const vh = document.documentElement.clientHeight
   return {
     missing: false,
     hidden: root.hidden,
@@ -89,11 +91,19 @@ const readHud = () => page.evaluate(() => {
     // screen, or inside a display:none ancestor. Only the rect proves it is on
     // the glass.
     w: Math.round(b.width), h: Math.round(b.height),
-    top: +(b.y / 720).toFixed(3),
+    top: +(b.y / vh).toFixed(3),
+    // How far the widget's own centre is from the viewport's, as a fraction of
+    // the width. "Top centre" is a measurement, not an intention.
+    offCentre: +Math.abs((b.x + b.width / 2) - vw / 2 ).toFixed(1),
+    offCentreFrac: +(Math.abs((b.x + b.width / 2) - vw / 2) / vw).toFixed(4),
     text: val ? val.textContent : null,
     value: val ? parseInt((val.textContent || '0').replace(/\D/g, ''), 10) : -1,
     comboShown: combo ? !combo.hidden : false,
-    rateShown: rate ? !rate.hidden : false,
+    eventShown: ev ? !ev.hidden : false,
+    eventText: ev && !ev.hidden
+      ? (ev.querySelector('.sg-score__event')?.textContent ?? '') + ' ' +
+        (ev.querySelector('.sg-score__eventv')?.textContent ?? '')
+      : '',
     rung: root.dataset.rung ?? null,
     hot: root.dataset.hot ?? null,
     // THE AWARD RECEIPTS ARE THE ONLY PROOF EVENTS ARRIVE.
@@ -133,7 +143,8 @@ await page.keyboard.down('ShiftLeft')
 // Hold the slide until the SIM says enough race has passed, sampling the HUD.
 const samples = []
 let sawCombo = false
-let sawRate = false
+let sawEvent = false
+const eventTexts = new Set()
 let sawHot = false
 const popsSeen = new Set()
 let shotTaken = false
@@ -144,7 +155,7 @@ for (let i = 0; i < 400; i++) {
   const h = await readHud()
   samples.push({ t: +s.t.toFixed(2), tier: s.tier, side: s.side, v: h.value, combo: h.comboShown })
   if (h.comboShown) sawCombo = true
-  if (h.rateShown) sawRate = true
+  if (h.eventShown) { sawEvent = true; if (h.eventText.trim()) eventTexts.add(h.eventText.trim()) }
   if (h.hot === '1') sawHot = true
   for (const p of h.pops || []) if (p) popsSeen.add(p.split('  ')[0])
   if (h.value > peak) peak = h.value
@@ -167,14 +178,23 @@ const driftFrames = samples.filter((s) => s.side !== 0).length
 console.log('at start   :', JSON.stringify(atStart))
 console.log('before drift:', JSON.stringify(beforeDrift))
 console.log(`raced ${simSeconds}s of sim, ${driftFrames}/${samples.length} samples sliding`)
-console.log('peak score :', peak, ' combo shown:', sawCombo, ' rate shown:', sawRate, ' hot:', sawHot)
+console.log('peak score :', peak, ' combo shown:', sawCombo, ' event shown:', sawEvent, ' hot:', sawHot)
 console.log('award kinds seen:', [...popsSeen].join(', ') || '(none)')
+console.log('event lines  :', [...eventTexts].slice(0, 6).join(' | ') || '(none)')
 
 if (atStart.missing) errors.push('the score widget is not in the DOM at all')
 else {
   if (atStart.w === 0 || atStart.h === 0) errors.push('the score widget has no box on screen')
   if (atStart.display === 'none') errors.push('the score widget is display:none during a race')
-  if (atStart.top > 0.3) errors.push(`the score sits at ${atStart.top} of the viewport, not near the top`)
+  if (atStart.top > 0.30) errors.push(`the score sits at ${atStart.top} of the viewport, not near the top`)
+  if (atStart.top < 0.11) {
+    errors.push(`the score starts at ${atStart.top} -- into the tools/crosswind band`)
+  }
+  // Centred to within 1% of the viewport width. It was asked for at top CENTRE
+  // and a widget that is merely near the middle is the thing being corrected.
+  if (atStart.offCentreFrac > 0.01) {
+    errors.push(`the score is ${atStart.offCentre}px off centre (${atStart.offCentreFrac} of width)`)
+  }
 }
 if (simSeconds < 8) {
   errors.push(`only ${simSeconds}s of race ran -- the sample proves nothing either way`)
@@ -183,7 +203,10 @@ if (simSeconds < 8) {
   if (driftFrames === 0) errors.push('never actually drifted -- the drive script did not work')
   else {
     if (!sawCombo) errors.push('drifted, but the combo chip never appeared')
-    if (!sawRate) errors.push('drifted, but the live per-second rate never appeared')
+    if (!sawEvent) errors.push('drifted, but the second line never appeared')
+    else if (![...eventTexts].some((t) => /DRIFT/.test(t))) {
+      errors.push(`the second line never named the slide: ${[...eventTexts].slice(0, 3).join(' | ')}`)
+    }
     if (!sawHot) errors.push('drifted, but the counter never entered its hot state')
     // The one that actually proves the wiring. See the note in readHud.
     if (popsSeen.size === 0) {

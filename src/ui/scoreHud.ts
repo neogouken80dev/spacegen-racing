@@ -12,21 +12,31 @@
  * digits; a counter that assigned the exact value every frame would read as a
  * number changing rather than a number running.
  *
- * WHY IT SITS TOP CENTRE.
+ * WHERE IT SITS, AND WHY THAT TOOK TWO GOES.
  *
- * The other three corners are taken -- position and lap splits top left, the
- * minimap and clock top right, items bottom left -- and the band across the
- * bottom is the boost gauge. Top centre is the only free region, and it happens
- * to be the right one: it is sky on the chase rig, it is where the eye goes
- * between corners, and it is directly above cheer.ts's line so the praise and
- * the number read as one column instead of two competing widgets.
+ * Top centre, per the reference. The first attempt put it there on the
+ * reasoning that the four corners were taken -- and the MIDDLE is taken too:
+ * the tools cluster (brightness + pause) occupies x 0.463-0.537 y 0.014-0.075
+ * and the crosswind strip sits directly under it at y 0.086-0.115, so the
+ * counter rendered underneath two buttons with the multiplier invisible. It
+ * moved to the right column for a while; this is the measured way to put it
+ * back where it was asked for.
  *
- * WHAT IT DOES NOT DO.
+ * The block therefore starts BELOW that band rather than at the top edge. It is
+ * still unambiguously the top-centre of the screen, it clears both widgets at
+ * every width, and cheer.ts's line at 33% is far enough below to read as a
+ * second voice rather than a collision.
  *
- * It never shows the combo at x1 and it never shows an empty award stack. A
- * scoring HUD that is always on screen at rest is four permanent widgets in a
- * game that already has five, so at zero combo with nothing landing this is one
- * quiet number and nothing else.
+ * THE LAYOUT IS THE REFERENCE'S.
+ *
+ *     401,668  x16          <- total, and the multiplier beside it
+ *     GREAT DRIFT   343     <- what is happening right now, and what it is worth
+ *
+ * The second line is the important half. The total is deliberately too large
+ * and moving too fast to read mid-corner -- that blur is the point of it -- so
+ * the readable number is what THIS SLIDE has banked, which is the figure that
+ * decides whether to hold it one beat longer. Off the slide, the same line
+ * shows the last award instead, so it is never an empty row.
  */
 import type { ScoreState } from '../score/api'
 import { COMBO_RUNGS } from '../score/rules'
@@ -39,6 +49,19 @@ const SNAP = 1.5
 const POP_LIFE = 1.15
 /** How many popups may stack before the oldest is recycled. */
 const POP_SLOTS = 4
+/** Seconds line two keeps showing the last award once a slide ends. */
+const EVENT_HOLD = 1.4
+
+/**
+ * The slide's name, by tier, escalating the way the reference does.
+ *
+ * Index is `driftTier + 1`, so -1 (charging, no rung banked yet) is a plain
+ * DRIFT and the four tiers above it climb. Deliberately NOT the tier names --
+ * Spark / Flare / Nova / Singularity are cheer.ts's vocabulary and already
+ * appear in the callout ladder; repeating them here would put the same word on
+ * screen twice in two sizes for the same event.
+ */
+const DRIFT_LABEL = ['DRIFT', 'GOOD DRIFT', 'GREAT DRIFT', 'AWESOME DRIFT', 'INSANE DRIFT']
 
 function div(cls: string, parent?: HTMLElement): HTMLDivElement {
   const el = document.createElement('div')
@@ -70,7 +93,10 @@ class ScoreHudImpl implements ScoreHud {
   private readonly comboEl: HTMLElement
   private readonly comboNum: HTMLElement
   private readonly meterFill: HTMLElement
-  private readonly rateEl: HTMLElement
+  private readonly meterEl: HTMLElement
+  private readonly eventLine: HTMLElement
+  private readonly eventEl: HTMLElement
+  private readonly eventVal: HTMLElement
   private readonly popWrap: HTMLElement
   private readonly pops: Pop[] = []
 
@@ -82,29 +108,38 @@ class ScoreHudImpl implements ScoreHud {
   private lastCombo = ''
   private lastRung = -1
   private visible = true
+  private eventHold = 0
+  private lastEvent = ''
 
   constructor(host: HTMLElement) {
     this.root = div('sg-score')
     this.root.setAttribute('aria-hidden', 'true')
 
     const stack = div('sg-score__stack', this.root)
-    this.valueEl = div('sg-score__value', stack)
+
+    // Line one: the total, and the multiplier on the same baseline beside it.
+    const topLine = div('sg-score__line', stack)
+    this.valueEl = div('sg-score__value', topLine)
     this.valueEl.textContent = '0'
-
-    this.comboEl = div('sg-score__combo', stack)
+    this.comboEl = div('sg-score__combo', topLine)
     this.comboEl.hidden = true
-    const chip = div('sg-score__chip', this.comboEl)
-    div('sg-score__x', chip).textContent = '×'
-    this.comboNum = div('sg-score__mult', chip)
-    const meter = div('sg-score__meter', this.comboEl)
-    this.meterFill = div('sg-score__meterfill', meter)
+    div('sg-score__x', this.comboEl).textContent = '×'
+    this.comboNum = div('sg-score__mult', this.comboEl)
 
-    // The live drift rate, shown only while a slide is being paid for. This is
-    // the number that tells a player holding the slide is WORKING -- the total
-    // is already moving too fast to read at that moment, which is the point of
-    // it, so the rate is the readable half of the same information.
-    this.rateEl = div('sg-score__rate', stack)
-    this.rateEl.hidden = true
+    // Line two: what is happening, and what it is worth.
+    const eventLine = div('sg-score__line sg-score__line--event', stack)
+    this.eventEl = div('sg-score__event', eventLine)
+    this.eventVal = div('sg-score__eventv', eventLine)
+    eventLine.hidden = true
+    this.eventLine = eventLine
+
+    // The rung meter, full width of the block and directly under both lines,
+    // so the escalation reads as belonging to the whole thing rather than to
+    // the multiplier chip alone.
+    const meter = div('sg-score__meter', stack)
+    this.meterFill = div('sg-score__meterfill', meter)
+    this.meterEl = meter
+    meter.hidden = true
 
     this.popWrap = div('sg-score__pops', this.root)
     for (let i = 0; i < POP_SLOTS; i++) {
@@ -135,7 +170,10 @@ class ScoreHudImpl implements ScoreHud {
     this.lastCombo = ''
     this.valueEl.textContent = '0'
     this.comboEl.hidden = true
-    this.rateEl.hidden = true
+    this.meterEl.hidden = true
+    this.eventLine.hidden = true
+    this.eventHold = 0
+    this.lastEvent = ''
     this.root.dataset.hot = '0'
     for (const p of this.pops) { p.life = 0; p.el.hidden = true }
   }
@@ -167,6 +205,7 @@ class ScoreHudImpl implements ScoreHud {
     // --- the combo ----------------------------------------------------------
     const showCombo = s.combo > 1.01
     if (this.comboEl.hidden === showCombo) this.comboEl.hidden = !showCombo
+    if (this.meterEl.hidden === showCombo) this.meterEl.hidden = !showCombo
     if (showCombo) {
       const c = s.combo >= 10 ? s.combo.toFixed(0) : s.combo.toFixed(1)
       if (c !== this.lastCombo) { this.lastCombo = c; this.comboNum.textContent = c }
@@ -178,15 +217,32 @@ class ScoreHudImpl implements ScoreHud {
       }
     }
 
-    // --- the live rate, while sliding ---------------------------------------
+    // --- line two -----------------------------------------------------------
+    // While sliding it is the slide's own running tally, which is the readable
+    // half of the information the blurring total carries. Off the slide it
+    // holds the last award for a beat, so the row is never empty mid-race.
     const hot = s.drifting && s.driftRate > 0
-    if (this.rateEl.hidden === hot) this.rateEl.hidden = !hot
-    if (hot) this.rateEl.textContent = `+${Math.round(s.driftRate)}/s`
+    if (hot) {
+      this.setEvent(DRIFT_LABEL[Math.max(0, Math.min(DRIFT_LABEL.length - 1, s.driftTier + 1))],
+        s.driftBanked)
+      this.eventHold = EVENT_HOLD
+    } else if (s.awards.length > 0) {
+      const a = s.awards[s.awards.length - 1]
+      this.setEvent(a.label, a.points)
+      this.eventHold = EVENT_HOLD
+    } else if (this.eventHold > 0) {
+      this.eventHold -= dt
+    }
+    const showEvent = hot || this.eventHold > 0
+    if (this.eventLine.hidden === showEvent) this.eventLine.hidden = !showEvent
+
     const hotAttr = hot ? '1' : '0'
     if (this.root.dataset.hot !== hotAttr) this.root.dataset.hot = hotAttr
 
     // --- award popups -------------------------------------------------------
-    for (const a of s.awards) this.pop(`${a.label}  +${a.points.toLocaleString()}`)
+    // Not while sliding: line two is already saying what the slide is worth,
+    // and a stack of DRIFT receipts under it says the same thing twice.
+    if (!hot) for (const a of s.awards) this.pop(`${a.label}  +${a.points.toLocaleString()}`)
     for (const p of this.pops) {
       if (p.life <= 0) continue
       p.life -= dt
@@ -195,6 +251,15 @@ class ScoreHudImpl implements ScoreHud {
       p.el.style.opacity = String(Math.min(1, k * 2.2))
       if (!this.reduced) p.el.style.transform = `translateY(${(1 - k) * -22}px)`
     }
+  }
+
+  /** Line two, written only when it actually changes. */
+  private setEvent(label: string, value: number): void {
+    const key = label + '|' + value
+    if (key === this.lastEvent) return
+    this.lastEvent = key
+    this.eventEl.textContent = label
+    this.eventVal.textContent = value.toLocaleString()
   }
 
   /** Show one receipt. Oldest slot is recycled when all are busy. */

@@ -30,6 +30,7 @@ import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
 import { Scorer } from '../score/scorer'
 import { createScoreboard, BOARD_SIZE } from '../score/board'
 import { createRecordStore, type RecordStore } from '../score/records'
+import { createGlobalStore, type GlobalStore } from '../score/global'
 import type { ScoreStore } from '../score/api'
 import { createAudio, type AudioSystem } from '../audio'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
@@ -99,6 +100,7 @@ export class Game {
   private readonly scorer = new Scorer()
   private readonly board: ScoreStore = createScoreboard()
   private readonly records: RecordStore = createRecordStore()
+  private readonly global: GlobalStore = createGlobalStore()
   /** The finished run, held between the flag and the results screen. */
   private lastScore = 0
   private lastBestCombo = 1
@@ -849,6 +851,16 @@ export class Game {
       const qualifies = await this.board.qualifies(trackId, score, BOARD_SIZE)
       const rows = await this.board.top(trackId, BOARD_SIZE)
       this.frontEnd.setBoard(rows, 0, qualifies)
+
+      // THE GLOBAL BOARD IS READ, NOT POSTED TO, UNTIL THERE IS A NAME.
+      //
+      // A row on a public table with nobody's name on it is worse than no row,
+      // and the player has not been asked yet at this point. So the page shows
+      // the world's times now and this run joins them from the save handler
+      // below. Deliberately not awaited into the screen's critical path: a slow
+      // or absent endpoint must not delay the results appearing.
+      this.frontEnd.setGlobal({ status: 'loading', rows: [], rank: 0 })
+      void this.global.top(trackId).then((b) => this.frontEnd.setGlobal(b))
       this.frontEnd.onSaveScore = async (name: string): Promise<void> => {
         const rank = await this.board.submit({
           name,
@@ -868,12 +880,21 @@ export class Game {
         // submit of the same figures is a no-op and the name never lands.
         await this.records.rename(trackId, broken, name)
         this.frontEnd.setRecords(await this.records.get(trackId), broken)
+        // And the world board, now the run has someone's name on it. A DNF has
+        // no race time but may still own a fast lap, which is worth posting.
+        this.frontEnd.setGlobal(await this.global.submit({
+          trackId, name, chassisId: local.chassisId, pilotId: local.pilotId,
+          lap: local.bestLap,
+          raceTime: local.finished ? local.finishTime : 0,
+          score, position: local.position,
+        }))
       }
     } catch {
       // A board that cannot be read is not a reason to break the results
       // screen. The race still happened and the score is still on it.
       this.frontEnd.setBoard([], 0, false)
       this.frontEnd.setRecords({}, [])
+      this.frontEnd.setGlobal({ status: 'offline', rows: [], rank: 0 })
     }
   }
 

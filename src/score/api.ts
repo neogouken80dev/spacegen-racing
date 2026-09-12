@@ -78,6 +78,18 @@ export interface ScoreState {
   drifting: boolean
   /** Points per second the drift is currently paying, after the combo. */
   driftRate: number
+  /**
+   * Points banked by the slide CURRENTLY being held -- entry, every second of
+   * hold, and any chain bonus that started it -- reset when a new slide begins.
+   *
+   * This is the number the HUD's second line shows while sideways, and it is a
+   * different thing from the running total: the total is too large and moving
+   * too fast to read mid-corner, whereas "this slide is worth 343 so far" is
+   * exactly the figure that decides whether to hold it one beat longer.
+   */
+  driftBanked: number
+  /** Tier of the slide being held, -1 while charging. Drives its label. */
+  driftTier: number
   /** Awards that landed this frame. */
   awards: ScoreAward[]
   /** Combo rungs crossed this frame, highest last. Drives the callouts. */

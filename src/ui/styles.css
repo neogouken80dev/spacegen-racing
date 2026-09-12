@@ -3375,33 +3375,24 @@
    =========================================================================== */
 .sg-score {
   position: absolute;
-  /* RIGHT COLUMN, UNDER THE MINIMAP -- and that placement is measured, not
-     guessed. The first attempt put this dead centre at the top on the reasoning
-     that the four corners were taken. They are, but so is the middle: the tools
-     cluster (brightness + pause) occupies x 0.463-0.537 y 0.014-0.075 and the
-     crosswind indicator sits directly beneath it at y 0.086-0.115, so the
-     counter rendered UNDERNEATH two buttons and the combo chip was invisible.
-     A screenshot found it; nothing else would have.
-
-     Measured occupancy at 1280x720 during a race:
-       position + splits   x 0.010-0.083   y 0.017-0.164
-       minimap + clock     x 0.889-0.990   y 0.017-0.229
-       tools buttons       x 0.463-0.537   y 0.014-0.075
-       crosswind           x 0.446-0.554   y 0.086-0.115
-       item slots          x 0.010-0.074   y 0.861-0.983
-
-     Anchored to the same right edge as the minimap rather than to a fixed
-     offset, so it keeps its relationship with that cluster at every width
-     instead of needing its own breakpoint. */
-  right: 14px;
-  top: 25%;
+  /* TOP CENTRE, but starting below the band that is already occupied. Measured
+     at 1280x720 during a race:
+       tools buttons  x 0.463-0.537  y 0.014-0.075
+       crosswind      x 0.446-0.554  y 0.086-0.115
+     The first attempt at top centre rendered UNDERNEATH those two, with the
+     multiplier invisible; only a screenshot found it. Starting at 13% clears
+     both at every width and is still unambiguously the top of the screen.
+     cheer.ts's line sits at 33%, far enough below to read as a second voice. */
+  left: 50%;
+  top: 13%;
+  transform: translateX(-50%);
   pointer-events: none;
-  text-align: right;
+  text-align: center;
   z-index: 2;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  align-items: center;
+  gap: 3px;
   /* Hue of the current combo rung. Neutral until a combo exists. */
   --sc: var(--sg-ink);
 }
@@ -3409,77 +3400,82 @@
 .sg-score__stack {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 2px;
 }
 
+/* Total and multiplier share a baseline; so do the event name and its value. */
+.sg-score__line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .sg-score__value {
-  font: 700 clamp(22px, 4.4vw, 40px)/1 var(--sg-font-num, inherit);
+  font: 800 clamp(26px, 5vw, 46px)/1 inherit;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  color: var(--sg-ink);
+  font-style: italic;
+  letter-spacing: 0.01em;
+  color: var(--sg-gold);
   /* A dark outline plus a soft halo, the same two-part stack cheer.ts uses --
      it is what keeps this legible over both a white sky and a black one. */
   text-shadow:
-    0 1px 0 rgba(0, 0, 0, 0.85),
-    0 0 3px rgba(0, 0, 0, 0.75),
-    0 0 14px color-mix(in srgb, var(--sc) 45%, transparent);
-  transition: color 180ms linear;
+    0 2px 0 rgba(0, 0, 0, 0.9),
+    0 0 4px rgba(0, 0, 0, 0.8),
+    0 0 18px color-mix(in srgb, var(--sc) 40%, transparent);
+  transition: transform 140ms ease-out;
 }
 
-/* While a slide is being paid for the counter takes the combo's hue and grows
-   slightly. This is the whole "ticking furiously" read: the number is already
-   sprinting, and the colour change says the sprint is EARNED rather than the
-   score simply being large. */
-.sg-score[data-hot="1"] .sg-score__value {
-  color: var(--sc);
-  transform: scale(1.06);
-}
-
-.sg-score__value {
-  transition: color 180ms linear, transform 140ms ease-out;
-}
+/* While a slide is being paid for the counter grows a little. The number is
+   already sprinting; this says the sprint is EARNED rather than the score
+   simply being large. */
+.sg-score[data-hot="1"] .sg-score__value { transform: scale(1.07); }
 
 .sg-score__combo {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-}
-
-.sg-score__chip {
-  display: flex;
   align-items: baseline;
   gap: 1px;
-  padding: 1px 7px 2px;
-  border-radius: 3px;
-  background: rgba(5, 7, 15, 0.5);
-  border: 1px solid color-mix(in srgb, var(--sc) 55%, transparent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--sc) 28%, transparent);
 }
 
 .sg-score__x {
-  font: 600 11px/1 inherit;
-  color: var(--sg-dim);
+  font: 700 clamp(14px, 2.4vw, 22px)/1 inherit;
+  font-style: italic;
+  color: var(--sg-ink);
+  opacity: 0.85;
 }
 
 .sg-score__mult {
-  font: 700 clamp(14px, 2.4vw, 20px)/1 inherit;
+  font: 800 clamp(18px, 3.2vw, 30px)/1 inherit;
   font-variant-numeric: tabular-nums;
-  color: var(--sc);
-  min-width: 1.9em;
-  text-align: left;
+  font-style: italic;
+  color: var(--sg-ink);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9), 0 0 12px color-mix(in srgb, var(--sc) 45%, transparent);
 }
 
-/* How far through the current rung. Scaled on the X axis from the left, so it
-   is one composited transform rather than a width animation. */
+/* Line two: what is happening right now and what it is worth. */
+.sg-score__line--event { gap: 10px; }
+
+.sg-score__event {
+  font: 700 clamp(11px, 1.9vw, 16px)/1 inherit;
+  letter-spacing: 0.1em;
+  color: var(--sg-ink);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.7);
+}
+
+.sg-score__eventv {
+  font: 700 clamp(11px, 1.9vw, 16px)/1 inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--sc);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px color-mix(in srgb, var(--sc) 40%, transparent);
+}
+
+/* How far through the current rung, full width of the block. */
 .sg-score__meter {
-  /* Matches the chip above it rather than a fixed width. At a fixed width the
-     meter was wider than the chip and, in a right-aligned column, hung out to
-     the left of it -- reading as a stray dash on the screen instead of part of
-     the combo. The column is sized by its widest child, so 100% is the chip. */
-  width: 100%;
+  width: clamp(90px, 15vw, 150px);
   height: 3px;
+  margin-top: 2px;
   background: rgba(255, 255, 255, 0.18);
   border-radius: 2px;
   overflow: hidden;
@@ -3494,22 +3490,13 @@
   box-shadow: 0 0 6px var(--sc);
 }
 
-/* The live per-second rate. Only on screen while sliding: by then the total is
-   moving too fast to read, which is the point of it, so this is the readable
-   half of the same information. */
-.sg-score__rate {
-  font: 600 clamp(11px, 1.9vw, 15px)/1 inherit;
-  font-variant-numeric: tabular-nums;
-  color: var(--sc);
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8), 0 0 8px color-mix(in srgb, var(--sc) 40%, transparent);
-}
-
-/* Receipts. Four fixed slots, recycled oldest-first, so a burst of awards can
-   never grow the DOM mid-race. */
+/* Receipts for everything that is NOT the slide in progress -- line two is
+   already saying what that is worth. Four fixed slots, recycled oldest-first,
+   so a burst of awards can never grow the DOM mid-race. */
 .sg-score__pops {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 1px;
   margin-top: 2px;
   min-height: 0;
@@ -3526,8 +3513,8 @@
 }
 
 /* The rung ladder. Each rung recolours the whole widget through --sc, so the
-   counter, the chip, the meter and the rate all move together and the player
-   reads one escalating object rather than four tinted parts. */
+   counter, the multiplier, the event value and the meter all move together and
+   the player reads one escalating object rather than four tinted parts. */
 .sg-score[data-rung="0"] { --sc: var(--sg-t0); }
 .sg-score[data-rung="1"] { --sc: var(--sg-violet); }
 .sg-score[data-rung="2"] { --sc: var(--sg-gold); }
@@ -3538,11 +3525,11 @@
 /* Reduced motion: the number lands rather than runs (scorer side), and nothing
    here scales or slides. The resting state of every element is already the
    correct one, so switching the transitions off takes nothing with it. */
-.sg-score[data-reduced="1"] .sg-score__value { transform: none; transition: color 180ms linear; }
+.sg-score[data-reduced="1"] .sg-score__value { transform: none !important; transition: none; }
 .sg-score[data-reduced="1"] .sg-score__pop { transform: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sg-score__value { transition: color 180ms linear; transform: none; }
+  .sg-score__value { transition: none; transform: none; }
   .sg-score__pop { transform: none !important; }
 }
 
@@ -3553,14 +3540,31 @@
 }
 
 /* ===========================================================================
-   RESULTS: THE RUN SCORE AND THE BOARD
+   RESULTS: THE RUN SCORE, AND THE THREE TABLES
+   ---------------------------------------------------------------------------
+   ONE VISUAL SYSTEM ACROSS ALL THREE TABS.
+
+   Results, Records and Global were three tables that happened to sit behind
+   the same tab strip: different widths, different row heights, different ways
+   of saying "this one is yours". They now share `.sg-panel` for the section,
+   `.sg-board__title` for the heading, a single row shape, and one highlight
+   language -- gold for your row, green for something newly taken. A player
+   moving between tabs should feel one screen changing contents, not three
+   screens behind buttons.
+
+   The standings on the Results tab stay wider (720px) because a race row
+   carries more: position, pilot, chassis, time and best lap. The tables are
+   narrower so ten rows of four columns are not stretched into sparseness.
    =========================================================================== */
+:root {
+  --sg-table-w: min(620px, 94%);
+}
+
 .sg-results__score {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  margin: 10px 0 2px;
 }
 
 .sg-score-k {
@@ -3587,7 +3591,6 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin: 6px 0 2px;
 }
 
 .sg-name__k {
@@ -3614,9 +3617,22 @@
   box-shadow: 0 0 0 2px rgba(34, 211, 255, 0.25);
 }
 
-.sg-results__board {
-  margin: 8px auto 0;
-  width: min(94%, 380px);
+/**
+ * The shared section. Every table on every tab is `sg-panel sg-table`.
+ *
+ * `.sg-panel` is the game's existing panel LOOK -- the chunky bordered,
+ * faintly holographic treatment defined near the top of this file and used
+ * across the HUD. Reusing it is the whole reason the three tabs now read as one
+ * screen. The layout lives here, in a second class, rather than being added to
+ * that rule: a design-system class that also carries a 620px width would hand
+ * that width to the next thing that wants the look.
+ */
+.sg-table {
+  width: var(--sg-table-w);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 9px;
 }
 
 .sg-board__title {
@@ -3624,30 +3640,31 @@
   letter-spacing: 0.2em;
   color: var(--sg-mute);
   text-align: center;
-  margin-bottom: 5px;
 }
 
-.sg-board__rows {
+.sg-board__rows,
+.sg-rec__rows {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
+/* One row shape, shared by the leaderboard and the global board. */
 .sg-board__row {
   display: grid;
-  /* Rank, name, vehicle, score. The score column is the widest because it is
-     the one being compared; the name is allowed to run out of room before it
-     does, and the vehicle gets a fixed share so the column stays a column. */
-  grid-template-columns: 1.6em minmax(0, 1fr) minmax(0, 0.9fr) 5.4em;
+  grid-template-columns: 1.8em minmax(0, 1fr) minmax(0, 0.9fr) 5.8em;
   align-items: baseline;
-  gap: 6px;
-  padding: 2px 6px;
+  gap: 2px 12px;
+  padding: 4px 8px;
   border-radius: 2px;
+  background: rgba(255, 255, 255, 0.03);
   font: 500 12px/1.35 inherit;
   color: var(--sg-dim);
 }
 
-.sg-board__row.is-you {
+/* Gold means "this is yours", on every tab. */
+.sg-board__row.is-you,
+.sg-rec__row.is-you {
   background: rgba(255, 210, 63, 0.12);
   color: var(--sg-ink);
   box-shadow: inset 2px 0 0 var(--sg-gold);
@@ -3655,14 +3672,18 @@
 
 .sg-board__n { font-variant-numeric: tabular-nums; color: var(--sg-mute); }
 
-.sg-board__name {
-  letter-spacing: 0.08em;
+.sg-board__name,
+.sg-board__car {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sg-board__car {
+.sg-board__name { letter-spacing: 0.08em; }
+
+/* Cyan means "vehicle", on every tab. */
+.sg-board__car,
+.sg-rec__car {
   font-size: 11px;
   color: var(--sg-cyan);
   overflow: hidden;
@@ -3684,6 +3705,8 @@
   text-align: center;
   padding: 3px 0 0;
 }
+
+.sg-board__note:empty { display: none; }
 
 .sg-btn--small {
   padding: 5px 12px;
@@ -3767,38 +3790,62 @@
 
 .sg-tabpanels {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/**
+ * THE PANEL HAS TO CENTRE ITS OWN CHILDREN.
+ *
+ * This is the whole off-centre bug. `.sg-screen--results` is a flex column with
+ * `align-items: center`, and every block on it -- the standings, the meta row,
+ * the score, the name field -- centres by being its direct child. Wrapping them
+ * in a tab panel put a plain block in between, so `width: min(720px, 100%)`
+ * went flush LEFT while the title and the tab strip stayed centred.
+ *
+ * Fixed by making the panel carry the same flex centring it displaced, rather
+ * than by hanging `margin: 0 auto` on each block in turn -- which would work
+ * today and quietly fail for the next thing added to a panel.
+ */
+.sg-tabpanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(10px, 2vmin, 24px);
+  width: 100%;
+}
+
+/**
+ * And `display: flex` DEFEATS the `hidden` attribute -- an explicit display
+ * wins over the UA sheet's `[hidden] { display: none }`, so without this line
+ * both panels render at once and the tabs appear to do nothing. tabs.ts hides
+ * with `hidden` precisely so an off panel leaves the accessibility tree and the
+ * focus order, and that only works if the CSS lets it.
+ */
+.sg-tabpanel[hidden] {
+  display: none;
 }
 
 /* ===========================================================================
-   TRACK RECORDS
+   TRACK RECORDS — the same row, two lines instead of one
    =========================================================================== */
-.sg-results__records {
-  margin: 10px auto 0;
-  width: min(94%, 380px);
-}
-
-.sg-rec__rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .sg-rec__row {
   display: grid;
-  /* Label, value, vehicle, holder. The value is the thing being compared, so
-     it is the one column that never shrinks. */
-  grid-template-columns: minmax(0, 1fr) 5.6em minmax(0, 0.95fr);
+  /* Label, value, vehicle. The value is what is being compared, so it is the
+     one column that never shrinks. Holder and NEW share the second line: four
+     records at three lines apiece is twelve rows of table above a leaderboard. */
+  grid-template-columns: minmax(0, 1fr) 5.8em minmax(0, 0.9fr);
   align-items: baseline;
-  /* Wider column gap than row gap: the figure and the vehicle are separate
-     facts and were running into each other as one string. */
   gap: 2px 12px;
-  padding: 4px 6px;
+  padding: 4px 8px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.03);
   font: 500 12px/1.35 inherit;
   color: var(--sg-dim);
 }
 
+/* Green means "newly taken", and it is the only place green appears here. */
 .sg-rec__row.is-new {
   background: rgba(47, 227, 107, 0.12);
   box-shadow: inset 2px 0 0 var(--sg-green);
@@ -3819,18 +3866,6 @@
   text-align: right;
 }
 
-.sg-rec__car {
-  font-size: 11px;
-  color: var(--sg-cyan);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Holder and NEW SHARE the second line rather than taking one each. Four
-   records at three lines apiece is twelve rows of table for sixteen facts, and
-   the page has a leaderboard under it. Two lines each is the same information
-   in two thirds of the height. */
 .sg-rec__who {
   grid-column: 1 / span 2;
   font-size: 10px;

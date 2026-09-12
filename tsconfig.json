@@ -17,5 +17,9 @@
     "isolatedModules": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "tools", "tests"]
+  // netlify/ is in here so the leaderboard function is covered by the same
+  // `tsc --noEmit` the build gate runs. Left out, a type error in the endpoint
+  // ships silently: vite never touches that directory and Netlify bundles it
+  // with esbuild, which strips types without checking them.
+  "include": ["src", "tools", "tests", "netlify"]
 }

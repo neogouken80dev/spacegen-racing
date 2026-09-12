@@ -33,9 +33,32 @@ const MIME = {
   '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon',
   '.mp3': 'audio/mpeg',
 }
+/**
+ * A stub for the leaderboard function.
+ *
+ * The endpoint is a Netlify Function and this harness serves a static
+ * directory, so without this the global tab only ever exercises its OFFLINE
+ * branch -- which is the branch least likely to be broken. Standing in for the
+ * function means the populated path is tested too: the fetch, the row
+ * sanitising, the rendering and the vehicle column.
+ */
+const GLOBAL_STUB = {
+  rows: [
+    { name: 'ORBIT', lap: 47.21, raceTime: 160.2, score: 210000, chassisId: 'bulwark', pilotId: 'aegis', position: 1, at: 10 },
+    { name: 'KESTREL', lap: 48.90, raceTime: 164.0, score: 180000, chassisId: 'vector7', pilotId: 'zephyr', position: 2, at: 20 },
+    { name: 'PROBE', lap: 51.44, raceTime: 171.5, score: 140000, chassisId: 'solaire', pilotId: 'socket', position: 4, at: 30 },
+  ],
+  rank: 3,
+}
+
 const server = createServer(async (req, res) => {
   try {
     let p = decodeURIComponent((req.url || '/').split('?')[0])
+    if (p === '/api/leaderboard') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(GLOBAL_STUB))
+      return
+    }
     if (p === '/' || p.endsWith('/')) p += 'index.html'
     const buf = await readFile(join(ROOT, p))
     res.writeHead(200, { 'content-type': MIME[extname(p)] || 'application/octet-stream' })
@@ -140,6 +163,14 @@ const readTabs = () => page.evaluate(() => {
     isNew: r.classList.contains('is-new'),
   }))
   const boardCars = [...document.querySelectorAll('.sg-board__car')].map((e) => e.textContent)
+  const glo = document.querySelector('.sg-results__global')
+  const gloRows = [...document.querySelectorAll('.sg-results__global .sg-board__row')].map((r) => ({
+    n: r.querySelector('.sg-board__n')?.textContent ?? '',
+    name: r.querySelector('.sg-board__name')?.textContent ?? '',
+    car: r.querySelector('.sg-board__car')?.textContent ?? '',
+    t: r.querySelector('.sg-board__score')?.textContent ?? '',
+  }))
+  const gloNote = document.querySelector('.sg-results__global .sg-board__note')?.textContent ?? ''
   return {
     missing: false,
     role: list.getAttribute('role'),
@@ -153,6 +184,9 @@ const readTabs = () => page.evaluate(() => {
     visibleHasStandings: visible.some((p) => p.querySelector('.sg-results__rows')),
     recRows,
     boardCars,
+    gloRows,
+    gloNote,
+    hasGlobal: !!glo,
   }
 })
 
@@ -207,22 +241,107 @@ if (named) {
 }
 const afterSave = await readTabs()
 console.log('board cars :', JSON.stringify(afterSave.boardCars))
+for (let i = 0; i < 3; i++) {
+  await page.locator('.sg-screen--results .sg-tab').nth(i).click()
+  await page.waitForTimeout(450)
+  await page.screenshot({ path: new URL(`../shots/tab-${i}.png`, import.meta.url).pathname })
+}
+await page.locator('.sg-screen--results .sg-tab').nth(1).click()
+await page.waitForTimeout(300)
 await page.screenshot({ path: new URL('../shots/results-records.png', import.meta.url).pathname })
 await page.locator('.sg-screen--results .sg-tab').nth(0).click()
 await page.waitForTimeout(400)
 await page.screenshot({ path: new URL('../shots/results-standings.png', import.meta.url).pathname })
 await page.locator('.sg-screen--results .sg-tab').nth(1).click()
 await page.waitForTimeout(300)
+// The global page, with the stub standing in for the function.
+await page.locator('.sg-screen--results .sg-tab').nth(2).click()
+await page.waitForTimeout(600)
+const glo = await readTabs()
+console.log('global     :', JSON.stringify(glo.gloRows))
+console.log('global note:', JSON.stringify(glo.gloNote))
+if (!glo.hasGlobal) errors.push('there is no global panel')
+else if (glo.gloRows.length === 0) errors.push('the global board rendered no rows from the stub')
+else {
+  if (glo.gloRows.some((r) => !r.car)) errors.push('a global row names no vehicle')
+  if (glo.gloRows.some((r) => !/:/.test(r.t))) errors.push('a global row does not show a lap TIME')
+  const laps = glo.gloRows.map((r) => r.t)
+  if ([...laps].sort().join() !== laps.join()) errors.push(`global rows are not fastest-first: ${laps}`)
+  if (!/unverified/i.test(glo.gloNote)) errors.push('the global board does not say it is unverified')
+}
+await page.locator('.sg-screen--results .sg-tab').nth(1).click()
+await page.waitForTimeout(300)
+
 console.log('record who :', JSON.stringify(
   await page.evaluate(() => [...document.querySelectorAll('.sg-rec__who')].map((e) => e.textContent)),
 ))
+
+/**
+ * CENTRING, AT THREE WIDTHS.
+ *
+ * The standings column rendered LEFT of the centred title and tab strip, and
+ * the cause was structural rather than cosmetic: `.sg-screen--results` centres
+ * its children with flex, and wrapping them in a tab panel put a plain block in
+ * between, so `width: min(720px, 100%)` went flush left. A margin nudge would
+ * have hidden that and failed for the next block added to a panel.
+ *
+ * So this measures every major block's own centre against the viewport's, at
+ * desktop, tablet and phone. Centring is a number, not an impression.
+ */
+const CENTRE_AT = [
+  { label: 'desktop', w: 1280, h: 900 },
+  { label: 'tablet', w: 834, h: 1112 },
+  { label: 'phone', w: 390, h: 844 },
+]
+const SELECTORS = [
+  '.sg-results__title', '.sg-results__where', '.sg-tabs',
+  '.sg-results__rows', '.sg-results__meta', '.sg-results__score',
+  '.sg-results__cta',
+]
+
+const measureCentre = () => page.evaluate((sels) => {
+  const vw = document.documentElement.clientWidth
+  const out = []
+  for (const sel of sels) {
+    const el = document.querySelector('.sg-screen--results ' + sel)
+    if (!el) continue
+    const b = el.getBoundingClientRect()
+    if (b.width < 2) continue
+    out.push({
+      sel,
+      off: +(((b.x + b.width / 2) - vw / 2)).toFixed(1),
+      frac: +(Math.abs((b.x + b.width / 2) - vw / 2) / vw).toFixed(4),
+      overflow: +(Math.max(0, b.width - vw)).toFixed(0),
+    })
+  }
+  return { vw, out, docW: document.documentElement.scrollWidth }
+}, SELECTORS)
+
+console.log('\ncentring:')
+for (const vp of CENTRE_AT) {
+  await page.setViewportSize({ width: vp.w, height: vp.h })
+  await page.waitForTimeout(500)
+  const m = await measureCentre()
+  const worst = m.out.reduce((a, b) => (b.frac > a.frac ? b : a), { sel: '-', off: 0, frac: 0 })
+  console.log(`  ${vp.label.padEnd(8)} ${String(vp.w).padStart(4)}px  worst ${worst.sel} ${worst.off}px (${(worst.frac * 100).toFixed(2)}%)  scrollW ${m.docW}`)
+  for (const e of m.out) {
+    // Half a percent of the viewport. Anything past that reads as misaligned
+    // next to a centred title.
+    if (e.frac > 0.005) errors.push(`${vp.label}: ${e.sel} is ${e.off}px off centre`)
+    if (e.overflow > 0) errors.push(`${vp.label}: ${e.sel} is ${e.overflow}px wider than the screen`)
+  }
+  // A results screen must never scroll sideways on a phone.
+  if (m.docW > vp.w + 1) errors.push(`${vp.label}: the page scrolls horizontally (${m.docW} > ${vp.w})`)
+}
+await page.setViewportSize({ width: 1280, height: 900 })
+await page.waitForTimeout(400)
 
 if (last?.p !== 'results') errors.push(`never reached the results screen (phase ${last?.p})`)
 else if (before.missing) errors.push('the results screen has no tablist')
 else {
   if (before.role !== 'tablist') errors.push(`tab strip role is "${before.role}", not tablist`)
-  if (before.labels.length !== 2) errors.push(`${before.labels.length} tabs, expected 2`)
-  if (before.panelCount !== 2) errors.push(`${before.panelCount} panels, expected 2`)
+  if (before.labels.length !== 3) errors.push(`${before.labels.length} tabs, expected 3`)
+  if (before.panelCount !== 3) errors.push(`${before.panelCount} panels, expected 3`)
   if (before.visiblePanels !== 1) errors.push(`${before.visiblePanels} panels visible at once`)
   if (before.tabbable !== 1) errors.push(`${before.tabbable} tabs in the focus order, expected 1`)
   if (!before.visibleHasStandings) errors.push('does not open on the race standings')

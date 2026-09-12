@@ -17,6 +17,8 @@
     "three": "^0.171.0"
   },
   "devDependencies": {
+    "@netlify/blobs": "^11.0.3",
+    "@netlify/functions": "^6.0.0",
     "@types/node": "^26.4.1",
     "@types/three": "^0.171.0",
     "playwright": "^1.62.1",
