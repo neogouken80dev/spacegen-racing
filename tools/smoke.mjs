@@ -234,7 +234,12 @@ const GLARE_INTENSITY = (() => {
  */
 const CHASSIS = (process.argv.find((a) => a.startsWith('--chassis=')) ?? '').slice(10)
 
-const TRACK_NAMES = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion Prime', hollowchoir: 'The Hollow Choir' }
+// DISPLAY names, which are checked against the UI further down. The keys are
+// the ids, which never change; the values follow the circuits' names and were
+// updated when they were renamed. Card selection no longer uses this -- see
+// data-track below -- so a stale entry here fails the UI assertion loudly
+// instead of timing out on a locator, which is the better failure.
+const TRACK_NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime' }
 const trackId = (process.argv.find((a) => a.startsWith('--track=')) ?? '--track=rustfall').slice(8)
 const trackName = TRACK_NAMES[trackId]
 if (!trackName) {
@@ -312,7 +317,10 @@ await page.waitForTimeout(1200)
 // rendering, this is where the smoke test says so.
 await page.waitForSelector('.sg-screen--track .sg-card--track', { state: 'visible', timeout: 15000 })
 await page.waitForSelector('.sg-trk__svg', { state: 'visible', timeout: 15000 })
-const card = page.locator('.sg-screen--track .sg-card--track').filter({ hasText: trackName }).first()
+// Selected by ID, not by display name: the circuits were renamed (Rustfall ->
+// Elkarim and so on) and this line was the only thing that broke, which is a
+// content edit failing a build for no reason. `data-track` is the key.
+const card = page.locator(`.sg-screen--track .sg-card--track[data-track="${trackId}"]`).first()
 await activate(card)
 // Wait for the screen to actually settle before photographing it, rather than
 // guessing a timeout. Picking a card starts a 110ms border-colour transition on

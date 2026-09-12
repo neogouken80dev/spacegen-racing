@@ -312,7 +312,7 @@ function roll(bearing: number, deg: number): [number, number, number] {
 
 export const AETHERION: TrackDef = {
   id: 'aetherion',
-  name: 'Aetherion Prime',
+  name: 'Namaresh',
   // GREY-BOX PALETTE, authored honestly and not art-passed. Gold, teal and
   // violet on white stone, at a low sun: a warm key raking across pale stone,
   // a violet fill so the shadow side of every column goes cool rather than

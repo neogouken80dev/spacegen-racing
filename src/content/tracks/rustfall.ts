@@ -8,7 +8,7 @@ import type { TrackDef } from '../../sim/track'
  */
 export const RUSTFALL: TrackDef = {
   id: 'rustfall',
-  name: 'Rustfall',
+  name: 'Elkarim',
   skyTop: 0x2a1a12,
   skyBottom: 0xc4682a,
   fogColor: 0x8a5a33,

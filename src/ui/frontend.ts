@@ -38,6 +38,12 @@ export interface StartSelection {
 
 export interface FrontEnd {
   root: HTMLElement
+  /**
+   * The track currently chosen, including the one restored from storage before
+   * the player has touched anything. Read by the host to start fetching that
+   * circuit's music while the player is still in the menus.
+   */
+  readonly selectedTrackId: string
   show(screen: ScreenId): void
   hide(): void
   onStart: (sel: StartSelection) => void
@@ -570,6 +576,11 @@ class FrontEndImpl implements FrontEnd {
       const def = TRACKS[i]
       const c = copyFor(def.id)
       const card = button('sg-card sg-card--track', tList, '')
+      // The track's ID on the element. Harnesses used to find this card by its
+      // DISPLAY NAME, which meant renaming the four circuits broke the smoke
+      // test -- a rename is a content change and should not be able to do that.
+      // An id is a key and does not move; the name is allowed to.
+      card.dataset.track = def.id
       const chip = el('span', 'sg-card__chip', card)
       chip.style.setProperty('--c1', hex(def.palette.a))
       chip.style.setProperty('--c2', hex(def.palette.c))
@@ -926,6 +937,8 @@ class FrontEndImpl implements FrontEnd {
     const active = document.activeElement
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur()
   }
+
+  get selectedTrackId(): string { return this.trackId }
 
   onSaveScore: (name: string) => void = () => {}
 

@@ -958,7 +958,7 @@ function lapNodes(): TrackNode[] {
 
 export const HOLLOWCHOIR: TrackDef = {
   id: 'hollowchoir',
-  name: 'The Hollow Choir',
+  name: 'Centurion Prime',
   // GREY-BOX PALETTE, authored for a derelict and not art-passed.
   //
   // The one lighting fact that drives everything: there is no sun here worth

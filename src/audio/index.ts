@@ -62,36 +62,64 @@ export const VO_LINES: Record<VoKind, readonly string[]> = {
   ],
 }
 
-/** The beds. Two per circuit: laps 1-2, and the final lap. */
-export const MUSIC: Record<string, { bed: string; final: string }> = {
-  rustfall: { bed: 'audio/music/rustfall.mp3', final: 'audio/music/rustfall-final.mp3' },
-  cryostatic: { bed: 'audio/music/cryostatic.mp3', final: 'audio/music/cryostatic-final.mp3' },
-  aetherion: { bed: 'audio/music/aetherion.mp3', final: 'audio/music/aetherion-final.mp3' },
-  hollowchoir: { bed: 'audio/music/hollowchoir.mp3', final: 'audio/music/hollowchoir-final.mp3' },
+/**
+ * The beds, keyed by track ID.
+ *
+ * FILENAMES FOLLOW THE TRACK'S NAME, KEYS FOLLOW ITS ID. The four circuits were
+ * renamed to Elkarim / Frosthelm / Namaresh / Centurion Prime, but their ids
+ * were deliberately left alone -- an id change would orphan every saved
+ * leaderboard, the remembered track preference and the determinism gates, for
+ * no gain a player can see. So this table is the one place the two vocabularies
+ * meet, and it is meant to look slightly odd.
+ *
+ * `final` is OPTIONAL and currently unset everywhere. The design called for a
+ * second, tenser cue on the last lap; one track per circuit was delivered, so
+ * the bed simply keeps playing. Dropping a `<name>-final.mp3` in and naming it
+ * here is the whole of turning that on -- nothing else needs to change.
+ */
+export const MUSIC: Record<string, { bed: string; final?: string }> = {
+  rustfall: { bed: 'audio/music/elkarim.mp3' },
+  cryostatic: { bed: 'audio/music/frosthelm.mp3' },
+  aetherion: { bed: 'audio/music/namaresh.mp3' },
+  hollowchoir: { bed: 'audio/music/centurion-prime.mp3' },
 }
 
 export const MUSIC_TITLE = 'audio/music/title.mp3'
 export const MUSIC_GARAGE = 'audio/music/garage.mp3'
 
 /**
- * THE ASSET SWITCH, AND WHY IT IS OFF.
+ * The finish stings. One-shots on the music bus, chosen by finishing position.
  *
- * Every URL in the tables above names a file that does not exist yet. The stage
- * handles that correctly -- a failed fetch is remembered and that sound is
- * simply silent -- but "correctly" is not the same as "quietly": the browser
- * logs a 404 for every one of them, and `tools/smoke.mjs` fails the build on
- * ANY console error. Shipping with the requests live would turn a green gate
- * red for a reason that is not a bug, which is worse than having no music,
- * because the next real console error would be lost in the noise.
- *
- * So nothing is requested until there is something to request.
- *
- * TO TURN THE SOUND ON: drop the files into `public/audio/` under the names in
- * MUSIC, MUSIC_TITLE, MUSIC_GARAGE and VO_LINES, and flip this to true. The
- * whole path below is already wired and exercised by tests/audio.test.ts; this
- * flag gates the fetch, not the logic.
+ * They REPLACE the race bed rather than layering over it: two pieces of music
+ * at once is the single worst thing this system can do, and the flag is exactly
+ * the moment the bed has stopped being about anything.
  */
-export const HAS_AUDIO_ASSETS = false
+export const STING_VICTORY = 'audio/sting/victory.mp3'
+export const STING_FINISH = 'audio/sting/finish.mp3'
+
+/**
+ * TWO SWITCHES, BECAUSE THE ASSETS ARRIVED SEPARATELY.
+ *
+ * A URL that does not exist is handled correctly -- a failed fetch is
+ * remembered and that sound is silent -- but "correctly" is not "quietly": the
+ * browser logs a 404 for every one, and `tools/smoke.mjs` fails the build on
+ * ANY console error. A green gate turning red for a reason that is not a bug is
+ * worse than having no music, because the next real error is then lost in the
+ * noise. So nothing is requested until there is something to request.
+ *
+ * The music and the stings are now in `public/audio/`, so HAS_MUSIC is on.
+ * The voice lines are not recorded yet, so HAS_VO stays off.
+ *
+ * These were ONE flag until the music landed. Keeping them as one would have
+ * meant either shipping music with 404s on every callout, or holding the music
+ * back until someone records a voice -- both worse than a second boolean.
+ *
+ * TO TURN THE VOICE ON: drop the files named in VO_LINES into
+ * `public/audio/vo/` and flip HAS_VO. The path is already wired and exercised
+ * by tests/audio.test.ts; the flag gates the fetch, not the logic.
+ */
+export const HAS_MUSIC = true
+export const HAS_VO = false
 
 /** Seconds the music ducks under a voice line, and how far. */
 const DUCK_LEVEL = 0.35
@@ -122,6 +150,13 @@ export interface AudioSystem {
   cue(id: SoundId): void
   music(trackId: string | null, finalLap: boolean): void
   menuMusic(which: 'title' | 'garage' | null): void
+  /**
+   * The flag. Stops the bed and plays a sting chosen by finishing position.
+   * Call once, on the local racer's finish.
+   */
+  finishSting(position: number): void
+  /** Start fetching a track's bed before it is needed. */
+  preloadTrack(trackId: string | null): void
   /** Tear down engines and scrapes between races. */
   endRace(): void
   setHidden(hidden: boolean): void
@@ -201,7 +236,7 @@ class AudioImpl implements AudioSystem {
 
   callout(kind: VoKind): void {
     const stage = this.stage
-    if (!stage || !HAS_AUDIO_ASSETS) return
+    if (!stage || !HAS_VO) return
     const lines = VO_LINES[kind]
     if (!lines || lines.length === 0) return
     const now = performance.now() / 1000
@@ -225,7 +260,11 @@ class AudioImpl implements AudioSystem {
     if (!m) { this.setBed(null, 1.2); return }
     // A longer fade into the final lap than out of the menu: the swap should
     // feel like the race tightening, not like a track change.
-    this.setBed(finalLap ? m.final : m.bed, finalLap ? 1.8 : 0.8)
+    // No final-lap variant delivered for these circuits, so the bed carries on
+    // rather than crossfading to itself -- setBed already no-ops on an
+    // unchanged URL, but being explicit here keeps the intent readable.
+    const url = finalLap && m.final ? m.final : m.bed
+    this.setBed(url, finalLap && m.final ? 1.8 : 0.8)
   }
 
   menuMusic(which: 'title' | 'garage' | null): void {
@@ -233,8 +272,28 @@ class AudioImpl implements AudioSystem {
     this.setBed(which === 'title' ? MUSIC_TITLE : which === 'garage' ? MUSIC_GARAGE : null, 1.0)
   }
 
+  finishSting(position: number): void {
+    const stage = this.stage
+    if (!stage || !HAS_MUSIC) return
+    // The bed goes first, and quickly. A sting laid over a race bed is two
+    // pieces of music at once, which is the worst thing this system can do.
+    // 0.35s rather than an instant cut: a hard stop on a loud mix reads as a
+    // dropout, and the sting's own opening covers the tail.
+    this.setBed(null, 0.35)
+    stage.sting(position === 1 ? STING_VICTORY : STING_FINISH)
+  }
+
+  preloadTrack(trackId: string | null): void {
+    const stage = this.stage
+    if (!stage || !HAS_MUSIC) return
+    const urls: string[] = [STING_VICTORY, STING_FINISH]
+    const m = trackId ? MUSIC[trackId] : null
+    if (m) { urls.push(m.bed); if (m.final) urls.push(m.final) }
+    stage.preload(urls)
+  }
+
   private setBed(url: string | null, fade: number): void {
-    if (!HAS_AUDIO_ASSETS) return
+    if (!HAS_MUSIC) return
     if (url === this.curMusic) return
     this.curMusic = url
     this.stage?.setMusic(url, fade)

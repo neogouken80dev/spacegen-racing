@@ -314,6 +314,13 @@ export class Game {
       else this.stopAttract()
       this.audio.menuMusic(screen === 'title' ? 'title'
         : screen === 'track' || screen === 'garage' ? 'garage' : null)
+      // Start pulling the race bed while the player is still choosing. It is
+      // 2.5-4MB; left until startRace() the fetch begins at the moment the
+      // music should already be playing, and on a phone the first stretch of
+      // the race runs in silence with the bed fading in over it.
+      if (screen === 'track' || screen === 'garage') {
+        this.audio.preloadTrack(this.frontEnd.selectedTrackId)
+      }
     }
 
     /**
@@ -714,6 +721,12 @@ export class Game {
     // race the player did not drive. This is the last frame that is theirs.
     this.lastScore = this.scorer.score
     this.lastBestCombo = this.scorer.bestCombo
+    // Victory or completion, by position. Here rather than off the `finish`
+    // EVENT because this function is already the one place that runs exactly
+    // once on the frame the local racer takes the flag -- driving it from the
+    // event list would mean carrying a second "have I done this yet" flag that
+    // has to be reset in all four of the places a race can start.
+    this.audio.finishSting(this.race.state.racers[this.localId].position)
     this.syncFinishCard()
   }
 

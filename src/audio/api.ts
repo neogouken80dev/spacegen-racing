@@ -202,6 +202,10 @@ export interface AudioStage {
   setEngine(racerId: number, v: EngineVoice | null): void
   /** Crossfade the music bed. `null` fades to silence. */
   setMusic(url: string | null, fadeSeconds: number): void
+  /** Begin fetching these now, so they are ready when wanted. */
+  preload(urls: readonly string[]): void
+  /** A one-shot on the music bus. Returns false if nothing was ready. */
+  sting(url: string): boolean
   /** Duck the music bus to `level` for `hold` seconds, then restore. */
   duck(level: number, hold: number): void
   /** Speak a VO line. Returns false if nothing was available to play. */

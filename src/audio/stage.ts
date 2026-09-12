@@ -87,6 +87,8 @@ class WebAudioStage implements AudioStage {
   private readonly engines = new Map<number, Engine>()
   private music: { src: AudioBufferSourceNode; gain: GainNode; url: string } | null = null
   private readonly buffers = new Map<string, AudioBuffer | null>()
+  /** Trimmed loop points per URL. See findLoopPoints. */
+  private readonly loops = new Map<string, { start: number; end: number }>()
   private disposed = false
 
   constructor(ctx: Ctx, vol: Volumes) {
@@ -296,8 +298,28 @@ class WebAudioStage implements AudioStage {
       if (!res.ok) return
       const arr = await res.arrayBuffer()
       const buf = await this.ctx.decodeAudioData(arr)
-      if (!this.disposed) this.buffers.set(url, buf)
+      if (this.disposed) return
+      this.buffers.set(url, buf)
+      this.loops.set(url, findLoopPoints(buf))
     } catch { /* stays null; that sound is silent */ }
+  }
+
+  /**
+   * Start fetching now so the sound is ready when it is wanted.
+   *
+   * The beds are 2.5-4MB each. Left to `setMusic`, the fetch begins at the
+   * moment the music should already be playing, so on anything slower than a
+   * desk connection a race starts in silence and the bed fades in some seconds
+   * later, over driving that has already begun. Calling this when the player
+   * picks a track in the garage turns that into a download that finishes while
+   * they are still choosing a chassis.
+   *
+   * Safe to call repeatedly and for URLs that do not exist: `load` records a
+   * failure as null and never retries or throws.
+   */
+  preload(urls: readonly string[]): void {
+    if (this.disposed) return
+    for (const u of urls) if (!this.buffers.has(u)) void this.load(u)
   }
 
   setScrape(id: ScrapeId, level: ScrapeLevel | null): void {
@@ -431,6 +453,22 @@ class WebAudioStage implements AudioStage {
     const src = this.ctx.createBufferSource()
     src.buffer = buf
     src.loop = true
+    // A GUARD, NOT A FIX -- and the difference is worth writing down, because I
+    // built it as a fix on a premise that turned out to be backwards.
+    //
+    // None of the delivered mp3s carry a Xing/LAME header, so I expected
+    // `decodeAudioData` to hand back the encoder's delay as real silence welded
+    // to the front, which would put a ~50ms stutter at every loop point.
+    // Measured, Chrome does the opposite: the decoded buffers come back 24-40ms
+    // SHORTER than their containers (179.600 against 179.640; 119.064 against
+    // 119.088), which is the decoder stripping the padding itself. The loop was
+    // already seamless and findLoopPoints correctly finds nothing to trim.
+    //
+    // It stays because it costs one early-terminating scan at load and it is
+    // the right behaviour for a file that DOES open on silence -- but it is
+    // insurance against a future asset, not a repair of a present bug.
+    const lp = this.loops.get(url)
+    if (lp && lp.end > lp.start) { src.loopStart = lp.start; src.loopEnd = lp.end }
     const gain = this.ctx.createGain()
     gain.gain.value = 0.0001
     src.connect(gain)
@@ -438,6 +476,48 @@ class WebAudioStage implements AudioStage {
     src.start()
     ramp(gain.gain, 1, t, Math.max(0.05, fadeSeconds))
     this.music = { src, gain, url }
+  }
+
+  /**
+   * A one-shot on the MUSIC bus: the finish stings.
+   *
+   * Not `speak()`, which is the voice bus and ducks the music -- a sting IS the
+   * music for those few seconds, so it answers to the music fader and a player
+   * who turned music down gets a quieter sting rather than a loud one over a
+   * silent race. Not `setMusic()` either, because that loops and a sting must
+   * end. Returns false if nothing was ready, so the caller can tell silence
+   * from success.
+   */
+  sting(url: string, retry = true): boolean {
+    if (this.disposed || this.ctx.state !== 'running') return false
+    const buf = this.buffers.get(url)
+    if (buf === undefined) {
+      // FIRST ASK IS OTHERWISE ALWAYS SILENT. `setMusic` has always retried
+      // after its load resolves; this did not, so a sting requested before
+      // anything had preloaded it kicked a fetch, returned false, and never
+      // played -- measured as peak 0.0000 on the music bus. It only looked fine
+      // because preloadTrack usually gets there first, which makes it a bug
+      // that appears when a player reaches the flag by an unusual route.
+      //
+      // `retry` guards the recursion: one attempt after the load, never a loop.
+      if (retry) void this.load(url).then(() => { this.sting(url, false) })
+      return false
+    }
+    if (buf === null) return false
+    const out = this.ctx.createGain()
+    out.gain.value = 1
+    // Ahead of the duck node, so a voice line cannot pull the sting down with
+    // the bed it replaced.
+    out.connect(this.busMusic)
+    const src = this.ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(out)
+    src.start()
+    window.setTimeout(() => {
+      try { src.stop() } catch { /* already finished */ }
+      try { out.disconnect() } catch { /* already gone */ }
+    }, Math.ceil(buf.duration * 1000) + 400)
+    return true
   }
 
   duck(level: number, hold: number): void {
@@ -498,6 +578,47 @@ function cleanup(src: AudioScheduledSourceNode, nodes: AudioNode[]): void {
  * Null is a supported outcome and the ONLY signal of failure -- there is no
  * error to show a player who has audio switched off at the OS level.
  */
+/**
+ * Where the music actually starts and stops inside a decoded buffer.
+ *
+ * Finds the first and last samples carrying signal so a loop can run between
+ * them rather than through leading or trailing silence. On the current assets
+ * it finds none -- see the note at the call site -- so this is a guard against
+ * a future file, not a correction being applied today.
+ *
+ * TWO GUARDS, BOTH BECAUSE THIS MUST NEVER EAT REAL MUSIC:
+ *
+ *   the threshold is very low (-60dB), so only true digital silence trims;
+ *   the trim is capped at MAX_TRIM, so a track that genuinely opens on a quiet
+ *   swell keeps its intro. Codec padding is tens of milliseconds. Anything
+ *   longer than a quarter of a second is the composition, not the encoder, and
+ *   is left exactly where the composer put it.
+ */
+function findLoopPoints(buf: AudioBuffer): { start: number; end: number } {
+  const MAX_TRIM = 0.25
+  const FLOOR = 0.001
+  const rate = buf.sampleRate
+  const n = buf.length
+  const limit = Math.min(n, Math.floor(MAX_TRIM * rate))
+  const chans: Float32Array[] = []
+  for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c))
+
+  const loud = (i: number): boolean => {
+    for (const ch of chans) if (Math.abs(ch[i]) > FLOOR) return true
+    return false
+  }
+
+  let start = 0
+  while (start < limit && !loud(start)) start++
+  let end = n - 1
+  const tailLimit = Math.max(0, n - 1 - limit)
+  while (end > tailLimit && !loud(end)) end--
+
+  // Fall back to the whole buffer rather than returning something degenerate.
+  if (end <= start) return { start: 0, end: buf.duration }
+  return { start: start / rate, end: (end + 1) / rate }
+}
+
 export function createStage(vol: Volumes): AudioStage | null {
   try {
     const C = (window.AudioContext

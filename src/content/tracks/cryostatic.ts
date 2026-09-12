@@ -46,7 +46,7 @@ import type { TrackDef } from '../../sim/track'
  */
 export const CRYOSTATIC: TrackDef = {
   id: 'cryostatic',
-  name: 'Cryostatic',
+  name: 'Frosthelm',
   // ART PASS: POLAR DUSK. See render/themes/cryostatic.ts for the argument.
   //
   // The authored grey-box values were a noon sky — a 0xa8cfe0 fog under a
