@@ -29,6 +29,7 @@ import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
 import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
 import { Scorer } from '../score/scorer'
 import { createScoreboard, BOARD_SIZE } from '../score/board'
+import { createRecordStore, type RecordStore } from '../score/records'
 import type { ScoreStore } from '../score/api'
 import { createAudio, type AudioSystem } from '../audio'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
@@ -97,6 +98,7 @@ export class Game {
   private scoreHud: ScoreHud
   private readonly scorer = new Scorer()
   private readonly board: ScoreStore = createScoreboard()
+  private readonly records: RecordStore = createRecordStore()
   /** The finished run, held between the flag and the results screen. */
   private lastScore = 0
   private lastBestCombo = 1
@@ -821,6 +823,29 @@ export class Game {
     const local = race.state.racers[this.localId]
     const score = this.lastScore
     try {
+      // RECORDS FIRST, AND UNCONDITIONALLY. Unlike the board, a record is taken
+      // from every race whether or not the player names anything -- a blistering
+      // lap inside a scrappy run is exactly the thing worth remembering, and it
+      // would never reach a score board because the run scored badly.
+      //
+      // The name is whatever they last saved, which may be nothing. The car is
+      // the part that carries the meaning here.
+      let savedName = ''
+      try { savedName = window.localStorage.getItem('sg.name') || '' } catch { /* blocked */ }
+      const broken = await this.records.submit({
+        trackId,
+        chassisId: local.chassisId,
+        pilotId: local.pilotId,
+        name: savedName,
+        bestLap: local.bestLap,
+        // A DNF has no race time, and zero would win "fastest race" forever.
+        raceTime: local.finished ? local.finishTime : 0,
+        score,
+        bestCombo: this.lastBestCombo,
+        at: Date.now(),
+      })
+      this.frontEnd.setRecords(await this.records.get(trackId), broken)
+
       const qualifies = await this.board.qualifies(trackId, score, BOARD_SIZE)
       const rows = await this.board.top(trackId, BOARD_SIZE)
       this.frontEnd.setBoard(rows, 0, qualifies)
@@ -838,11 +863,17 @@ export class Game {
         }, BOARD_SIZE)
         const after = await this.board.top(trackId, BOARD_SIZE)
         this.frontEnd.setBoard(after, rank, false)
+        // Put the name on the records this race took. NOT by re-submitting the
+        // run: an exact tie does not beat the standing record, so a second
+        // submit of the same figures is a no-op and the name never lands.
+        await this.records.rename(trackId, broken, name)
+        this.frontEnd.setRecords(await this.records.get(trackId), broken)
       }
     } catch {
       // A board that cannot be read is not a reason to break the results
       // screen. The race still happened and the score is still on it.
       this.frontEnd.setBoard([], 0, false)
+      this.frontEnd.setRecords({}, [])
     }
   }
 

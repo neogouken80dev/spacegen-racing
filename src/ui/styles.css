@@ -3635,9 +3635,10 @@
 
 .sg-board__row {
   display: grid;
-  /* Rank, name, combo, score. The score column is the widest because it is the
-     one being compared; the name is allowed to run out of room before it does. */
-  grid-template-columns: 1.6em minmax(0, 1fr) 3.2em 5.4em;
+  /* Rank, name, vehicle, score. The score column is the widest because it is
+     the one being compared; the name is allowed to run out of room before it
+     does, and the vehicle gets a fixed share so the column stays a column. */
+  grid-template-columns: 1.6em minmax(0, 1fr) minmax(0, 0.9fr) 5.4em;
   align-items: baseline;
   gap: 6px;
   padding: 2px 6px;
@@ -3661,11 +3662,12 @@
   white-space: nowrap;
 }
 
-.sg-board__combo {
-  font-variant-numeric: tabular-nums;
+.sg-board__car {
   font-size: 11px;
-  color: var(--sg-violet);
-  text-align: right;
+  color: var(--sg-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sg-board__score {
@@ -3686,4 +3688,161 @@
 .sg-btn--small {
   padding: 5px 12px;
   font-size: 12px;
+}
+
+/* ===========================================================================
+   RESULTS TABS
+   ---------------------------------------------------------------------------
+   Generic: the strip wraps, so a third or fourth page needs no breakpoint of
+   its own. See ui/tabs.ts — this styles a real tablist, not buttons that hide
+   things, so `:focus-visible` has to be real too.
+   =========================================================================== */
+.sg-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin: 10px auto 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sg-line);
+  width: min(96%, 520px);
+}
+
+.sg-tab {
+  position: relative;
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px 3px 0 0;
+  padding: 6px 16px 7px;
+  font: 600 11px/1 inherit;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  cursor: pointer;
+  transition: color 140ms linear, background 140ms linear;
+}
+
+.sg-tab:hover { color: var(--sg-dim); }
+
+.sg-tab.is-on {
+  color: var(--sg-ink);
+  background: rgba(34, 211, 255, 0.08);
+  border-color: var(--sg-line);
+  border-bottom-color: transparent;
+}
+
+/* The selected tab's underline sits ON the strip's rule, which is what makes
+   the panel read as attached to the tab rather than floating under a toolbar. */
+.sg-tab.is-on::after {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: -7px;
+  height: 2px;
+  background: var(--sg-cyan);
+  box-shadow: 0 0 8px var(--sg-cyan);
+}
+
+.sg-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 255, 0.5);
+}
+
+/* Something new is in there. A player who never opens the records page never
+   finds out they took a record, and an unopened tab is the easiest thing in a
+   UI to not notice. Cleared the moment the tab is selected. */
+.sg-tab[data-mark]::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sg-gold);
+  box-shadow: 0 0 6px var(--sg-gold);
+}
+
+.sg-tabpanels {
+  width: 100%;
+}
+
+/* ===========================================================================
+   TRACK RECORDS
+   =========================================================================== */
+.sg-results__records {
+  margin: 10px auto 0;
+  width: min(94%, 380px);
+}
+
+.sg-rec__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sg-rec__row {
+  display: grid;
+  /* Label, value, vehicle, holder. The value is the thing being compared, so
+     it is the one column that never shrinks. */
+  grid-template-columns: minmax(0, 1fr) 5.6em minmax(0, 0.95fr);
+  align-items: baseline;
+  /* Wider column gap than row gap: the figure and the vehicle are separate
+     facts and were running into each other as one string. */
+  gap: 2px 12px;
+  padding: 4px 6px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  font: 500 12px/1.35 inherit;
+  color: var(--sg-dim);
+}
+
+.sg-rec__row.is-new {
+  background: rgba(47, 227, 107, 0.12);
+  box-shadow: inset 2px 0 0 var(--sg-green);
+  color: var(--sg-ink);
+}
+
+.sg-rec__k {
+  letter-spacing: 0.06em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sg-rec__v {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--sg-ink);
+  text-align: right;
+}
+
+.sg-rec__car {
+  font-size: 11px;
+  color: var(--sg-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Holder and NEW SHARE the second line rather than taking one each. Four
+   records at three lines apiece is twelve rows of table for sixteen facts, and
+   the page has a leaderboard under it. Two lines each is the same information
+   in two thirds of the height. */
+.sg-rec__who {
+  grid-column: 1 / span 2;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--sg-mute);
+}
+
+.sg-rec__new {
+  grid-column: 3;
+  justify-self: start;
+  align-self: center;
+  font: 700 9px/1 inherit;
+  letter-spacing: 0.2em;
+  color: var(--sg-green);
 }

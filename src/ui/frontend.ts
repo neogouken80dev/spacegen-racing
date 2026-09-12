@@ -20,6 +20,8 @@ import './styles.css'
 import type { RaceState, RacerState } from '../sim/types'
 import { CHASSIS } from '../content/chassis'
 import type { ScoreEntry } from '../score/api'
+import { createTabs, type TabStrip } from './tabs'
+import { RECORD_ORDER, type RecordId, type TrackRecords } from '../score/records'
 import { PILOTS } from '../content/pilots'
 import { TRACKS } from '../content/tracks'
 import { Track, type SurfaceKind, type TrackDef } from '../sim/track'
@@ -69,6 +71,11 @@ export interface FrontEnd {
    * rather than waiting on it.
    */
   setBoard(rows: readonly ScoreEntry[], rank: number, qualifies: boolean): void
+  /**
+   * Fill the track-records page. `broken` are the records this race just took,
+   * which get highlighted and put a marker on the tab.
+   */
+  setRecords(records: TrackRecords, broken: readonly RecordId[]): void
   /** The player named a qualifying run. */
   onSaveScore: (name: string) => void
   dispose(): void
@@ -504,6 +511,9 @@ class FrontEndImpl implements FrontEnd {
   private readonly nameSave: HTMLButtonElement
   private readonly boardWrap: HTMLElement
   private readonly boardRows: HTMLElement
+  private readonly recWrap: HTMLElement
+  private readonly recRows: HTMLElement
+  private readonly tabs: TabStrip
   private readonly boardNote: HTMLElement
 
   private readonly playBtn: HTMLButtonElement
@@ -732,7 +742,22 @@ class FrontEndImpl implements FrontEnd {
     const results = el('div', 'sg-screen sg-screen--results', root)
     this.resTitle = el('div', 'sg-results__title', results, 'RACE COMPLETE')
     this.resWhere = el('div', 'sg-results__where', results)
-    const rowHost = el('div', 'sg-results__rows', results)
+
+    // TWO PAGES, AND ROOM FOR MORE. The strip is generic (see ui/tabs.ts):
+    // adding a third page is one entry in this array plus code that fills the
+    // element `tabs.panel(id)` hands back. Nothing below counts the tabs.
+    //
+    // The CTA row deliberately sits OUTSIDE the panels: Rematch is the action
+    // this screen exists for, and burying it on a page the player might have
+    // navigated away from would mean a tab click can hide the way forward.
+    this.tabs = createTabs(results, [
+      { id: 'results', label: 'Results' },
+      { id: 'records', label: 'Records' },
+    ])
+    const tabResults = this.tabs.panel('results')
+    const tabRecords = this.tabs.panel('records')
+
+    const rowHost = el('div', 'sg-results__rows', tabResults)
     for (let i = 0; i < MAX_ROWS; i++) {
       const row = el('div', 'sg-row', rowHost)
       const pos = el('span', 'sg-row__p', row, '-')
@@ -744,7 +769,7 @@ class FrontEndImpl implements FrontEnd {
       row.hidden = true
       this.rows.push({ root: row, pos, pilot, chassis, time, best })
     }
-    const meta = el('div', 'sg-results__meta', results)
+    const meta = el('div', 'sg-results__meta', tabResults)
     const m1 = el('div', 'sg-meta', meta)
     el('div', 'sg-meta__k', m1, 'Total Time')
     this.resTotal = el('div', 'sg-meta__v', m1, '--:--.--')
@@ -759,7 +784,7 @@ class FrontEndImpl implements FrontEnd {
     // Its own block rather than a fourth `sg-meta` cell: the score is the one
     // number this screen is now ABOUT, and giving it the same weight as "best
     // lap" would bury the thing the player just spent a race building.
-    const scoreWrap = el('div', 'sg-results__score', results)
+    const scoreWrap = el('div', 'sg-results__score', tabResults)
     el('div', 'sg-score-k', scoreWrap, 'RUN SCORE')
     this.resScore = el('div', 'sg-score-v', scoreWrap, '0')
     this.resRank = el('div', 'sg-score-rank', scoreWrap, '')
@@ -769,7 +794,7 @@ class FrontEndImpl implements FrontEnd {
     // player for a name after every race, most of which do not place, is the
     // arcade convention that does not survive contact with a game you can
     // restart in two seconds.
-    this.nameRow = el('div', 'sg-results__name', results)
+    this.nameRow = el('div', 'sg-results__name', tabResults)
     this.nameRow.hidden = true
     el('label', 'sg-name__k', this.nameRow, 'NAME')
     this.nameInput = document.createElement('input')
@@ -781,7 +806,16 @@ class FrontEndImpl implements FrontEnd {
     this.nameRow.appendChild(this.nameInput)
     this.nameSave = button('sg-btn sg-btn--small', this.nameRow, 'Save')
 
-    this.boardWrap = el('div', 'sg-results__board', results)
+    // --- RECORDS PAGE -----------------------------------------------------
+    // The four bests first and the board second, because they answer different
+    // questions: a record is "what is possible here, and in what car", the
+    // board is "whose runs were best". The first is the one a driver reads to
+    // decide what to go and try.
+    this.recWrap = el('div', 'sg-results__records', tabRecords)
+    el('div', 'sg-board__title', this.recWrap, 'TRACK RECORDS')
+    this.recRows = el('div', 'sg-rec__rows', this.recWrap)
+
+    this.boardWrap = el('div', 'sg-results__board', tabRecords)
     el('div', 'sg-board__title', this.boardWrap, 'TOP 10 — THIS TRACK')
     this.boardRows = el('div', 'sg-board__rows', this.boardWrap)
     // Stated plainly rather than implied. A player who believes they are on a
@@ -945,6 +979,51 @@ class FrontEndImpl implements FrontEnd {
   /** Remembered so a returning player is not retyping their name every race. */
   private static readonly LS_NAME = 'sg.name'
 
+
+  /** Display name for a chassis id, falling back to the id itself. */
+  private static carName(id: string): string {
+    const c = CHASSIS.find((x) => x.id === id)
+    return c ? c.name : (id || '—')
+  }
+
+  private static pilotName(id: string): string {
+    const p = PILOTS.find((x) => x.id === id)
+    return p ? p.name : ''
+  }
+
+  /**
+   * A record's value, in its own units. Two of these are times and two are not,
+   * which is exactly the distinction that makes a single formatter wrong.
+   */
+  private static recordValue(id: RecordId, v: number): string {
+    if (id === 'fastestLap' || id === 'fastestRace') return fmtTime(v)
+    if (id === 'bestCombo') return '×' + (v >= 10 ? v.toFixed(0) : v.toFixed(1))
+    return Math.round(v).toLocaleString()
+  }
+
+  setRecords(records: TrackRecords, broken: readonly RecordId[]): void {
+    this.recRows.textContent = ''
+    // Every record gets a row whether or not it has been set. An empty table on
+    // a fresh install tells the player nothing about what is being tracked;
+    // four dashes tell them exactly what there is to go and take.
+    for (const { id, label } of RECORD_ORDER) {
+      const e = records[id]
+      const row = el('div', 'sg-rec__row', this.recRows)
+      if (broken.includes(id)) row.classList.add('is-new')
+      el('span', 'sg-rec__k', row, label)
+      el('span', 'sg-rec__v', row, e ? FrontEndImpl.recordValue(id, e.value) : '—')
+      // THE CAR IS PART OF THE RECORD. "Fastest lap is 49.08" is trivia;
+      // "49.08 in a Bulwark" is a claim a player can go and argue with.
+      el('span', 'sg-rec__car', row, e ? FrontEndImpl.carName(e.chassisId) : '')
+      const who = e
+        ? [FrontEndImpl.pilotName(e.pilotId), e.name].filter(Boolean).join(' · ')
+        : ''
+      el('span', 'sg-rec__who', row, who)
+      if (broken.includes(id)) el('span', 'sg-rec__new', row, 'NEW')
+    }
+    if (broken.length > 0) this.tabs.setMarked('records', true)
+  }
+
   setBoard(rows: readonly ScoreEntry[], rank: number, qualifies: boolean): void {
     this.boardRows.textContent = ''
     if (rows.length === 0) {
@@ -961,8 +1040,9 @@ class FrontEndImpl implements FrontEnd {
       if (rank > 0 && i === rank - 1) row.classList.add('is-you')
       el('span', 'sg-board__n', row, String(i + 1))
       el('span', 'sg-board__name', row, e.name)
-      el('span', 'sg-board__combo', row, '×' + (e.bestCombo >= 10
-        ? e.bestCombo.toFixed(0) : e.bestCombo.toFixed(1)))
+      // The vehicle, not the combo. Best combo has its own record row above
+      // now, and four columns is as many as survives a phone width.
+      el('span', 'sg-board__car', row, FrontEndImpl.carName(e.chassisId))
       el('span', 'sg-board__score', row, e.score.toLocaleString())
     }
     this.nameRow.hidden = !qualifies
@@ -971,6 +1051,7 @@ class FrontEndImpl implements FrontEnd {
         this.nameInput.value = window.localStorage.getItem(FrontEndImpl.LS_NAME) || ''
       } catch { this.nameInput.value = '' }
     }
+    if (rank > 0 || qualifies) this.tabs.setMarked('records', true)
     if (rank > 0) {
       this.resRank.textContent = rank === 1
         ? 'NEW BEST ON THIS TRACK'
@@ -1043,6 +1124,9 @@ class FrontEndImpl implements FrontEnd {
     // moment before the new one arrives.
     this.resRank.hidden = true
     this.nameRow.hidden = true
+    // Always open on the race that just happened, whichever page was left
+    // selected last time. select() also clears that page's marker.
+    this.tabs.select('results')
 
     this.show('results')
   }
