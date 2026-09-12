@@ -179,6 +179,11 @@ export interface Cheer {
 // and Singularity. So the register is flight-deck / race-engineer, not
 // stadium announcer. No "NICE!", no "AWESOME!", no exclamation marks except
 // where the tier itself is the exclamation.
+//
+// ONE EXCEPTION, SCOPED TO ONE ARRAY: the combo ladder (COMBO, below) is
+// stadium announcer on purpose. It is praising the SCORE, not the driving, and
+// the score is an arcade layer sitting on top of the race. See the note there
+// before making it consistent with this paragraph.
 // ---------------------------------------------------------------------------
 
 /** Banked a rung of the ladder. Quiet — the ring and the sparks say it too. */
@@ -231,23 +236,27 @@ const BEAM: string[] = [
 /**
  * Combo rungs, one line per rung of score/rules.ts COMBO_RUNGS.
  *
- * THE BRIEF ASKED FOR "Amazing, Incredible, Drift Master". Two of those are
- * here; "Amazing" is not, and neither is an exclamation mark, because the note
- * at the top of this file is a real constraint and not decoration: the register
- * is race engineer, not stadium announcer, and DRIFT MASTER survives it while
- * AMAZING does not -- one is a title the crew would award, the other is a crowd
- * noise. The escalation the brief actually wanted is intact; it just climbs
- * through this game's own vocabulary.
+ * THIS LADDER IS DELIBERATELY IN A DIFFERENT REGISTER FROM EVERY OTHER LIST IN
+ * THIS FILE, and that is a decision rather than an oversight.
  *
- * Swapping these for the literal arcade words is editing this one array.
+ * The house voice note at the top of this file -- race engineer, not stadium
+ * announcer -- still governs the drift ladder, the overtakes and the lead,
+ * because those describe things that happened in the RACE. The combo ladder
+ * does not: it describes the SCORE, which is an arcade layer sitting on top of
+ * the race, and an arcade layer is allowed to sound like one. Vince asked for
+ * these words specifically, twice, and named the top rung himself.
+ *
+ * So: if you are here to make this consistent with the rest of the file, don't.
+ * The inconsistency is the point, it is scoped to this one array, and the
+ * opposite version was shipped first and rejected.
  */
 const COMBO: string[] = [
-  'COMBO LIVE',        // x2
-  'STACKING UP',       // x3
-  'DRIFT MASTER',      // x5
-  'INCREDIBLE RUN',    // x8
-  'UNTOUCHABLE',       // x12
-  'SPACEGEN LEGEND',   // x16
+  'GREAT',          // x2
+  'AMAZING',        // x3
+  'DRIFT MASTER',   // x5
+  'INCREDIBLE',     // x8
+  'UNSTOPPABLE',    // x12
+  'LEGENDARY',      // x16
 ]
 
 /** Rung colours: the drift ladder, then gold for the two nobody reaches. */
