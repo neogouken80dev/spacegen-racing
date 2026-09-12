@@ -213,6 +213,34 @@ describe('the engine voice', () => {
   })
 })
 
+/**
+ * THE BUG THE UNIT TESTS COULD NOT SEE.
+ *
+ * Every test above hands the planner a DENSE array built by `state().racers.map`,
+ * because that is what the signature says. main.ts handed it `eventCarry`, whose
+ * slots are created lazily only for racers that have had an event -- so a real
+ * eight-car race with a quiet racer 0 produced a hole, and `for (const ev of
+ * events[i])` threw on undefined every single frame. tools/smoke.mjs caught it;
+ * 397 unit tests did not, because they all built the input the correct way.
+ */
+describe('a caller that gets the array shape wrong', () => {
+  it('treats a missing racer slot as silence rather than throwing', () => {
+    const p = new AudioPlanner()
+    const st = state(4)
+    const sparse: RacerEvent[][] = []
+    sparse[3] = [{ t: 'pickup' }]        // holes at 0, 1, 2
+    expect(() => p.frame(st, sparse, 0, ORIGIN, 0)).not.toThrow()
+  })
+
+  it('still plays the events that ARE there', () => {
+    const p = new AudioPlanner()
+    const st = state(4)
+    const sparse: RacerEvent[][] = []
+    sparse[0] = [{ t: 'boost', tier: 2 }]
+    expect(p.frame(st, sparse, 0, ORIGIN, 0).plays.length).toBe(1)
+  })
+})
+
 describe('the catalogue is complete', () => {
   it('has a fire and a hit sound for every item', () => {
     for (const [item, id] of Object.entries(FIRE_SOUND)) {

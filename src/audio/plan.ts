@@ -181,7 +181,13 @@ export class AudioPlanner {
       if (!isLocal && dist > HEAR_RANGE) continue
       const near = isLocal ? 1 : falloff(dist)
 
-      for (const ev of events[i]) {
+      // A caller handing over a sparse array is a bug in the caller -- main.ts
+      // did exactly that and threw here every frame -- but a missing slot means
+      // "this racer had no events", which is a silence, not a crash. Audio is
+      // the one subsystem whose whole failure contract is to go quiet.
+      const evs = events[i]
+      if (!evs) continue
+      for (const ev of evs) {
         // Contacts never become one-shots on their own. See the header.
         if (ev.t === 'wall') {
           wallThisFrame = Math.max(wallThisFrame, ev.force * near)

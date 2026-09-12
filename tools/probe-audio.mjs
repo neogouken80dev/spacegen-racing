@@ -134,6 +134,72 @@ const measure = await page.evaluate(async () => {
 
 console.log(JSON.stringify(measure, null, 2))
 
+/**
+ * DO RACE EVENTS ACTUALLY REACH THE AUDIO SYSTEM?
+ *
+ * The measurement above proves a signal comes out when something calls `cue()`.
+ * It says nothing about the path that matters in play, and that path was broken:
+ * main.ts handed the planner `eventCarry`, which the sub-step write-back drains
+ * to zero length BEFORE the audio call runs. Every boost, hit, lap and pickup in
+ * a real race arrived as an empty list. Nothing threw, nothing logged, the game
+ * was simply mute for everything except the engines -- which is exactly the
+ * failure mode a screenshot cannot show and a unit test with a correctly-shaped
+ * fixture cannot reach.
+ *
+ * So: wrap the real call, run a real race, and count the events it is handed.
+ */
+const wired = await page.evaluate(async () => {
+  const g = window.__GAME__
+  if (!g?.audio) return { err: 'no audio system' }
+  let calls = 0
+  let framesWithEvents = 0
+  let events = 0
+  let holes = 0
+  const orig = g.audio.race.bind(g.audio)
+  g.audio.race = (state, evs, ...rest) => {
+    calls++
+    let n = 0
+    for (let i = 0; i < state.racers.length; i++) {
+      const slot = evs[i]
+      if (slot === undefined) { holes++; continue }
+      n += slot.length
+    }
+    if (n > 0) framesWithEvents++
+    events += n
+    return orig(state, evs, ...rest)
+  }
+  // WAIT ON SIM TIME, NEVER WALL CLOCK. This renderer runs at under 1fps under
+  // SwiftShader and the loop clamps its sub-steps, so twelve seconds of wall
+  // clock bought about one second of race -- all of it countdown, during which
+  // zero events is the CORRECT answer. The first version of this gate failed on
+  // exactly that and would have sent me hunting a bug that was already fixed.
+  // maxSubSteps is raised for the same reason the attract probe raises it.
+  g.maxSubSteps = 400
+  const start = g.race?.state?.time ?? 0
+  const deadline = Date.now() + 120000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 200))
+    const t = g.race?.state?.time ?? 0
+    if (t - start > 25) break
+  }
+  return { calls, framesWithEvents, events, holes, simSeconds: +((g.race?.state?.time ?? 0) - start).toFixed(1) }
+})
+
+console.log('\nrace wiring:', JSON.stringify(wired))
+if (wired.err) errors.push(wired.err)
+else {
+  if (wired.calls === 0) errors.push('audio.race was never called -- no race ran')
+  else if (wired.simSeconds < 5) {
+    errors.push(`only ${wired.simSeconds}s of race ran -- the sample proves nothing`)
+  } else if (wired.events === 0) {
+    errors.push(
+      `audio.race ran ${wired.calls} times over ${wired.simSeconds}s of race ` +
+      'and was handed ZERO events',
+    )
+  }
+  if (wired.holes > 0) errors.push(`${wired.holes} undefined racer slots reached the planner`)
+}
+
 if (measure.err) errors.push(measure.err)
 else {
   if (measure.after !== 'running') errors.push(`context is ${measure.after}, not running`)

@@ -117,6 +117,8 @@ export class Game {
   /** Per-racer one-shot events accumulated across the sub-steps of one render
    *  frame. See the carry block in loop(). */
   private eventCarry: RacerEvent[][] = []
+  /** Dense per-racer view of `r.events`, reused each frame. See the audio call. */
+  private audioEvents: RacerEvent[][] = []
   private lastTime = 0
   private localId = 0
   private selection = { chassisId: 'solaire', pilotId: 'socket' }
@@ -994,8 +996,19 @@ export class Game {
       const cam = this.chase.camera
       _aFwd.set(0, 0, -1).applyQuaternion(cam.quaternion)
       _aUp.set(0, 1, 0).applyQuaternion(cam.quaternion)
+      // Read `r.events`, which is where the carry above was just written BACK
+      // to and is the same list the VFX pass reads a few lines further down.
+      // Handing over `this.eventCarry` instead was wrong twice over: it is
+      // drained to zero length by the write-back before this line runs, so
+      // audio heard nothing at all; and it is SPARSE, because its slots are
+      // only created for racers that have had an event, so a hole for racer 0
+      // reached the planner's `for (const ev of events[i])` as undefined and
+      // threw every frame. Rebuilt into a reused array rather than mapped, so
+      // this costs no allocation in the render loop.
+      this.audioEvents.length = st.racers.length
+      for (let i = 0; i < st.racers.length; i++) this.audioEvents[i] = st.racers[i].events
       this.audio.race(
-        st, this.eventCarry, this.localId,
+        st, this.audioEvents, this.localId,
         cam.position, _aFwd, _aUp, st.time,
         this.phase === 'racing' || this.phase === 'ceremony',
       )
