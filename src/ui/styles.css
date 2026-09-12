@@ -3320,3 +3320,39 @@
     animation: none !important;
   }
 }
+
+/* --- audio faders --------------------------------------------------------
+ * The only continuous controls in the settings panel. Sized to the same row
+ * rhythm as the segmented controls above them so the Audio section does not
+ * read as a different panel, and given a wide thumb because the most common
+ * place this gets dragged is a phone.
+ */
+.sgset-slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sgset-slider__in {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  accent-color: var(--sg-cyan);
+  cursor: pointer;
+}
+
+.sgset-slider__in:focus-visible {
+  outline: 2px solid var(--sg-cyan);
+  outline-offset: 3px;
+}
+
+.sgset-slider__v {
+  font-family: var(--sg-num);
+  font-size: clamp(10px, 1.4vmin, 13px);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-dim);
+  min-width: 2.4em;
+  text-align: right;
+}

@@ -122,6 +122,8 @@ const CH = TUNING.cheer
 export type CheerLevel = 'full' | 'key' | 'off'
 
 /** Every kind of moment that can produce a line. */
+export type CheerKind =
+  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam'
 type Kind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam'
 
 export interface Cheer {
@@ -136,6 +138,21 @@ export interface Cheer {
    * every release when the callouts are switched off.
    */
   readonly tookDriftRelease: boolean
+  /**
+   * Fired the moment a line actually goes up, with the kind that earned it.
+   *
+   * The audio system binds VO to this rather than re-deriving the moments for
+   * itself. That is the whole point: every rule about what deserves a line --
+   * the drift ladder, the six-second overtake limit, the refusal to say
+   * anything about a missile hit or a boost pad -- is decided ONCE here, in the
+   * file that had the editorial argument. A voice that ran its own detectors
+   * would eventually praise something the text stayed quiet about, and the two
+   * would be visibly at odds on screen.
+   *
+   * It also means the callout level setting reaches the voice for free: a line
+   * that does not go up does not fire this, so "off" is silent in both media.
+   */
+  onLine: (kind: CheerKind) => void
   /** Called once per render frame with the live sim state. */
   update(state: RaceState, local: RacerState, dt: number): void
   setLevel(level: CheerLevel): void
@@ -235,6 +252,7 @@ function rgba(hex: string, a: number): string {
 class CheerImpl implements Cheer {
   readonly root: HTMLElement
   tookDriftRelease = false
+  onLine: (kind: CheerKind) => void = () => {}
   private readonly line: HTMLElement
   private readonly wave: HTMLElement
   /**
@@ -474,6 +492,10 @@ class CheerImpl implements Cheer {
     this.cooldown[kind] = 0
     this.sinceAny = 0
     this.shownPriority = prio
+    // AFTER the gates, so the voice says exactly what the screen says. A hook
+    // placed before them would speak lines that were dropped for being too
+    // frequent, which is the failure this whole valve exists to prevent.
+    this.onLine(kind as CheerKind)
     this.holdT = CH.hold
     this.fadeT = 0
     this.riseT = this.reduced ? 0 : CH.rise

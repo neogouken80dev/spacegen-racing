@@ -54,6 +54,10 @@ export interface SettingsPanel {
    * before the first race, then on every change.
    */
   onCalloutChange: (level: CalloutLevel) => void
+  /** Seed the faders from the audio system's own stored values. */
+  setVolumes(v: { master: number; music: number; sfx: number; vo: number }): void
+  /** A volume moved, or mute toggled. Values 0..1. */
+  onVolumeChange: (v: { master?: number; music?: number; sfx?: number; vo?: number; muted?: boolean }) => void
   /**
    * The camera rig the player has dialled in. Same contract as the three
    * above: fired once on construction so a stored rig is in force before the
@@ -551,6 +555,42 @@ interface Seg<T extends string> {
   buttons: Map<T, HTMLButtonElement>
 }
 
+/**
+ * A labelled volume slider.
+ *
+ * The first continuous control in this panel -- everything else is a segmented
+ * choice. Volume is the one setting where discrete steps are actively worse:
+ * "Music: Low / Mid / High" cannot express "audible but under the engines",
+ * which is exactly where most players want it.
+ *
+ * `input` rather than `change` so dragging is live and the player hears what
+ * they are setting while they set it, which is the whole point of a fader.
+ */
+function makeSlider(
+  parent: Element,
+  id: string,
+  label: string,
+  onInput: (v: number) => void,
+): HTMLInputElement {
+  const row = el('div', 'sgset-row', parent)
+  const lab = el('label', 'sgset-row__k', row, label)
+  lab.htmlFor = id
+  const wrap = el('div', 'sgset-slider', row)
+  const input = el('input', 'sgset-slider__in', wrap) as HTMLInputElement
+  input.type = 'range'
+  input.id = id
+  input.min = '0'
+  input.max = '100'
+  input.step = '1'
+  const read = el('span', 'sgset-slider__v', wrap, '0')
+  input.addEventListener('input', () => {
+    const v = Number(input.value) / 100
+    read.textContent = String(Math.round(v * 100))
+    onInput(v)
+  })
+  return input
+}
+
 function makeSeg<T extends string>(
   parent: Element,
   label: string,
@@ -798,6 +838,30 @@ class SettingsPanelImpl implements SettingsPanel {
   onReducedMotionChange: (on: boolean) => void = (): void => {}
   onVfxIntensityChange: (glare: number, screen: number) => void = (): void => {}
   onCalloutChange: (level: CalloutLevel) => void = (): void => {}
+  onVolumeChange: (v: { master?: number; music?: number; sfx?: number; vo?: number; muted?: boolean }) => void = (): void => {}
+  private volMaster!: HTMLInputElement
+  private volMusic!: HTMLInputElement
+  private volSfx!: HTMLInputElement
+  private volVo!: HTMLInputElement
+
+  /**
+   * Seeded from the audio module rather than from this panel's own store.
+   *
+   * The audio system reads its volumes at boot, before this panel is built, so
+   * it is the owner. This only reflects them -- two sources of truth for a
+   * volume is how a player ends up with a muted game and a slider showing 80%.
+   */
+  setVolumes(v: { master: number; music: number; sfx: number; vo: number }): void {
+    const set = (el2: HTMLInputElement, n: number): void => {
+      el2.value = String(Math.round(Math.max(0, Math.min(1, n)) * 100))
+      const read = el2.parentElement?.querySelector('.sgset-slider__v')
+      if (read) read.textContent = el2.value
+    }
+    set(this.volMaster, v.master)
+    set(this.volMusic, v.music)
+    set(this.volSfx, v.sfx)
+    set(this.volVo, v.vo)
+  }
   onCameraChange: (s: CameraSettings) => void = (): void => {}
 
   private readonly host: SettingsHost
@@ -1208,6 +1272,38 @@ class SettingsPanelImpl implements SettingsPanel {
         this.sync()
       },
     )
+
+    /**
+     * AUDIO.
+     *
+     * Four faders rather than one, and the VO fader is the reason. Callout
+     * voices are the first thing a player turns off in any racer -- they are
+     * the most repetitive sound in the game by a wide margin -- and a single
+     * master would make that choice cost them the music and the engines too.
+     *
+     * Volumes live in their own localStorage key (`sg.audio`, owned by the
+     * audio module) rather than in this panel's `Stored`, because the audio
+     * system has to read them before the settings panel exists: the context is
+     * built at boot and a player who muted last session must not get one frame
+     * of full-volume engines while this panel is still being constructed.
+     */
+    const secAud = el('div', 'sgset-sec', grid)
+    el('div', 'sgset-sec__title', secAud, 'Audio')
+    this.volMaster = makeSlider(secAud, 'sgset-vol-master', 'Master', (v) => {
+      this.onVolumeChange({ master: v })
+    })
+    this.volMusic = makeSlider(secAud, 'sgset-vol-music', 'Music', (v) => {
+      this.onVolumeChange({ music: v })
+    })
+    this.volSfx = makeSlider(secAud, 'sgset-vol-sfx', 'Effects', (v) => {
+      this.onVolumeChange({ sfx: v })
+    })
+    this.volVo = makeSlider(secAud, 'sgset-vol-vo', 'Voice', (v) => {
+      this.onVolumeChange({ vo: v })
+    })
+    makeSeg<'on' | 'off'>(secAud, 'Sound', [
+      { id: 'on', label: 'On' }, { id: 'off', label: 'Muted' },
+    ], (v) => { this.onVolumeChange({ muted: v === 'off' }) })
 
     // --- Graphics ---------------------------------------------------------
     const secGfx = el('div', 'sgset-sec', grid)

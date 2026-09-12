@@ -6,6 +6,9 @@ const _be = new THREE.Vector3()
 const _bR = new THREE.Vector3()
 const _bU = new THREE.Vector3()
 const _bF = new THREE.Vector3()
+/** Listener orientation scratch. Same reason as the blast vectors above. */
+const _aFwd = new THREE.Vector3()
+const _aUp = new THREE.Vector3()
 import { Race } from '../sim/race'
 import { Track } from '../sim/track'
 import { resetAI } from '../sim/ai'
@@ -23,6 +26,7 @@ import { createVfx } from '../render/vfx'
 import { createPostFx, type PostFx } from '../render/postfx'
 import { createHud, type Hud } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
+import { createAudio, type AudioSystem } from '../audio'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
 import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
 import { installCompactLayout, type CompactLayout } from '../ui/compact'
@@ -86,6 +90,11 @@ export class Game {
 
   private hud: Hud
   private cheer: Cheer
+  private readonly audio: AudioSystem = createAudio()
+  /** Last countdown integer spoken, so a beep fires once per number. */
+  private lastCount = -1
+  /** Last lap the music was told about, so the swap happens once. */
+  private lastMusicLap = -1
   private frontEnd: FrontEnd
   private input: InputManager
   private readonly compact: CompactLayout
@@ -226,6 +235,9 @@ export class Game {
     // only reset() per race, so the settings it is holding outlive every race
     // in the session, and the panel re-emits them on the next boot.
     this.settings.onCameraChange = (s) => { this.chase.applySettings(s) }
+    this.settings.onVolumeChange = (v) => { this.audio.setVolumes(v) }
+    this.settings.setVolumes(this.audio.volumes)
+
     this.settings.onClose = () => {
       this.tools.hidden = false
       if (this.pausedBySettings) { this.pausedBySettings = false; this.resume() }
@@ -287,7 +299,24 @@ export class Game {
     this.frontEnd.onScreen = (screen) => {
       if (screen === 'title') this.startAttract()
       else this.stopAttract()
+      this.audio.menuMusic(screen === 'title' ? 'title'
+        : screen === 'track' || screen === 'garage' ? 'garage' : null)
     }
+
+    /**
+     * THE GESTURE. Every browser starts an AudioContext suspended and will only
+     * resume it inside a real user interaction -- that is the autoplay policy,
+     * not a bug to route around. A pointerdown on the container is the widest
+     * net that still counts: it catches the PLAY button, every menu card, and
+     * the first touch of the driving pads.
+     */
+    const unlock = (): void => { this.audio.unlock() }
+    container.addEventListener('pointerdown', unlock)
+    container.addEventListener('keydown', unlock)
+
+    // VO follows the TEXT callouts rather than re-deriving the moments. See the
+    // note on Cheer.onLine: one set of editorial rules, two media.
+    this.cheer.onLine = (kind) => { this.audio.callout(kind) }
 
     this.onResize()
     this.tools.hidden = true
@@ -585,6 +614,10 @@ export class Game {
     this.frontEnd.hide()
     this.hud.root.style.display = ''
     this.tools.hidden = false
+    this.audio.endRace()
+    this.lastCount = -1
+    this.lastMusicLap = -1
+    this.audio.music(this.track.def.id, false)
     this.phase = 'racing'
   }
 
@@ -722,6 +755,8 @@ export class Game {
     this.hud.root.style.display = 'none'
     this.chase.endCinematic()
     this.input.setPadsVisible(false)
+    this.audio.endRace()
+    this.audio.music(null, false)
     this.frontEnd.showResults(this.race.state, this.localId)
     this.frontEnd.show('results')
   }
@@ -931,6 +966,48 @@ export class Game {
       if (st.phase === 'countdown') {
         const n = Math.ceil(st.countdown - 0.6)
         this.entityVis?.setStartLights(Math.max(0, Math.min(3, n)))
+        // One beep per integer. Driven off the same number the start lights
+        // read, so the sound and the lamp can never disagree about the count.
+        if (n !== this.lastCount) {
+          this.lastCount = n
+          if (n > 0 && n <= 3) this.audio.cue('countdown')
+        }
+      } else if (this.lastCount > 0) {
+        // The count reached zero by the phase changing, not by counting down.
+        this.lastCount = 0
+        this.audio.cue('countdownGo')
+      }
+
+      /**
+       * THE AUDIO FRAME.
+       *
+       * Handed `this.eventCarry` -- the SAME array the VFX read, accumulated
+       * across every sub-step of this render frame. That is what stops audio
+       * from losing events at 30fps, and it comes free: the carry already
+       * existed because the art had the identical problem.
+       *
+       * The listener is the camera, not the car. During the finish ceremony the
+       * camera has left the chase rig entirely and is orbiting, and a listener
+       * pinned to the car would put the crowd of engines in the wrong place for
+       * the one shot the player is actually watching.
+       */
+      const cam = this.chase.camera
+      _aFwd.set(0, 0, -1).applyQuaternion(cam.quaternion)
+      _aUp.set(0, 1, 0).applyQuaternion(cam.quaternion)
+      this.audio.race(
+        st, this.eventCarry, this.localId,
+        cam.position, _aFwd, _aUp, st.time,
+        this.phase === 'racing' || this.phase === 'ceremony',
+      )
+
+      // The final-lap bed. Keyed off the local racer's lap so the swap lands
+      // when the PLAYER starts their last lap, not when the leader does.
+      if (this.phase === 'racing') {
+        const lap = st.racers[this.localId]?.lap ?? 0
+        if (lap !== this.lastMusicLap) {
+          this.lastMusicLap = lap
+          this.audio.music(this.track.def.id, lap >= (st.totalLaps ?? 3))
+        }
       }
       // ONE TOGGLE, EVERY CONSUMER. `reduceMotion` here is the player's own
       // choice (settings panel) initialised from the OS preference, and it
@@ -1117,6 +1194,8 @@ export class Game {
     // and picks both up where they left off. Read here rather than calling
     // document.hidden per frame in the loop.
     this.docHidden = document.hidden
+    // Eight live oscillators in a backgrounded tab is a battery complaint.
+    this.audio.setHidden(document.hidden)
     this.lastTime = performance.now()
   }
 
@@ -1128,6 +1207,7 @@ export class Game {
     this.resizeObs?.disconnect()
     this.resizeObs = null
     document.removeEventListener('visibilitychange', this.onVisibility)
+    this.audio.dispose()
     this.teardownWorld()
     disposeVehicleCache()
     this.cheer.dispose()
