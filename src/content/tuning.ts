@@ -1912,6 +1912,13 @@ export const TUNING = {
       lead: 10.0,
       air: 9.0,
       beam: 8.0,
+      /**
+       * A combo rung. Rare by construction -- six rungs in a whole run, and the
+       * top ones take sustained drifting to reach -- but the low rungs arrive
+       * quickly inside a good sequence, and a line on every one would talk over
+       * the tier ladder it exists to celebrate.
+       */
+      combo: 4.0,
     },
     /**
      * Priority. A pending line is only replaced by one strictly higher, so a
@@ -1924,6 +1931,17 @@ export const TUNING = {
       chain: 3,
       cash: 3,
       overtake: 3,
+      /**
+       * Above a cash-in and below the lead. A combo rung is a statement about
+       * the whole RUN rather than one corner, so it outranks the corner it
+       * happened to land on -- but taking the lead is still the biggest thing
+       * that can happen in a race and keeps the top of the ladder.
+       *
+       * At 3+ it also survives "Key moments", which is right: the rungs are
+       * exactly the milestones a player who asked for fewer interruptions
+       * would still want to hear about.
+       */
+      combo: 3,
       lead: 4,
     },
     /** Drift tier that a cash-in must reach before it is worth a line at all. */

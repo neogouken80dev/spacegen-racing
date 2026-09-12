@@ -123,8 +123,8 @@ export type CheerLevel = 'full' | 'key' | 'off'
 
 /** Every kind of moment that can produce a line. */
 export type CheerKind =
-  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam'
-type Kind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam'
+  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
+type Kind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
 
 export interface Cheer {
   root: HTMLElement
@@ -155,6 +155,16 @@ export interface Cheer {
   onLine: (kind: CheerKind) => void
   /** Called once per render frame with the live sim state. */
   update(state: RaceState, local: RacerState, dt: number): void
+  /**
+   * A combo rung was crossed. Pushed in rather than detected here, because the
+   * combo lives in the scorer and this file deliberately owns no game state of
+   * its own -- it owns the EDITORIAL rules about what is worth interrupting
+   * for, and routing the rung through the same say() gates is the whole point:
+   * it inherits the cooldowns, the priority ordering, the Key-moments filter
+   * and the VO binding for free, and can never contradict the drift ladder it
+   * sits next to.
+   */
+  comboRung(rung: number): void
   setLevel(level: CheerLevel): void
   /** Wipe pending state between races so a rematch starts silent. */
   reset(): void
@@ -219,6 +229,31 @@ const BEAM: string[] = [
 ]
 
 /**
+ * Combo rungs, one line per rung of score/rules.ts COMBO_RUNGS.
+ *
+ * THE BRIEF ASKED FOR "Amazing, Incredible, Drift Master". Two of those are
+ * here; "Amazing" is not, and neither is an exclamation mark, because the note
+ * at the top of this file is a real constraint and not decoration: the register
+ * is race engineer, not stadium announcer, and DRIFT MASTER survives it while
+ * AMAZING does not -- one is a title the crew would award, the other is a crowd
+ * noise. The escalation the brief actually wanted is intact; it just climbs
+ * through this game's own vocabulary.
+ *
+ * Swapping these for the literal arcade words is editing this one array.
+ */
+const COMBO: string[] = [
+  'COMBO LIVE',        // x2
+  'STACKING UP',       // x3
+  'DRIFT MASTER',      // x5
+  'INCREDIBLE RUN',    // x8
+  'UNTOUCHABLE',       // x12
+  'SPACEGEN LEGEND',   // x16
+]
+
+/** Rung colours: the drift ladder, then gold for the two nobody reaches. */
+const COMBO_COLOR = ['#3d8bff', '#b44dff', '#ffd23f', '#ffffff', '#ffb020', '#ff7a1a']
+
+/**
  * The drift tier a cash-in must reach to survive "Key only".
  *
  * `CH.cashMinTier` (1, Flare) is the floor at Full. Key only raises it to Nova
@@ -279,7 +314,8 @@ class CheerImpl implements Cheer {
   /** Seconds since the last line of ANY kind went up. */
   private sinceAny = 999
   private readonly cooldown: Record<Kind, number> = {
-    tierUp: 999, cash: 999, chain: 999, overtake: 999, lead: 999, air: 999, beam: 999,
+    tierUp: 999, cash: 999, chain: 999, overtake: 999, lead: 999, air: 999,
+    beam: 999, combo: 999,
   }
   /** Rotating index per phrase list, so the same words never repeat back to back. */
   private readonly cursor: Record<string, number> = {}
@@ -480,6 +516,13 @@ class CheerImpl implements Cheer {
    * A line that fails any of them is DROPPED, never queued. A queue would mean
    * praise arriving in a corner it has nothing to do with.
    */
+  comboRung(rung: number): void {
+    if (rung < 0 || rung >= COMBO.length) return
+    // Tier 3 presentation from the fourth rung up: by then the run is a bigger
+    // statement than any single slide in it, and the ladder should say so.
+    this.say('combo', COMBO[rung], COMBO_COLOR[rung] ?? '#ffffff', rung >= 3 ? 3 : rung)
+  }
+
   private say(kind: Kind, text: string, color: string, tier = -1): boolean {
     if (!text) return false
     const prio = CH.priority[kind]

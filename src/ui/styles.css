@@ -1241,7 +1241,9 @@
 .sg-compact .sg-gauge__barFill {
   position: absolute;
   inset: 0;
-  transform-origin: 0 50%;
+  /* Grows from the RIGHT, so it fills toward the number it belongs to rather
+     than away from it now the widget is right-aligned. */
+  transform-origin: 100% 50%;
   transform: scaleX(0);
   background: var(--ring);
   box-shadow: 0 0 8px var(--ring);
@@ -3355,4 +3357,333 @@
   color: var(--sg-dim);
   min-width: 2.4em;
   text-align: right;
+}
+
+/* ===========================================================================
+   THE SCORE COUNTER
+   ---------------------------------------------------------------------------
+   Top centre, above cheer.ts's line, so the number and the praise read as one
+   column. The only free region of the HUD: position and splits hold the top
+   left, the minimap and clock the top right, items the bottom left, and the
+   boost gauge the band across the bottom.
+
+   Everything that moves is transform or opacity on elements built once, so
+   nothing here can trigger layout inside the game loop. The digits are
+   tabular so a number sprinting through six figures does not shuffle the
+   glyphs either side of it -- which, when the counter is chasing a drift, is
+   most of the time.
+   =========================================================================== */
+.sg-score {
+  position: absolute;
+  /* RIGHT COLUMN, UNDER THE MINIMAP -- and that placement is measured, not
+     guessed. The first attempt put this dead centre at the top on the reasoning
+     that the four corners were taken. They are, but so is the middle: the tools
+     cluster (brightness + pause) occupies x 0.463-0.537 y 0.014-0.075 and the
+     crosswind indicator sits directly beneath it at y 0.086-0.115, so the
+     counter rendered UNDERNEATH two buttons and the combo chip was invisible.
+     A screenshot found it; nothing else would have.
+
+     Measured occupancy at 1280x720 during a race:
+       position + splits   x 0.010-0.083   y 0.017-0.164
+       minimap + clock     x 0.889-0.990   y 0.017-0.229
+       tools buttons       x 0.463-0.537   y 0.014-0.075
+       crosswind           x 0.446-0.554   y 0.086-0.115
+       item slots          x 0.010-0.074   y 0.861-0.983
+
+     Anchored to the same right edge as the minimap rather than to a fixed
+     offset, so it keeps its relationship with that cluster at every width
+     instead of needing its own breakpoint. */
+  right: 14px;
+  top: 25%;
+  pointer-events: none;
+  text-align: right;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  /* Hue of the current combo rung. Neutral until a combo exists. */
+  --sc: var(--sg-ink);
+}
+
+.sg-score__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.sg-score__value {
+  font: 700 clamp(22px, 4.4vw, 40px)/1 var(--sg-font-num, inherit);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--sg-ink);
+  /* A dark outline plus a soft halo, the same two-part stack cheer.ts uses --
+     it is what keeps this legible over both a white sky and a black one. */
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.85),
+    0 0 3px rgba(0, 0, 0, 0.75),
+    0 0 14px color-mix(in srgb, var(--sc) 45%, transparent);
+  transition: color 180ms linear;
+}
+
+/* While a slide is being paid for the counter takes the combo's hue and grows
+   slightly. This is the whole "ticking furiously" read: the number is already
+   sprinting, and the colour change says the sprint is EARNED rather than the
+   score simply being large. */
+.sg-score[data-hot="1"] .sg-score__value {
+  color: var(--sc);
+  transform: scale(1.06);
+}
+
+.sg-score__value {
+  transition: color 180ms linear, transform 140ms ease-out;
+}
+
+.sg-score__combo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.sg-score__chip {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: 1px 7px 2px;
+  border-radius: 3px;
+  background: rgba(5, 7, 15, 0.5);
+  border: 1px solid color-mix(in srgb, var(--sc) 55%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--sc) 28%, transparent);
+}
+
+.sg-score__x {
+  font: 600 11px/1 inherit;
+  color: var(--sg-dim);
+}
+
+.sg-score__mult {
+  font: 700 clamp(14px, 2.4vw, 20px)/1 inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--sc);
+  min-width: 1.9em;
+  text-align: left;
+}
+
+/* How far through the current rung. Scaled on the X axis from the left, so it
+   is one composited transform rather than a width animation. */
+.sg-score__meter {
+  /* Matches the chip above it rather than a fixed width. At a fixed width the
+     meter was wider than the chip and, in a right-aligned column, hung out to
+     the left of it -- reading as a stray dash on the screen instead of part of
+     the combo. The column is sized by its widest child, so 100% is the chip. */
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.sg-score__meterfill {
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--sc);
+  box-shadow: 0 0 6px var(--sc);
+}
+
+/* The live per-second rate. Only on screen while sliding: by then the total is
+   moving too fast to read, which is the point of it, so this is the readable
+   half of the same information. */
+.sg-score__rate {
+  font: 600 clamp(11px, 1.9vw, 15px)/1 inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--sc);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8), 0 0 8px color-mix(in srgb, var(--sc) 40%, transparent);
+}
+
+/* Receipts. Four fixed slots, recycled oldest-first, so a burst of awards can
+   never grow the DOM mid-race. */
+.sg-score__pops {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  margin-top: 2px;
+  min-height: 0;
+}
+
+.sg-score__pop {
+  font: 600 clamp(10px, 1.7vw, 13px)/1.25 inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: var(--sg-ink);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85), 0 0 6px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+
+/* The rung ladder. Each rung recolours the whole widget through --sc, so the
+   counter, the chip, the meter and the rate all move together and the player
+   reads one escalating object rather than four tinted parts. */
+.sg-score[data-rung="0"] { --sc: var(--sg-t0); }
+.sg-score[data-rung="1"] { --sc: var(--sg-violet); }
+.sg-score[data-rung="2"] { --sc: var(--sg-gold); }
+.sg-score[data-rung="3"] { --sc: var(--sg-white); }
+.sg-score[data-rung="4"] { --sc: #ffb020; }
+.sg-score[data-rung="5"] { --sc: #ff7a1a; }
+
+/* Reduced motion: the number lands rather than runs (scorer side), and nothing
+   here scales or slides. The resting state of every element is already the
+   correct one, so switching the transitions off takes nothing with it. */
+.sg-score[data-reduced="1"] .sg-score__value { transform: none; transition: color 180ms linear; }
+.sg-score[data-reduced="1"] .sg-score__pop { transform: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-score__value { transition: color 180ms linear; transform: none; }
+  .sg-score__pop { transform: none !important; }
+}
+
+/* A short viewport has no room for a third widget above the horizon; the same
+   floor cheer.ts uses, for the same reason. */
+@media (max-height: 300px) {
+  .sg-score { display: none; }
+}
+
+/* ===========================================================================
+   RESULTS: THE RUN SCORE AND THE BOARD
+   =========================================================================== */
+.sg-results__score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  margin: 10px 0 2px;
+}
+
+.sg-score-k {
+  font: 600 10px/1 inherit;
+  letter-spacing: 0.22em;
+  color: var(--sg-dim);
+}
+
+.sg-score-v {
+  font: 700 clamp(30px, 6vw, 52px)/1 inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-gold);
+  text-shadow: 0 0 18px rgba(255, 210, 63, 0.4);
+}
+
+.sg-score-rank {
+  font: 600 11px/1 inherit;
+  letter-spacing: 0.16em;
+  color: var(--sg-green);
+}
+
+.sg-results__name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+}
+
+.sg-name__k {
+  font: 600 10px/1 inherit;
+  letter-spacing: 0.2em;
+  color: var(--sg-dim);
+}
+
+.sg-name__in {
+  width: 8.5em;
+  padding: 5px 8px;
+  font: 700 14px/1 inherit;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sg-ink);
+  background: rgba(5, 7, 15, 0.7);
+  border: 1px solid var(--sg-line);
+  border-radius: 3px;
+}
+
+.sg-name__in:focus {
+  outline: none;
+  border-color: var(--sg-cyan);
+  box-shadow: 0 0 0 2px rgba(34, 211, 255, 0.25);
+}
+
+.sg-results__board {
+  margin: 8px auto 0;
+  width: min(94%, 380px);
+}
+
+.sg-board__title {
+  font: 600 9px/1 inherit;
+  letter-spacing: 0.2em;
+  color: var(--sg-mute);
+  text-align: center;
+  margin-bottom: 5px;
+}
+
+.sg-board__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sg-board__row {
+  display: grid;
+  /* Rank, name, combo, score. The score column is the widest because it is the
+     one being compared; the name is allowed to run out of room before it does. */
+  grid-template-columns: 1.6em minmax(0, 1fr) 3.2em 5.4em;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font: 500 12px/1.35 inherit;
+  color: var(--sg-dim);
+}
+
+.sg-board__row.is-you {
+  background: rgba(255, 210, 63, 0.12);
+  color: var(--sg-ink);
+  box-shadow: inset 2px 0 0 var(--sg-gold);
+}
+
+.sg-board__n { font-variant-numeric: tabular-nums; color: var(--sg-mute); }
+
+.sg-board__name {
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sg-board__combo {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--sg-violet);
+  text-align: right;
+}
+
+.sg-board__score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--sg-ink);
+  text-align: right;
+}
+
+.sg-board__empty,
+.sg-board__note {
+  font: 500 10px/1.4 inherit;
+  color: var(--sg-mute);
+  text-align: center;
+  padding: 3px 0 0;
+}
+
+.sg-btn--small {
+  padding: 5px 12px;
+  font-size: 12px;
 }

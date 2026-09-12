@@ -26,6 +26,10 @@ import { createVfx } from '../render/vfx'
 import { createPostFx, type PostFx } from '../render/postfx'
 import { createHud, type Hud } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
+import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
+import { Scorer } from '../score/scorer'
+import { createScoreboard, BOARD_SIZE } from '../score/board'
+import type { ScoreStore } from '../score/api'
 import { createAudio, type AudioSystem } from '../audio'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
 import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
@@ -90,6 +94,12 @@ export class Game {
 
   private hud: Hud
   private cheer: Cheer
+  private scoreHud: ScoreHud
+  private readonly scorer = new Scorer()
+  private readonly board: ScoreStore = createScoreboard()
+  /** The finished run, held between the flag and the results screen. */
+  private lastScore = 0
+  private lastBestCombo = 1
   private readonly audio: AudioSystem = createAudio()
   /** Last countdown integer spoken, so a beep fires once per number. */
   private lastCount = -1
@@ -197,6 +207,7 @@ export class Game {
     // Inside the HUD root so it is shown, hidden and disposed with it, and so
     // the ceremony's `is-ceremony` rule can put it away in one selector.
     this.cheer = createCheer(this.hud.root)
+    this.scoreHud = createScoreHud(this.hud.root)
     this.hud.skipButton.addEventListener('click', (e) => {
       e.preventDefault()
       if (this.phase === 'ceremony') this.finishRace()
@@ -612,6 +623,10 @@ export class Game {
     this.hud.setFinish(null)
     this.cheer.reset()
     this.cheer.setLevel(this.calloutLevel)
+    this.scorer.reset()
+    this.scoreHud.reset()
+    this.lastScore = 0
+    this.lastBestCombo = 1
 
     this.frontEnd.hide()
     this.hud.root.style.display = ''
@@ -693,6 +708,12 @@ export class Game {
     this.input.setPadsVisible(false)
     this.tools.hidden = true
     this.cheer.reset()
+    // Captured HERE rather than on the results screen: the ceremony runs the
+    // remaining cars to the flag, and settleRace() can fast-forward the sim,
+    // so by the time the results panel appears the scorer has seen a stretch of
+    // race the player did not drive. This is the last frame that is theirs.
+    this.lastScore = this.scorer.score
+    this.lastBestCombo = this.scorer.bestCombo
     this.syncFinishCard()
   }
 
@@ -759,8 +780,57 @@ export class Game {
     this.input.setPadsVisible(false)
     this.audio.endRace()
     this.audio.music(null, false)
-    this.frontEnd.showResults(this.race.state, this.localId)
+    this.frontEnd.showResults(this.race.state, this.localId, {
+      score: this.lastScore,
+      bestCombo: this.lastBestCombo,
+    })
+    void this.publishScore()
     this.frontEnd.show('results')
+  }
+
+  /**
+   * Show the board for this track, and offer to record the run if it placed.
+   *
+   * NOTHING IS WRITTEN UNTIL THE PLAYER NAMES IT. `qualifies` only decides
+   * whether the name row appears; the submit happens in the callback below. An
+   * unnamed run is not silently filed under a default, because a board full of
+   * PILOT / PILOT / PILOT is worse than a board with nine rows.
+   *
+   * Every call here is awaited rather than assumed instant: the store is async
+   * on purpose so the server implementation can drop in without this function
+   * changing, and a screen that only works when the answer is synchronous would
+   * have to be rewritten on that day.
+   */
+  private async publishScore(): Promise<void> {
+    const race = this.race
+    if (!race) return
+    const trackId = this.track.def.id
+    const local = race.state.racers[this.localId]
+    const score = this.lastScore
+    try {
+      const qualifies = await this.board.qualifies(trackId, score, BOARD_SIZE)
+      const rows = await this.board.top(trackId, BOARD_SIZE)
+      this.frontEnd.setBoard(rows, 0, qualifies)
+      this.frontEnd.onSaveScore = async (name: string): Promise<void> => {
+        const rank = await this.board.submit({
+          name,
+          score,
+          trackId,
+          chassisId: local.chassisId,
+          pilotId: local.pilotId,
+          position: local.position,
+          bestLap: local.bestLap,
+          bestCombo: this.lastBestCombo,
+          at: Date.now(),
+        }, BOARD_SIZE)
+        const after = await this.board.top(trackId, BOARD_SIZE)
+        this.frontEnd.setBoard(after, rank, false)
+      }
+    } catch {
+      // A board that cannot be read is not a reason to break the results
+      // screen. The race still happened and the score is still on it.
+      this.frontEnd.setBoard([], 0, false)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1060,6 +1130,28 @@ export class Game {
       // running to refresh what it would read.
       if (this.phase === 'racing') this.cheer.update(st, local, dt)
       this.hud.setDriftReleaseTaken(this.phase === 'racing' && this.cheer.tookDriftRelease)
+
+      /**
+       * SCORING.
+       *
+       * Fed from `local.events` -- the SAME list cheer.ts reads two lines above
+       * and the VFX read below, which is the list main.ts wrote the accumulated
+       * sub-step events back onto. Any other source loses events at low frame
+       * rates, and a lost drift release here is not a missed sound, it is
+       * missing points the player has no way to notice were dropped.
+       *
+       * The scorer takes its seconds from `st.time`, never from `dt`, so the
+       * number is the same on every machine. See src/score/scorer.ts.
+       *
+       * Combo rungs are routed into cheer.ts rather than announced here, so the
+       * praise, the voice line and the callout setting all stay in one place.
+       */
+      if (this.phase !== 'attract') {
+        const sc = this.scorer.frame(st, local, local.events)
+        for (const rung of sc.rungs) this.cheer.comboRung(rung)
+        this.scoreHud.update(sc, dt)
+      }
+      this.scoreHud.setVisible(this.phase === 'racing' || this.phase === 'ceremony')
       // The attract screen has no HUD -- it is display:none -- so updating it
       // would be laying out a lap counter and a minimap nobody can see, every
       // frame, on the device least able to spare it.
@@ -1224,6 +1316,7 @@ export class Game {
     this.teardownWorld()
     disposeVehicleCache()
     this.cheer.dispose()
+    this.scoreHud.dispose()
     this.hud.dispose()
     this.settings.dispose()
     this.compact.dispose()

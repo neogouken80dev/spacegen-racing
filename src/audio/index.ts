@@ -32,7 +32,7 @@ import { AudioPlanner, engineFor } from './plan'
 import { createStage } from './stage'
 
 /** cheer.ts's own kinds. Keeping the union here would let the two drift. */
-export type VoKind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam'
+export type VoKind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
 
 /**
  * Voice lines, by moment. Several variants each so a player hears a different
@@ -50,6 +50,16 @@ export const VO_LINES: Record<VoKind, readonly string[]> = {
   lead: ['audio/vo/lead-1.mp3', 'audio/vo/lead-2.mp3'],
   air: ['audio/vo/air-1.mp3', 'audio/vo/air-2.mp3'],
   beam: ['audio/vo/beam-1.mp3', 'audio/vo/beam-2.mp3'],
+  /**
+   * Combo rungs. Six lines rather than variants, because unlike every other
+   * kind here the rung is not interchangeable -- reaching x16 and being told
+   * the x2 line would be worse than silence. cheer.ts fires these in order and
+   * at most once each per run, so a fixed sequence is exactly right.
+   */
+  combo: [
+    'audio/vo/combo-1.mp3', 'audio/vo/combo-2.mp3', 'audio/vo/combo-3.mp3',
+    'audio/vo/combo-4.mp3', 'audio/vo/combo-5.mp3', 'audio/vo/combo-6.mp3',
+  ],
 }
 
 /** The beds. Two per circuit: laps 1-2, and the final lap. */

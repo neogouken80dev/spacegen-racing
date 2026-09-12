@@ -19,6 +19,7 @@
 import './styles.css'
 import type { RaceState, RacerState } from '../sim/types'
 import { CHASSIS } from '../content/chassis'
+import type { ScoreEntry } from '../score/api'
 import { PILOTS } from '../content/pilots'
 import { TRACKS } from '../content/tracks'
 import { Track, type SurfaceKind, type TrackDef } from '../sim/track'
@@ -54,8 +55,23 @@ export interface FrontEnd {
    * every frame, the front end says so once, when it changes.
    */
   onScreen: (screen: ScreenId | null) => void
-  showResults(state: RaceState, localId: number): void
+  showResults(state: RaceState, localId: number, run?: RunScore | null): void
+  /**
+   * Fill the top-ten panel. Separate from showResults because the store is
+   * async by design -- a local board answers instantly, a server one will not,
+   * and the screen has to be able to appear before the board has arrived
+   * rather than waiting on it.
+   */
+  setBoard(rows: readonly ScoreEntry[], rank: number, qualifies: boolean): void
+  /** The player named a qualifying run. */
+  onSaveScore: (name: string) => void
   dispose(): void
+}
+
+/** What the finished run scored, handed over for display. */
+export interface RunScore {
+  score: number
+  bestCombo: number
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +490,15 @@ class FrontEndImpl implements FrontEnd {
   private readonly resWhere: HTMLElement
   private readonly resTotal: HTMLElement
   private readonly resBest: HTMLElement
+  private readonly resCombo: HTMLElement
+  private readonly resScore: HTMLElement
+  private readonly resRank: HTMLElement
+  private readonly nameRow: HTMLElement
+  private readonly nameInput: HTMLInputElement
+  private readonly nameSave: HTMLButtonElement
+  private readonly boardWrap: HTMLElement
+  private readonly boardRows: HTMLElement
+  private readonly boardNote: HTMLElement
 
   private readonly playBtn: HTMLButtonElement
   private readonly toGarageBtn: HTMLButtonElement
@@ -715,6 +740,45 @@ class FrontEndImpl implements FrontEnd {
     const m2 = el('div', 'sg-meta', meta)
     el('div', 'sg-meta__k', m2, 'Best Lap')
     this.resBest = el('div', 'sg-meta__v', m2, '--:--.--')
+    const m3 = el('div', 'sg-meta', meta)
+    el('div', 'sg-meta__k', m3, 'Best Combo')
+    this.resCombo = el('div', 'sg-meta__v', m3, '×1.0')
+
+    // --- the run score, and the board -------------------------------------
+    // Its own block rather than a fourth `sg-meta` cell: the score is the one
+    // number this screen is now ABOUT, and giving it the same weight as "best
+    // lap" would bury the thing the player just spent a race building.
+    const scoreWrap = el('div', 'sg-results__score', results)
+    el('div', 'sg-score-k', scoreWrap, 'RUN SCORE')
+    this.resScore = el('div', 'sg-score-v', scoreWrap, '0')
+    this.resRank = el('div', 'sg-score-rank', scoreWrap, '')
+    this.resRank.hidden = true
+
+    // Name entry, shown ONLY when the run actually made the board. Asking every
+    // player for a name after every race, most of which do not place, is the
+    // arcade convention that does not survive contact with a game you can
+    // restart in two seconds.
+    this.nameRow = el('div', 'sg-results__name', results)
+    this.nameRow.hidden = true
+    el('label', 'sg-name__k', this.nameRow, 'NAME')
+    this.nameInput = document.createElement('input')
+    this.nameInput.className = 'sg-name__in'
+    this.nameInput.maxLength = 12
+    this.nameInput.autocomplete = 'off'
+    this.nameInput.spellcheck = false
+    this.nameInput.setAttribute('aria-label', 'Name for the leaderboard')
+    this.nameRow.appendChild(this.nameInput)
+    this.nameSave = button('sg-btn sg-btn--small', this.nameRow, 'Save')
+
+    this.boardWrap = el('div', 'sg-results__board', results)
+    el('div', 'sg-board__title', this.boardWrap, 'TOP 10 — THIS TRACK')
+    this.boardRows = el('div', 'sg-board__rows', this.boardWrap)
+    // Stated plainly rather than implied. A player who believes they are on a
+    // global ladder and is not has been misled by us, and this board is one
+    // browser profile on one machine until the server pass lands.
+    this.boardNote = el('div', 'sg-board__note', this.boardWrap,
+      'Saved on this device only.')
+    this.boardNote.hidden = false
     const cta = el('div', 'sg-results__cta', results)
     this.rematchBtn = button('sg-btn sg-btn--gold sg-btn--huge', cta, 'Rematch')
     const toGarage = button('sg-btn sg-btn--ghost', cta, 'Garage')
@@ -753,6 +817,21 @@ class FrontEndImpl implements FrontEnd {
       })
     })
     this.rematchBtn.addEventListener('click', () => this.onRematch())
+    const saveName = (): void => {
+      // Trimmed, capped and upper-cased here rather than trusted: this string
+      // goes straight into a row the board renders as text for every later run.
+      const name = this.nameInput.value.trim().slice(0, 12).toUpperCase() || 'PILOT'
+      try { window.localStorage.setItem(FrontEndImpl.LS_NAME, name) } catch { /* blocked */ }
+      this.nameRow.hidden = true
+      this.onSaveScore(name)
+    }
+    this.nameSave.addEventListener('click', saveName)
+    this.nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveName() }
+      // The results screen binds Enter and the arrows to its own buttons, so a
+      // player typing a name would otherwise trigger a rematch mid-word.
+      e.stopPropagation()
+    })
     toGarage.addEventListener('click', () => this.show('garage'))
     // Both mid-race exits reach the track list directly. Anything the garage is
     // reachable from, the track list is reachable from — otherwise changing
@@ -848,7 +927,48 @@ class FrontEndImpl implements FrontEnd {
     if (active instanceof HTMLElement && this.root.contains(active)) active.blur()
   }
 
-  showResults(state: RaceState, localId: number): void {
+  onSaveScore: (name: string) => void = () => {}
+
+  /** Remembered so a returning player is not retyping their name every race. */
+  private static readonly LS_NAME = 'sg.name'
+
+  setBoard(rows: readonly ScoreEntry[], rank: number, qualifies: boolean): void {
+    this.boardRows.textContent = ''
+    if (rows.length === 0) {
+      const empty = el('div', 'sg-board__empty', this.boardRows,
+        'No runs yet. Finish a race to open the board.')
+      empty.hidden = false
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const e = rows[i]
+      const row = el('div', 'sg-board__row', this.boardRows)
+      // `rank` is 1-based and 0 when the run did not place, so this marks the
+      // row the player just earned rather than whichever row happens to match
+      // their score -- two runs can tie, and highlighting both would be a lie.
+      if (rank > 0 && i === rank - 1) row.classList.add('is-you')
+      el('span', 'sg-board__n', row, String(i + 1))
+      el('span', 'sg-board__name', row, e.name)
+      el('span', 'sg-board__combo', row, '×' + (e.bestCombo >= 10
+        ? e.bestCombo.toFixed(0) : e.bestCombo.toFixed(1)))
+      el('span', 'sg-board__score', row, e.score.toLocaleString())
+    }
+    this.nameRow.hidden = !qualifies
+    if (qualifies) {
+      try {
+        this.nameInput.value = window.localStorage.getItem(FrontEndImpl.LS_NAME) || ''
+      } catch { this.nameInput.value = '' }
+    }
+    if (rank > 0) {
+      this.resRank.textContent = rank === 1
+        ? 'NEW BEST ON THIS TRACK'
+        : 'RANK ' + rank + ' OF 10'
+      this.resRank.hidden = false
+    } else {
+      this.resRank.hidden = true
+    }
+  }
+
+  showResults(state: RaceState, localId: number, run?: RunScore | null): void {
     const racers = state.racers
     const order: RacerState[] = racers.slice()
     order.sort((a, b) => (a.position - b.position) || (b.totalS - a.totalS))
@@ -900,6 +1020,16 @@ class FrontEndImpl implements FrontEnd {
       this.resTotal.textContent = fmtTime(state.time)
       this.resBest.textContent = '--:--.--'
     }
+
+    this.resScore.textContent = run ? run.score.toLocaleString() : '0'
+    this.resCombo.textContent = run
+      ? '×' + (run.bestCombo >= 10 ? run.bestCombo.toFixed(0) : run.bestCombo.toFixed(1))
+      : '×1.0'
+    // The board and the rank are filled by setBoard() when the store answers.
+    // Cleared here so a rematch never shows the PREVIOUS run's placing for the
+    // moment before the new one arrives.
+    this.resRank.hidden = true
+    this.nameRow.hidden = true
 
     this.show('results')
   }
