@@ -2484,13 +2484,34 @@
      `safe center` centres while it fits and falls back to flex-start when it
      does not, so the overflow all goes one way -- downward, where the scroll
      below can reach it. */
-  justify-content: safe center;
-  /* And the scroll itself, as the last resort for a viewport shorter than the
-     most compact form of this screen. */
+  /* TOP-JUSTIFIED, WITH THE BUTTONS PINNED TO THE BOTTOM.
+     
+     This was `safe center`, which solved the real bug it was written for -- at
+     844x390 plain centring put the title at top: -116 and the tab strip at -55,
+     both unreachable, because the top overflow of a scroll container cannot be
+     scrolled to. But centring a column whose height changes per tab means the
+     header and the buttons MOVE every time you switch tab: Results has eight
+     standings rows, Records has four, Global has three, so the whole screen
+     slides up and down under the cursor.
+     
+     Anchoring the top fixes both. The header sits at one place on every tab,
+     each tab's content starts at the same line, and the CTA row is pushed to
+     the bottom by `margin-top: auto` rather than by whatever happens to be
+     above it. A short list now leaves empty space, which is the correct
+     trade: a stable frame is worth more than vertically centred contents.
+     
+     The scroll stays as the last resort for a viewport shorter than the most
+     compact form of this screen. */
+  justify-content: flex-start;
   overflow-y: auto;
   overscroll-behavior: contain;
   gap: clamp(10px, 2vmin, 24px);
 }
+
+/* The buttons take all the slack, so they sit on the bottom edge whatever the
+   tab above them is doing. `flex: none` on the row itself is kept: it is the
+   MARGIN that moves it, not a grown box, so the buttons stay their own size. */
+.sg-results__cta { margin-top: auto; }
 
 .sg-results__title {
   font-family: var(--sg-display);
@@ -2900,9 +2921,18 @@
    what it is worth, and how good it was. Stacking them in a single flow
    container is what lets them share an entrance, a colour and a rhythm.
 
-   Still below the band that is already occupied. Measured at 1280x720 during a
-   race: tools buttons x 0.463-0.537 y 0.014-0.075, crosswind x 0.446-0.554
-   y 0.086-0.115. 15% clears both at every width.
+   CENTRE OF THE SCREEN, not the top of it. This started at 15%, tucked under
+   the tools cluster and the crosswind strip (measured at 1280x720 during a
+   race: tools x 0.463-0.537 y 0.014-0.075, crosswind x 0.446-0.554
+   y 0.086-0.115) -- safe, and so far out of the way that the thing the player
+   just earned sat in their peripheral vision.
+
+   30% puts the number in the middle band of the screen with the callout under
+   it, and still above the racing line: the car sits around 65-75% in the chase
+   camera and the horizon around 50%, so the block occupies the sky. The TOP
+   edge is anchored rather than the centre, because the block grows downward
+   when a callout appears and a centre anchor would shove the number upward
+   every time one arrived.
 
    The container itself never animates: it is the plain layout box the placement
    is argued from, and everything that moves moves inside it.
@@ -2910,7 +2940,7 @@
 .sg-moment {
   position: absolute;
   left: 50%;
-  top: 15%;
+  top: 30%;
   transform: translateX(-50%);
   width: min(92vw, 980px);
   display: flex;
@@ -3603,7 +3633,13 @@
 }
 
 .sg-score__value {
-  font-size: clamp(34px, 6.6vw, 64px);
+  /* CAPPED AGAINST THE VIEWPORT, not just clamped.
+     `.sg-score__line` is `white-space: nowrap`, so an oversized value does not
+     wrap -- it runs off the side of the phone. The clamp's FLOOR is the trap: a
+     68px minimum is sensible on a 390px screen and too big on a 320px one, and
+     measured at peak swell the line ran -23..343 in a 320px viewport. The
+     `min(..., 16vw)` is what stops the floor outgrowing the screen it is on. */
+  font-size: min(clamp(44px, 8.6vw, 84px), 16vw);
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -3631,7 +3667,7 @@
 }
 
 .sg-score__x {
-  font-size: clamp(17px, 3vw, 28px);
+  font-size: min(clamp(21px, 3.8vw, 36px), 5.5vw);
   font-weight: 700;
   line-height: 1;
   font-style: italic;
@@ -3640,7 +3676,7 @@
 }
 
 .sg-score__mult {
-  font-size: clamp(24px, 4.4vw, 42px);
+  font-size: min(clamp(32px, 6vw, 58px), 8vw);
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -4022,6 +4058,7 @@
      of the standings list scrolling inside it. */
   flex: 0 1 auto;
   min-height: 0;
+  justify-content: flex-start;
 }
 
 /**
@@ -4047,6 +4084,10 @@
      chain, and one unbroken link is enough to stop the shrink. */
   flex: 0 1 auto;
   min-height: 0;
+  /* And the contents start at the top of the panel rather than centring in it,
+     so a four-row Records tab and an eight-row Results tab both begin on the
+     same line instead of each finding its own middle. */
+  justify-content: flex-start;
 }
 
 /**
@@ -4218,15 +4259,112 @@
    hue. One of the two has to hold still or the block has no anchor, and the
    number is the half being read.
    --------------------------------------------------------------------------- */
-.sg-score[data-rung="2"] .sg-score__value { font-size: clamp(38px, 7.4vw, 72px); }
-.sg-score[data-rung="3"] .sg-score__value { font-size: clamp(42px, 8.2vw, 80px); }
-.sg-score[data-rung="4"] .sg-score__value { font-size: clamp(46px, 9.0vw, 88px); }
-.sg-score[data-rung="5"] .sg-score__value { font-size: clamp(50px, 9.8vw, 96px); }
+.sg-score[data-rung="2"] .sg-score__value { font-size: min(clamp(50px, 9.8vw, 96px), 16vw); }
+.sg-score[data-rung="3"] .sg-score__value { font-size: min(clamp(56px, 11vw, 108px), 16vw); }
+.sg-score[data-rung="4"] .sg-score__value { font-size: min(clamp(62px, 12.2vw, 118px), 16vw); }
+.sg-score[data-rung="5"] .sg-score__value { font-size: min(clamp(68px, 13.4vw, 130px), 16vw); }
 
 .sg-score__event { color: var(--sc); }
 .sg-score[data-rung="3"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
 .sg-score[data-rung="4"] .sg-score__event { font-size: clamp(16px, 3.0vw, 28px); }
 .sg-score[data-rung="5"] .sg-score__event { font-size: clamp(17px, 3.3vw, 31px); letter-spacing: 0.2em; }
+
+/* ---------------------------------------------------------------------------
+   THE SWELL — the number growing with how hard it is climbing.
+
+   `--swell` is written by scoreHud.ts from the gap between the displayed value
+   and the one it is chasing, which during a slide is a direct read on how fast
+   points are arriving. Applied to the whole LINE rather than to the digits
+   alone so the multiplier grows with them and the pair stays a unit.
+
+   No transition: the value is already eased in script and a second easing here
+   would fight it, arriving late and leaving the swell still growing after the
+   slide has ended.
+   --------------------------------------------------------------------------- */
+.sg-score__line {
+  transform: scale(calc(1 + var(--swell, 0)));
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+/* ---------------------------------------------------------------------------
+   THE RUNG BOUNCE — a harder hit than an ordinary event.
+
+   A rung is the multiplier itself going up, which is the thing being chased
+   during a slide, so it gets its own bounce on top of the stamp rather than
+   sharing one. Two alternating keyframe names for the usual reason: the element
+   never leaves the tree, so re-applying one name would not replay it.
+   --------------------------------------------------------------------------- */
+@keyframes sgScorePopA {
+  0%   { transform: scale(1); }
+  28%  { transform: scale(1.28); }
+  62%  { transform: scale(0.965); }
+  100% { transform: scale(1); }
+}
+@keyframes sgScorePopB {
+  0%   { transform: scale(1); }
+  28%  { transform: scale(1.28); }
+  62%  { transform: scale(0.965); }
+  100% { transform: scale(1); }
+}
+.sg-score[data-pop="0"] .sg-score__stack { animation: sgScorePopA 420ms cubic-bezier(0.16, 0.9, 0.28, 1) 1; }
+.sg-score[data-pop="1"] .sg-score__stack { animation: sgScorePopB 420ms cubic-bezier(0.16, 0.9, 0.28, 1) 1; }
+
+/* ---------------------------------------------------------------------------
+   THE SPARKS.
+
+   A pool of dots behind the number, thrown outward on a rung or a big payout.
+   Absolutely positioned inside their own layer so nothing they do can reflow
+   the number they are celebrating, and `z-index: -1` so they read as coming
+   from BEHIND it rather than landing on top of the digits.
+
+   Each spark carries its own vector and duration as custom properties, so one
+   keyframe serves all sixteen and firing a burst is a few property writes.
+   --------------------------------------------------------------------------- */
+.sg-score__sparks {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.sg-score__spark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%;
+  /* A hot white core in the rung's hue, rather than a flat disc of it: a spark
+     that is the same colour all the way through reads as a dot, and what makes
+     it read as a spark is that the middle is brighter than the edge. */
+  background: radial-gradient(circle, #fff 0%, var(--sc) 42%, color-mix(in srgb, var(--sc) 40%, transparent) 100%);
+  box-shadow: 0 0 14px var(--sc), 0 0 32px color-mix(in srgb, var(--sc) 75%, transparent);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: sgScoreSpark var(--sd, 0.45s) cubic-bezier(0.1, 0.7, 0.25, 1) 1;
+}
+
+@keyframes sgScoreSpark {
+  0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+  70%  { opacity: 0.85; }
+  100% {
+    opacity: 0;
+    /* The downward bias at the end is gravity catching the tail; without it the
+       burst reads as an expanding ring rather than as thrown sparks. */
+    transform: translate(var(--dx, 0px), calc(var(--dy, 0px) + 30px)) scale(0.22);
+  }
+}
+
+/* Reduced motion: scoreHud.ts never fires a burst and never writes a swell, so
+   these are belt and braces for a setting changed mid-slide. */
+.sg-score[data-reduced="1"] .sg-score__line { transform: none; }
+.sg-score[data-reduced="1"] .sg-score__spark { animation: none; opacity: 0; }
+.sg-score[data-reduced="1"] .sg-score__stack { animation: none; }
 
 /* THE STAMP. The entrance cheer.ts's lines have and this block did not.
    `--amp` climbs with the rung so a big event lands harder. Two alternating

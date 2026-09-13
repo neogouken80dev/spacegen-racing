@@ -92,6 +92,16 @@ const base: ScoreState = {
 const scene = SCENES[q.get('scene') ?? 'hot'] ?? SCENES.hot
 const state: ScoreState = { ...base, ...scene.state, rungs: [] }
 
+/**
+ * `?burst=1` crosses a combo rung on a timer.
+ *
+ * The spark burst and the rung bounce both fire off `ScoreState.rungs`, which a
+ * static scene never populates -- so without this the bench renders a widget
+ * whose two loudest behaviours are unreachable, and a screenshot of it proves
+ * nothing about either.
+ */
+const BURST = q.get('burst') === '1'
+
 // Settle the chase so the displayed total matches, then hand it one live frame
 // so the pops, the meter and the hot-state transform are all in force.
 for (let i = 0; i < 400; i++) hud.update({ ...state, awards: [] }, 1 / 60)
@@ -110,8 +120,16 @@ if (scene.rung !== undefined) {
 // Keep the pops alive at a fixed age rather than letting them fade during the
 // screenshot -- the bench is a still, not an animation.
 let held = 0
+let t = 0
 const tick = () => {
-  if (held < 8) { hud.update({ ...state, awards: [] }, 1 / 60); held++ }
+  if (BURST) {
+    // A rung every 900ms, and a value that keeps climbing so the swell has
+    // something to read. This is the one mode where the bench is an animation.
+    t += 1 / 60
+    const rung = (Math.floor(t / 0.9) !== Math.floor((t - 1 / 60) / 0.9)) ? [3] : []
+    const live = { ...state, rungs: rung, driftBanked: (state.driftBanked ?? 0) + t * 900 }
+    hud.update(live as ScoreState, 1 / 60)
+  } else if (held < 8) { hud.update({ ...state, awards: [] }, 1 / 60); held++ }
   requestAnimationFrame(tick)
 }
 requestAnimationFrame(tick)

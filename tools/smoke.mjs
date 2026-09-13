@@ -2392,9 +2392,20 @@ const diag = await page.evaluate(() => {
     phase: st ? st.phase : null,
     time: st ? +st.time.toFixed(2) : null,
     racers: st ? st.racers.length : 0,
-    localSpeed: st ? +Math.hypot(st.racers[0].vel.x, st.racers[0].vel.z).toFixed(2) : null,
-    localS: st ? +st.racers[0].totalS.toFixed(1) : null,
-    localPos: st ? st.racers[0].position : null,
+    // THE LOCAL RACER, not racer index 0.
+    //
+    // These three read `racers[0]` for most of this file's life, which is
+    // whichever car happens to be first in the array -- an AI in every race
+    // where the player is not seeded at index 0. That is why the gate below,
+    // whose whole message is "input may not be reaching the sim", passed a
+    // deliberate sabotage that severed `race.setInput` for the player
+    // entirely: it was watching a car that drives itself.
+    localId: g.localId ?? null,
+    localIsAI: st && st.racers[g.localId] ? !!st.racers[g.localId].isAI : null,
+    localSpeed: st && st.racers[g.localId]
+      ? +Math.hypot(st.racers[g.localId].vel.x, st.racers[g.localId].vel.z).toFixed(2) : null,
+    localS: st && st.racers[g.localId] ? +st.racers[g.localId].totalS.toFixed(1) : null,
+    localPos: st && st.racers[g.localId] ? st.racers[g.localId].position : null,
     anyMoved: st ? st.racers.some((r) => r.totalS > 20) : false,
     drawCalls: g.renderer ? g.renderer.info.render.calls : null,
     triangles: g.renderer ? g.renderer.info.render.triangles : null,
@@ -2559,7 +2570,48 @@ if (diag.trackId !== trackId) fail.push(`raced ${diag.trackId}, asked for ${trac
 if (!diag.anyMoved) fail.push('no racer moved')
 // Progress, not instantaneous speed: the drive script deliberately ends with a
 // hard drift into a wall, so the car is legitimately slow at the final sample.
-if (diag.localS !== null && diag.localS < 80) fail.push(`local racer only covered ${diag.localS}m - input may not be reaching the sim`)
+//
+// AND IT DOES NOT TEST INPUT. IT NEVER DID.
+//
+// The message on this gate was "input may not be reaching the sim". It cannot
+// know that. `diag` is captured at the end of a long settings-dialog exercise,
+// not after a scripted drive, and `race.setInput` keeps the LAST frame it was
+// given -- so a car that received one throttled frame during the rocket start
+// and nothing since keeps rolling for the whole twenty seconds and covers
+// plenty of ground. Confirmed by severing `this.race.setInput(this.localId,
+// frame)` in game/main.ts outright: the gate passed.
+//
+// What it can honestly assert is that the sim ran and the car moved, which is
+// still worth having -- it catches a frozen loop, a race that never started and
+// a car stuck on the grid. The real input-reaches-the-sim test belongs with the
+// keyboard drive further up, which actually presses keys and can check that a
+// drift was entered; a stale throttle frame can never produce one. Not built
+// here; written down instead of left implied by a wrong message.
+//
+// AND PER SIM SECOND, NOT IN ABSOLUTE METRES.
+//
+// This was `localS < 80`, and it was flaky at HEAD -- measured across repeated
+// runs on an unchanged tree: 72.7m fail, then a pass, then 78.7m fail. The
+// reason is that an absolute distance measures how many FRAMES the renderer
+// managed, not whether input reached the sim. Chromium under SwiftShader runs
+// this game at about 4.3fps and the loop clamps a frame to 0.25s of
+// simulation, so a slightly slower run simply simulates less race and trips a
+// threshold that has nothing to do with what is being asserted. It is the same
+// mistake, in the assertion, that the harness already avoids in its waits:
+// measure SIM time, never the wall clock.
+//
+// Normalised, the signal is wide open. Measured healthy runs average 8.8-13.9
+// m/s over the whole scripted drive, countdown included; a car that never
+// received input sits on the grid at 0. 2.5 m/s separates those two by a
+// factor of three in either direction.
+const avgSpeed = diag.localS !== null && diag.time ? diag.localS / Math.max(1, diag.time) : null
+if (avgSpeed !== null && avgSpeed < 2.5) {
+  fail.push(`local racer averaged ${avgSpeed.toFixed(2)} m/s over ${diag.time}s of sim ` +
+    `(${diag.localS}m) - the sim may be frozen or the car stuck`)
+}
+// And a floor on the absolute distance too, for the case where the sim barely
+// advanced at all: a ratio computed over a fraction of a second proves nothing.
+if (diag.localS !== null && diag.localS < 25) fail.push(`local racer only covered ${diag.localS}m`)
 // --- the lap-split list, on an ordinary race -------------------------------
 // No lap has closed yet at this point, so the list is exactly the live row:
 // present from the green light, in the corner, and nowhere near the road.

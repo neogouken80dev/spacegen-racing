@@ -68,6 +68,36 @@ const SNAP = 1.5
 const POP_LIFE = 1.15
 /** How many popups may stack before the oldest is recycled. */
 const POP_SLOTS = 4
+
+/**
+ * Sparks in the burst pool.
+ *
+ * Fixed, built once, recycled -- the same discipline the VFX particle system
+ * uses and for the same reason: this fires in the middle of a slide, which is
+ * the exact moment the frame budget is tightest, and allocating a dozen
+ * elements then is how a celebration becomes a hitch.
+ */
+const SPARKS = 16
+
+/**
+ * Peak extra scale on the counter at full swell, as a fraction.
+ *
+ * Deliberately small. The number is already the largest thing on screen and it
+ * is sitting over the racing line's sky; the swell has to read as EFFORT, not
+ * as the HUD lurching. 0.18 is about as far as it can go before the digits
+ * start colliding with the multiplier beside them.
+ */
+const SWELL_MAX = 0.18
+
+/**
+ * Drift rate, in points per second, at which the swell is fully open.
+ *
+ * Hold pays 120-800 a second by tier and the combo multiplies it, so the top of
+ * the range is around 19,000 and a respectable mid-race slide is a few
+ * thousand. 6,000 puts the interesting part of the curve where players actually
+ * spend their time rather than saving it all for a Singularity at x24.
+ */
+const SWELL_REF = 6000
 /**
  * Seconds the centre panel stays up after its event closes.
  *
@@ -142,6 +172,13 @@ class ScoreHudImpl implements ScoreHud {
   /** The right-hand running-total panel, and the digits inside it. */
   private readonly totalRoot: HTMLElement
   private readonly totalEl: HTMLElement
+  /** The spark burst pool, and the next slot to use. */
+  private readonly sparks: HTMLElement[] = []
+  private sparkNext = 0
+  /** Last swell written, quantised, so the style is not touched every frame. */
+  private lastSwell = -1
+  /** Alternates so the rung bounce restarts on an element that never unmounts. */
+  private popBeat = 0
   private readonly pops: Pop[] = []
 
   /** The running total on screen, right-hand panel. Chases `target`. */
@@ -203,6 +240,20 @@ class ScoreHudImpl implements ScoreHud {
     // The centre panel starts OFF. It is not a permanent fixture any more --
     // it exists only while something is worth points.
     this.root.dataset.on = '0'
+
+    // THE SPARK BURST.
+    //
+    // Built once and recycled. Each spark carries its angle and distance as
+    // custom properties and is animated by one keyframe, so firing a burst is
+    // a handful of property writes rather than any layout work -- and because
+    // they live in an absolutely-positioned layer with its own stacking
+    // context, nothing they do can reflow the number they are celebrating.
+    const sparkWrap = div('sg-score__sparks', this.root)
+    for (let i = 0; i < SPARKS; i++) {
+      const el = div('sg-score__spark', sparkWrap)
+      el.hidden = true
+      this.sparks.push(el)
+    }
 
     this.popWrap = div('sg-score__pops', this.root)
     for (let i = 0; i < POP_SLOTS; i++) {
@@ -275,6 +326,9 @@ class ScoreHudImpl implements ScoreHud {
     this.valueEl.textContent = '0'
     this.totalEl.textContent = '0'
     this.root.dataset.on = '0'
+    this.lastSwell = -1
+    this.root.style.removeProperty('--swell')
+    for (const sp of this.sparks) sp.hidden = true
     this.comboEl.hidden = true
     this.meterEl.hidden = true
     this.eventLine.hidden = true
@@ -392,6 +446,51 @@ class ScoreHudImpl implements ScoreHud {
       this.valueEl.textContent = GROUPED.format(ne)
     }
 
+    // --- THE SWELL ----------------------------------------------------------
+    //
+    // The counter grows with how hard it is CLIMBING, not with how big it has
+    // got. During a slide the chase is permanently behind a target that keeps
+    // moving, so the gap between them is a direct read on how fast points are
+    // arriving -- which is the thing worth showing. A swell keyed to the total
+    // instead would just mean "this run has gone on a while".
+    //
+    // Read off `driftRate` -- the points per second the slide is currently
+    // paying, AFTER the combo -- rather than off the chase's lag.
+    //
+    // The first version used the lag, normalised against the event's own total,
+    // and measured at 1.005 against an expected 1.18: the chase settles to a
+    // lag proportional to the RATE, so dividing by a total that keeps growing
+    // makes the same slide swell less the longer it is held, which is backwards.
+    // `driftRate` is the quantity actually being described and needs no
+    // normalising at all.
+    const rate = Math.min(1, s.driftRate / SWELL_REF)
+    // Eased so it blooms through the middle of the range instead of only
+    // arriving at the very top of it.
+    const swell = this.reduced ? 0 : Math.sqrt(rate) * SWELL_MAX
+    // Quantised: this runs every frame, and writing an identical custom
+    // property still costs a style recalculation.
+    const q = Math.round(swell * 200) / 200
+    if (q !== this.lastSwell) {
+      this.lastSwell = q
+      this.root.style.setProperty('--swell', String(q))
+    }
+
+    // --- THE RUNG BOUNCE, AND THE SPARKS -------------------------------------
+    //
+    // A rung is the moment the multiplier itself goes up -- the biggest thing
+    // that can happen mid-slide and the one the player is chasing. It gets a
+    // harder bounce than an ordinary event, and it throws sparks.
+    if (s.rungs.length > 0) {
+      this.popBeat ^= 1
+      this.root.dataset.pop = String(this.popBeat)
+      this.burst(10 + s.rungs.length * 2)
+    } else if (!hot) {
+      // A big one-off payout -- a cashed slide, a knock, the flag -- earns a
+      // smaller burst. Gated on NOT drifting because drift-hold pays every
+      // single frame and would otherwise fountain continuously.
+      for (const a of s.awards) if (a.points >= 1200) { this.burst(7); break }
+    }
+
     const showEvent = hot || this.eventHold > 0
     const onAttr = showEvent ? '1' : '0'
     if (this.root.dataset.on !== onAttr) this.root.dataset.on = onAttr
@@ -433,6 +532,46 @@ class ScoreHudImpl implements ScoreHud {
       this.root.dataset.beat = String(this.beat)
     }
     this.eventTarget = value
+  }
+
+  /**
+   * Throw `n` sparks out from behind the number.
+   *
+   * Each gets a random angle and distance written as custom properties, and its
+   * animation restarted by hand -- reassigning the same animation name to an
+   * element that never leaves the tree does not replay it, so the name is
+   * cleared and a reflow forced between. That `offsetWidth` read is the one
+   * deliberate layout flush in this file; it is confined to a 6px absolutely
+   * positioned dot inside its own stacking context.
+   *
+   * Silent under reduced motion: this is pure decoration and carries no
+   * information the rest of the block does not already give.
+   */
+  private burst(n: number): void {
+    if (this.reduced || !this.visible) return
+    for (let i = 0; i < n; i++) {
+      const el = this.sparks[this.sparkNext]
+      this.sparkNext = (this.sparkNext + 1) % SPARKS
+      const ang = Math.random() * Math.PI * 2
+      // FAR ENOUGH TO CLEAR THE DIGITS.
+      //
+      // These sit at z-index -1 so they never obscure the number, which means
+      // any spark whose whole flight happens behind it is invisible. At the
+      // first distance (46-138px) most of them were: the value is up to 130px
+      // tall and several hundred wide, so the burst read as a couple of dots
+      // peeking between glyphs. They have to travel past the block, not within
+      // it.
+      const dist = 130 + Math.random() * 190
+      el.style.setProperty('--dx', `${(Math.cos(ang) * dist).toFixed(1)}px`)
+      // Biased upward: sparks that all fall read as debris, and this is meant
+      // to read as a payout rather than as damage.
+      el.style.setProperty('--dy', `${(Math.sin(ang) * dist * 0.72 - 14).toFixed(1)}px`)
+      el.style.setProperty('--sd', `${(0.34 + Math.random() * 0.26).toFixed(3)}s`)
+      el.hidden = false
+      el.style.animation = 'none'
+      void el.offsetWidth
+      el.style.animation = ''
+    }
   }
 
   /** Show one receipt. Oldest slot is recycled when all are busy. */
