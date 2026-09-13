@@ -27,16 +27,35 @@
  * every width, and cheer.ts's line at 33% is far enough below to read as a
  * second voice rather than a collision.
  *
- * THE LAYOUT IS THE REFERENCE'S.
+ * TWO WIDGETS, NOT ONE. THIS CHANGED, AND THE REASON IS WORTH KEEPING.
  *
- *     401,668  x16          <- total, and the multiplier beside it
- *     GREAT DRIFT   343     <- what is happening right now, and what it is worth
+ * The first version put the running total in the middle of the screen with the
+ * current event underneath it. That reads as one number that is always there,
+ * always moving, and never finishing -- so nothing on it marks a MOMENT. Vince
+ * asked for the split, and it is the right call: the two numbers answer
+ * different questions and want opposite treatments.
  *
- * The second line is the important half. The total is deliberately too large
- * and moving too fast to read mid-corner -- that blur is the point of it -- so
- * the readable number is what THIS SLIDE has banked, which is the figure that
- * decides whether to hold it one beat longer. Off the slide, the same line
- * shows the last award instead, so it is never an empty row.
+ *   centre   THIS EVENT, and only while it is happening
+ *
+ *              GREAT DRIFT
+ *               3,430  x16
+ *             [====meter====]
+ *
+ *            It appears when something is worth points, holds for a couple of
+ *            seconds after the event closes so the payoff can be read, then
+ *            fades out and leaves the middle of the screen empty. Empty is the
+ *            feature: the element only ever being there when it means
+ *            something is what makes it mean something.
+ *
+ *   right    THE RUNNING TOTAL, quietly, permanently
+ *
+ *            Smaller, out of the racing line, below the minimap. It is
+ *            reference information -- "how am I doing" -- not a moment, and it
+ *            does not compete with the thing in the middle.
+ *
+ * BOTH still tick. The chase is what makes a number feel earned rather than
+ * assigned, and it now runs on the event value as well, which is the number
+ * actually sprinting during a slide.
  */
 import type { ScoreState } from '../score/api'
 import { COMBO_RUNGS } from '../score/rules'
@@ -49,8 +68,14 @@ const SNAP = 1.5
 const POP_LIFE = 1.15
 /** How many popups may stack before the oldest is recycled. */
 const POP_SLOTS = 4
-/** Seconds line two keeps showing the last award once a slide ends. */
-const EVENT_HOLD = 1.4
+/**
+ * Seconds the centre panel stays up after its event closes.
+ *
+ * Long enough to read a five-figure number and register what earned it, short
+ * enough that it is gone before the next corner. The fade itself is CSS, on
+ * top of this.
+ */
+const EVENT_HOLD = 2.6
 
 /**
  * One reused formatter for the running total.
@@ -91,6 +116,11 @@ export interface ScoreHud {
   root: HTMLElement
   /** One render frame. `dt` is real seconds -- this is presentation only. */
   update(s: ScoreState, dt: number): void
+  /**
+   * Land on the final total and stop, so the last number the player watches is
+   * the number the results screen prints. See the implementation.
+   */
+  settle(total: number): void
   /** Wipe between races so a rematch starts at zero with nothing on screen. */
   reset(): void
   setReducedMotion(reduced: boolean): void
@@ -108,15 +138,23 @@ class ScoreHudImpl implements ScoreHud {
   private readonly meterEl: HTMLElement
   private readonly eventLine: HTMLElement
   private readonly eventEl: HTMLElement
-  private readonly eventVal: HTMLElement
   private readonly popWrap: HTMLElement
+  /** The right-hand running-total panel, and the digits inside it. */
+  private readonly totalRoot: HTMLElement
+  private readonly totalEl: HTMLElement
   private readonly pops: Pop[] = []
 
-  /** The number actually on screen. Chases `target`. */
+  /** The running total on screen, right-hand panel. Chases `target`. */
   private shown = 0
   private target = 0
+  /** The event value on screen, centre panel. Chases `eventTarget`. */
+  private shownEvent = 0
+  private eventTarget = 0
+  /** True once the race is over and both numbers are final. See settle(). */
+  private settled = false
   private reduced = false
   private lastValue = -1
+  private lastEventValue = -1
   private lastCombo = ''
   private lastRung = -1
   private visible = true
@@ -130,29 +168,32 @@ class ScoreHudImpl implements ScoreHud {
 
     const stack = div('sg-score__stack', this.root)
 
-    // Line one: the total, and the multiplier on the same baseline beside it.
-    const topLine = div('sg-score__line', stack)
-    this.valueEl = div('sg-score__value', topLine)
+    // Line one: what is happening. The label leads, because the number under
+    // it is meaningless without knowing what earned it.
+    this.eventEl = div('sg-score__event', stack)
+
+    // Line two: what it is worth, with the multiplier on the same baseline.
+    // This is now the big gold number the widget is built around -- it used to
+    // be the running total, and the total has moved to its own panel.
+    const valueLine = div('sg-score__line', stack)
+    this.valueEl = div('sg-score__value', valueLine)
     this.valueEl.textContent = '0'
-    this.comboEl = div('sg-score__combo', topLine)
+    this.comboEl = div('sg-score__combo', valueLine)
     this.comboEl.hidden = true
     div('sg-score__x', this.comboEl).textContent = '×'
     this.comboNum = div('sg-score__mult', this.comboEl)
+    this.eventLine = valueLine
 
-    // Line two: what is happening, and what it is worth.
-    const eventLine = div('sg-score__line sg-score__line--event', stack)
-    this.eventEl = div('sg-score__event', eventLine)
-    this.eventVal = div('sg-score__eventv', eventLine)
-    eventLine.hidden = true
-    this.eventLine = eventLine
-
-    // The rung meter, full width of the block and directly under both lines,
-    // so the escalation reads as belonging to the whole thing rather than to
-    // the multiplier chip alone.
+    // The rung meter, full width of the block, so the escalation reads as
+    // belonging to the whole thing rather than to the multiplier chip alone.
     const meter = div('sg-score__meter', stack)
     this.meterFill = div('sg-score__meterfill', meter)
     this.meterEl = meter
     meter.hidden = true
+
+    // The centre panel starts OFF. It is not a permanent fixture any more --
+    // it exists only while something is worth points.
+    this.root.dataset.on = '0'
 
     this.popWrap = div('sg-score__pops', this.root)
     for (let i = 0; i < POP_SLOTS; i++) {
@@ -162,26 +203,69 @@ class ScoreHudImpl implements ScoreHud {
     }
 
     host.appendChild(this.root)
+
+    // --- the running total, right-hand column -------------------------------
+    //
+    // Below the minimap and clock, which occupy x 0.889-0.990 y 0.017-0.229 at
+    // 1280x720 (measured; the same table is in styles.css). This sits under
+    // that band rather than beside it, so it never has to compete with the
+    // track ahead for the eye.
+    this.totalRoot = div('sg-total')
+    this.totalRoot.setAttribute('aria-hidden', 'true')
+    div('sg-total__k', this.totalRoot).textContent = 'SCORE'
+    this.totalEl = div('sg-total__v', this.totalRoot)
+    this.totalEl.textContent = '0'
+    host.appendChild(this.totalRoot)
+  }
+
+  /**
+   * The race is over: land on the final total and stop.
+   *
+   * Called with the value the results screen is about to print, so the last
+   * number the player watches and the number they are then shown are the same
+   * one. Without it the counter kept chasing through the ceremony and settled
+   * somewhere else, which reads as the game changing its mind about what the
+   * run was worth -- and it was ALSO hiding a real bug, because the two really
+   * were different: the finishing award landed after the capture. See
+   * `captureScoreNextFrame` in game/main.ts.
+   */
+  settle(total: number): void {
+    this.settled = true
+    this.target = total
+    this.shown = total
+    const n = Math.floor(total)
+    if (n !== this.lastValue) { this.lastValue = n; this.totalEl.textContent = GROUPED.format(n) }
+    // The centre panel has nothing live to say once the race is over.
+    this.eventHold = 0
+    this.root.dataset.on = '0'
   }
 
   setReducedMotion(reduced: boolean): void {
     this.reduced = reduced
     this.root.dataset.reduced = reduced ? '1' : '0'
+    this.totalRoot.dataset.reduced = reduced ? '1' : '0'
   }
 
   setVisible(visible: boolean): void {
     if (visible === this.visible) return
     this.visible = visible
     this.root.hidden = !visible
+    this.totalRoot.hidden = !visible
   }
 
   reset(): void {
     this.shown = 0
     this.target = 0
+    this.shownEvent = 0
+    this.eventTarget = 0
+    this.settled = false
     this.lastRung = -1
     this.lastValue = -1
+    this.lastEventValue = -1
     this.lastCombo = ''
     this.valueEl.textContent = '0'
+    this.totalEl.textContent = '0'
+    this.root.dataset.on = '0'
     this.comboEl.hidden = true
     this.meterEl.hidden = true
     this.eventLine.hidden = true
@@ -192,6 +276,9 @@ class ScoreHudImpl implements ScoreHud {
   }
 
   update(s: ScoreState, dt: number): void {
+    // Once settled, the numbers are the results screen's and nothing further
+    // may move them -- the ceremony keeps stepping the sim behind this.
+    if (this.settled) return
     this.target = s.total
 
     // --- the chase ----------------------------------------------------------
@@ -209,18 +296,18 @@ class ScoreHudImpl implements ScoreHud {
       this.shown += gap * (1 - Math.exp(-CHASE * Math.max(0, dt)))
     }
 
-    // GROUPED, like every other number in the widget. This one was not, and at
-    // 64px a seven-figure total read as an unbroken wall of digits -- the
-    // opposite of the brief, which wants the number legible WHILE it sprints.
-    // The separators also give the eye fixed landmarks, so a counter running
-    // too fast to read still shows at a glance how big it has got.
+    // GROUPED, like every other number in the widget. At 64px a seven-figure
+    // total read as an unbroken wall of digits -- the opposite of a brief that
+    // wants the number legible WHILE it sprints. The separators also give the
+    // eye fixed landmarks, so a counter running too fast to read still shows
+    // at a glance how big it has got.
     //
     // Compared as an integer rather than as a string so the format() call is
     // skipped on frames where the digits did not move.
     const n = Math.floor(this.shown)
     if (n !== this.lastValue) {
       this.lastValue = n
-      this.valueEl.textContent = GROUPED.format(n)
+      this.totalEl.textContent = GROUPED.format(n)
     }
 
     // THE TICK PULSE. A counter that only changes its digits reads as a number
@@ -235,6 +322,7 @@ class ScoreHudImpl implements ScoreHud {
     if (s.awards.length > 0 || s.rungs.length > 0) {
       this.beat ^= 1
       this.root.dataset.beat = String(this.beat)
+      this.totalRoot.dataset.beat = String(this.beat)
     }
 
     // --- the combo ----------------------------------------------------------
@@ -252,24 +340,44 @@ class ScoreHudImpl implements ScoreHud {
       }
     }
 
-    // --- line two -----------------------------------------------------------
-    // While sliding it is the slide's own running tally, which is the readable
-    // half of the information the blurring total carries. Off the slide it
-    // holds the last award for a beat, so the row is never empty mid-race.
+    // --- the event, which is the whole of the centre panel ------------------
+    //
+    // While sliding this is the slide's own running tally -- the figure that
+    // decides whether to hold it one beat longer. Off the slide it is the last
+    // award, held for EVENT_HOLD so the payoff can actually be read, and then
+    // the panel goes away entirely rather than sitting there showing a stale
+    // number. `data-on` drives the fade; the CSS owns the timing.
     const hot = s.drifting && s.driftRate > 0
     if (hot) {
       this.setEvent(DRIFT_LABEL[Math.max(0, Math.min(DRIFT_LABEL.length - 1, s.driftTier + 1))],
         s.driftBanked)
       this.eventHold = EVENT_HOLD
     } else if (s.awards.length > 0) {
-      const a = s.awards[s.awards.length - 1]
-      this.setEvent(a.label, a.points)
+      // The biggest of this frame's awards, not the last one. Two events can
+      // land on one frame -- a chain and the release that started it -- and
+      // showing whichever happened to be pushed second understates the moment.
+      let best = s.awards[0]
+      for (const a of s.awards) if (a.points > best.points) best = a
+      this.setEvent(best.label, best.points)
       this.eventHold = EVENT_HOLD
     } else if (this.eventHold > 0) {
       this.eventHold -= dt
     }
+
+    // The event number chases too. During a slide `driftBanked` is climbing
+    // every frame, so this is the counter that actually sprints now.
+    const gapE = this.eventTarget - this.shownEvent
+    if (Math.abs(gapE) <= SNAP || this.reduced) this.shownEvent = this.eventTarget
+    else this.shownEvent += gapE * (1 - Math.exp(-CHASE * Math.max(0, dt)))
+    const ne = Math.floor(this.shownEvent)
+    if (ne !== this.lastEventValue) {
+      this.lastEventValue = ne
+      this.valueEl.textContent = GROUPED.format(ne)
+    }
+
     const showEvent = hot || this.eventHold > 0
-    if (this.eventLine.hidden === showEvent) this.eventLine.hidden = !showEvent
+    const onAttr = showEvent ? '1' : '0'
+    if (this.root.dataset.on !== onAttr) this.root.dataset.on = onAttr
 
     const hotAttr = hot ? '1' : '0'
     if (this.root.dataset.hot !== hotAttr) this.root.dataset.hot = hotAttr
@@ -288,13 +396,22 @@ class ScoreHudImpl implements ScoreHud {
     }
   }
 
-  /** Line two, written only when it actually changes. */
+  /**
+   * Point the centre panel at an event.
+   *
+   * The chase restarts from zero whenever the LABEL changes, not whenever the
+   * value does: a new event counting up from the previous event's total would
+   * read as one continuous number, which is the thing this split exists to
+   * stop. Within one event the value only climbs, so the chase carries.
+   */
   private setEvent(label: string, value: number): void {
-    const key = label + '|' + value
-    if (key === this.lastEvent) return
-    this.lastEvent = key
-    this.eventEl.textContent = label
-    this.eventVal.textContent = value.toLocaleString()
+    if (label !== this.lastEvent) {
+      this.lastEvent = label
+      this.eventEl.textContent = label
+      this.shownEvent = 0
+      this.lastEventValue = -1
+    }
+    this.eventTarget = value
   }
 
   /** Show one receipt. Oldest slot is recycled when all are busy. */
@@ -312,6 +429,7 @@ class ScoreHudImpl implements ScoreHud {
   }
 
   dispose(): void {
+    if (this.totalRoot.parentNode) this.totalRoot.parentNode.removeChild(this.totalRoot)
     this.root.remove()
   }
 }

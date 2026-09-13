@@ -105,9 +105,13 @@ export class Game {
   /** The finished run, held between the flag and the results screen. */
   private lastScore = 0
   private lastBestCombo = 1
+  /** Set by onLocalFinish; consumed by the next scoring frame. See there. */
+  private captureScoreNextFrame = false
   private readonly audio: AudioSystem = createAudio()
   /** Last countdown integer spoken, so a beep fires once per number. */
   private lastCount = -1
+  /** True once the countdown has been seen, so the GO can fire when it ends. */
+  private goArmed = false
   /** Last lap the music was told about, so the swap happens once. */
   private lastMusicLap = -1
   private frontEnd: FrontEnd
@@ -642,6 +646,7 @@ export class Game {
     this.cheer.reset()
     this.cheer.setLevel(this.calloutLevel)
     this.scorer.reset()
+    this.captureScoreNextFrame = false
     this.scoreHud.reset()
     this.lastScore = 0
     this.lastBestCombo = 1
@@ -651,6 +656,7 @@ export class Game {
     this.tools.hidden = false
     this.audio.endRace()
     this.lastCount = -1
+    this.goArmed = false
     this.lastMusicLap = -1
     this.audio.music(this.track.def.id, false)
     this.phase = 'racing'
@@ -726,12 +732,22 @@ export class Game {
     this.input.setPadsVisible(false)
     this.tools.hidden = true
     this.cheer.reset()
-    // Captured HERE rather than on the results screen: the ceremony runs the
-    // remaining cars to the flag, and settleRace() can fast-forward the sim,
-    // so by the time the results panel appears the scorer has seen a stretch of
-    // race the player did not drive. This is the last frame that is theirs.
-    this.lastScore = this.scorer.score
-    this.lastBestCombo = this.scorer.bestCombo
+    // ARMED HERE, TAKEN ONE SCORING FRAME LATER. Not the same thing.
+    //
+    // Capturing on this line was wrong, and wrong by the largest award in the
+    // game. `onLocalFinish` runs on the sim's finish, BEFORE the render-side
+    // scorer has consumed that frame's `local.events` -- and `trackPlace`, the
+    // finishing bonus, is in that list. Measured on a real race: the scorer
+    // read 76,590 and the results panel printed 75,740, exactly the 850 of an
+    // eighth-place finish. First place was losing 6,000.
+    //
+    // The reason the capture is not simply deferred to the results screen is
+    // unchanged and still right: the ceremony runs the remaining cars to the
+    // flag and settleRace() can fast-forward the sim, so by the time the panel
+    // appears the scorer may have seen a stretch of race the player did not
+    // drive. So it is taken at the END of the next scorer.frame() instead --
+    // late enough to include the flag, early enough to exclude the ceremony.
+    this.captureScoreNextFrame = true
     // Victory or completion, by position. Here rather than off the `finish`
     // EVENT because this function is already the one place that runs exactly
     // once on the frame the local racer takes the flag -- driving it from the
@@ -1116,8 +1132,24 @@ export class Game {
           this.lastCount = n
           if (n > 0 && n <= 3) this.audio.cue('countdown')
         }
-      } else if (this.lastCount > 0) {
-        // The count reached zero by the phase changing, not by counting down.
+        // Armed by ever having BEEN in the countdown, not by the counter still
+        // reading above zero.
+        this.goArmed = true
+      } else if (this.goArmed) {
+        // THE GO HAD NEVER PLAYED. NOT ONCE.
+        //
+        // This used to be `else if (this.lastCount > 0)`, and `lastCount`
+        // cannot be above zero by the time it is tested: `n` is
+        // `ceil(countdown - 0.6)`, so it reaches 0 about six tenths of a second
+        // BEFORE the phase changes, while still inside the branch above, and
+        // sets lastCount to 0 on the way past. By the time the phase actually
+        // flips, the guard is already false.
+        //
+        // Measured over a full race: `countdown` fired three times and
+        // `countdownGo` fired zero. It was silent with the synth too -- this is
+        // not something the sound pack broke, it is something the sound pack
+        // made audible by making everything else louder.
+        this.goArmed = false
         this.lastCount = 0
         this.audio.cue('countdownGo')
       }
@@ -1222,6 +1254,17 @@ export class Game {
         const sc = this.scorer.frame(st, local, local.events)
         for (const rung of sc.rungs) this.cheer.comboRung(rung)
         this.scoreHud.update(sc, dt)
+        // AFTER frame(), so the finishing award is in. See onLocalFinish.
+        if (this.captureScoreNextFrame) {
+          this.captureScoreNextFrame = false
+          this.lastScore = this.scorer.score
+          this.lastBestCombo = this.scorer.bestCombo
+          // And the counter stops here too, so the last number the player
+          // watches is the number the results screen prints. It used to keep
+          // chasing through the ceremony and land on a different total, which
+          // reads as the game changing its mind about what the run was worth.
+          this.scoreHud.settle(this.lastScore)
+        }
       }
       this.scoreHud.setVisible(this.phase === 'racing' || this.phase === 'ceremony')
       // The attract screen has no HUD -- it is display:none -- so updating it

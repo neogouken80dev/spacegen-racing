@@ -3457,6 +3457,107 @@
   font-family: var(--sg-display);
   /* Hue of the current combo rung. Neutral until a combo exists. */
   --sc: var(--sg-ink);
+
+  /* NOT A PERMANENT FIXTURE.
+     This block exists only while something is worth points: it appears on an
+     event, holds for a couple of seconds after that event closes so the payoff
+     can be read, then goes. Empty is the feature -- an element that is only
+     ever there when it means something is what makes it mean something.
+     `data-on` is written by scoreHud.ts; the timing lives here. */
+  opacity: 0;
+  transition: opacity 520ms ease-out, transform 520ms ease-out;
+  transform: translateX(-50%) scale(0.97);
+}
+
+.sg-score[data-on="1"] {
+  opacity: 1;
+  /* Faster in than out: an event should ARRIVE and then linger, not drift into
+     view at the same rate it leaves. */
+  transition: opacity 110ms ease-out, transform 140ms cubic-bezier(0.16, 0.88, 0.3, 1);
+  transform: translateX(-50%) scale(1);
+}
+
+.sg-score[data-reduced="1"] {
+  transition: opacity 120ms linear;
+  transform: translateX(-50%);
+}
+
+/* ===========================================================================
+   THE RUNNING TOTAL — right column, under the minimap.
+
+   Reference information, not a moment. It answers "how am I doing", it is
+   always true, and it must never compete with the centre panel, which is the
+   thing that is supposed to catch the eye. So: smaller, dimmer, out of the
+   racing line, and no entrance of its own.
+
+   Placed below the minimap + clock band, measured at 1280x720 during a race as
+   x 0.889-0.990 y 0.017-0.229. Starting at 25% clears it at every width.
+   =========================================================================== */
+.sg-total {
+  position: absolute;
+  right: calc(clamp(10px, 1.6vw, 22px) + var(--sg-sar));
+  top: 25%;
+  text-align: right;
+  pointer-events: none;
+  z-index: 2;
+  font-family: var(--sg-display);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.sg-total__k {
+  font-size: clamp(8px, 1.1vw, 11px);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.24em;
+  color: var(--sg-dim);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+}
+
+.sg-total__v {
+  font-size: clamp(18px, 2.6vw, 30px);
+  font-weight: 800;
+  line-height: 1;
+  font-style: italic;
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-ink);
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.9),
+    0 0 4px rgba(0, 0, 0, 0.8);
+  will-change: transform;
+}
+
+/* A small flinch when it is paid.
+   An ANIMATION, not a transform pair: `[data-beat="0"] .v { scale(1.06) }`
+   plus a lower-specificity `.v { scale(1) }` resting rule does not flinch, it
+   sticks at 1.06 forever, because the attribute selector always wins. Two
+   alternating keyframe names because re-applying the same animation to an
+   element that never leaves the tree does not restart it -- the same reason
+   cheer.ts flips its beat. */
+@keyframes sg-total-beat-a {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.075); }
+  100% { transform: scale(1); }
+}
+@keyframes sg-total-beat-b {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.075); }
+  100% { transform: scale(1); }
+}
+.sg-total[data-beat="0"] .sg-total__v { animation: sg-total-beat-a 190ms ease-out 1; }
+.sg-total[data-beat="1"] .sg-total__v { animation: sg-total-beat-b 190ms ease-out 1; }
+
+/* The player's own reduced-motion choice, pushed in the same way the rest of
+   the HUD receives it. The digits still change; they just do not bounce. */
+.sg-score[data-reduced="1"] ~ .sg-total .sg-total__v,
+.sg-total[data-reduced="1"] .sg-total__v { animation: none; }
+
+/* Landscape phones have no vertical room to spare under the minimap. */
+@media (max-height: 460px) {
+  .sg-total { top: 30%; }
+  .sg-total__v { font-size: clamp(15px, 2.2vw, 22px); }
 }
 
 .sg-score__stack {
