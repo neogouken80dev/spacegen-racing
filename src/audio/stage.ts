@@ -39,6 +39,15 @@ import type {
 
 type Ctx = AudioContext
 
+/**
+ * The engine loop, shared by every car. Set once the buffer has decoded.
+ *
+ * Module-level rather than per-stage because there is exactly one of them and
+ * the stage is rebuilt on a device change; re-fetching it then would restart
+ * every engine in the field mid-race.
+ */
+const ENGINE_URL = 'audio/sfx/engine.mp3'
+
 /** A running sustained voice: noise through a filter, gain driven per frame. */
 interface Sustain {
   src: AudioBufferSourceNode
@@ -55,6 +64,14 @@ interface Engine {
   noiseGain: GainNode
   gain: GainNode
   pan: PannerNode | null
+  /**
+   * The sampled core, when the engine loop had decoded by the time this car's
+   * voice was built. Null means this voice is running on the oscillators, and
+   * both paths stay valid for the life of the voice -- a car that started
+   * before the fetch landed keeps its oscillators rather than being rebuilt
+   * mid-race, which would be an audible click on a sound that never stops.
+   */
+  loopSrc: AudioBufferSourceNode | null
 }
 
 /**
@@ -85,6 +102,8 @@ class WebAudioStage implements AudioStage {
   private vol: Volumes
   private readonly sustains = new Map<ScrapeId, Sustain>()
   private readonly engines = new Map<number, Engine>()
+  /** Base rate the engine sample was recorded at, relative to its own pitch. */
+  private static readonly ENGINE_BASE_RATE = 0.62
   private music: { src: AudioBufferSourceNode; gain: GainNode; url: string } | null = null
   private readonly buffers = new Map<string, AudioBuffer | null>()
   /** Trimmed loop points per URL. See findLoopPoints. */
@@ -201,7 +220,10 @@ class WebAudioStage implements AudioStage {
     if (this.disposed || this.ctx.state !== 'running') return
     const dest = def.bus === 'music' ? this.busMusic : def.bus === 'vo' ? this.busVo : this.busSfx
     const out = this.ctx.createGain()
-    out.gain.value = req.gain
+    // The planner's gain carries distance and event weight; the catalogue's
+    // `level` carries the mix. A synth entry has no level and keeps the gain
+    // inside its own recipe, so this multiplies by 1 there.
+    out.gain.value = req.gain * (def.level ?? 1)
     if (req.at) {
       const p = this.panner(req.at)
       out.connect(p)
@@ -271,9 +293,34 @@ class WebAudioStage implements AudioStage {
     cleanup(osc, harm ? [env, out] : [env, out])
   }
 
-  private playFile(url: string, out: GainNode, rate: number): void {
+  /**
+   * @param retry guards the recursion below: one attempt after the load lands,
+   *   never a loop.
+   */
+  private playFile(url: string, out: GainNode, rate: number, retry = true): void {
     const buf = this.buffers.get(url)
-    if (buf === undefined) { void this.load(url); return }   // arrives next time
+    if (buf === undefined) {
+      // NOT SIMPLY "ARRIVES NEXT TIME".
+      //
+      // That was the original behaviour and it means the FIRST play of every
+      // recorded sound in the game is silent -- the first drift entry, the
+      // first boost, the first countdown beep of a session. AudioSystem
+      // preloads the whole pack on unlock, which closes most of the window,
+      // but a cue fired in the same tick as the gesture still beats the fetch.
+      // Measured: tools/probe-audio.mjs reported `oneShot 0` -- a triggered
+      // sound producing literal silence -- against a working boost in the same
+      // run, which is exactly what a race looks like from the outside.
+      //
+      // So play it when it arrives, once. This is the same fix, for the same
+      // reason, as the one `sting()` carries a few methods down.
+      if (!retry) return
+      void this.load(url).then(() => {
+        if (this.disposed || this.ctx.state !== 'running') return
+        if (!this.buffers.get(url)) return
+        this.playFile(url, out, rate, false)
+      })
+      return
+    }
     if (buf === null) return                                  // known missing
     const src = this.ctx.createBufferSource()
     src.buffer = buf
@@ -367,7 +414,7 @@ class WebAudioStage implements AudioStage {
         const e = live
         this.engines.delete(racerId)
         window.setTimeout(() => {
-          try { e.osc.stop(); e.sub.stop(); e.noise.stop() } catch { /* gone */ }
+          try { e.osc.stop(); e.sub.stop(); e.noise.stop(); e.loopSrc?.stop() } catch { /* gone */ }
         }, 220)
       }
       return
@@ -375,6 +422,16 @@ class WebAudioStage implements AudioStage {
 
     let e = live
     if (!e) {
+      // THE SAMPLED CORE, WHEN THERE IS ONE.
+      //
+      // A rate-shifted recording of a real jet is a different object from a
+      // sawtooth at the same frequency: it has the broadband turbine wash and
+      // the irregularity that makes eight of them sound like eight engines
+      // rather than one chord. The oscillators stay as the fallback and are
+      // NOT dead code -- they are what runs in the node tests, on a device
+      // whose fetch has not landed yet, and anywhere the file is missing.
+      const buf = this.buffers.get(ENGINE_URL) ?? null
+      let loopSrc: AudioBufferSourceNode | null = null
       const osc = this.ctx.createOscillator()
       osc.type = 'sawtooth'
       const sub = this.ctx.createOscillator()
@@ -394,7 +451,19 @@ class WebAudioStage implements AudioStage {
       const gain = this.ctx.createGain()
       gain.gain.value = 0.0001
 
-      osc.connect(gain); sub.connect(gain)
+      if (buf) {
+        loopSrc = this.ctx.createBufferSource()
+        loopSrc.buffer = buf
+        loopSrc.loop = true
+        // The same trimmed loop points the music uses. An mp3 decodes with the
+        // encoder's padding attached, and looping the raw buffer puts a gap at
+        // every wrap -- on a sound that wraps twice a second, forever.
+        const lp = this.loops.get(ENGINE_URL)
+        if (lp && lp.end > lp.start) { loopSrc.loopStart = lp.start; loopSrc.loopEnd = lp.end }
+        loopSrc.connect(gain)
+      } else {
+        osc.connect(gain); sub.connect(gain)
+      }
       noise.connect(noiseFilt); noiseFilt.connect(noiseGain); noiseGain.connect(gain)
 
       let pan: PannerNode | null = null
@@ -402,7 +471,8 @@ class WebAudioStage implements AudioStage {
       else gain.connect(this.busSfx)
 
       osc.start(); sub.start(); noise.start()
-      e = { osc, sub, noise, noiseGain, gain, pan }
+      if (loopSrc) loopSrc.start()
+      e = { osc, sub, noise, noiseGain, gain, pan, loopSrc }
       this.engines.set(racerId, e)
     }
 
@@ -410,6 +480,12 @@ class WebAudioStage implements AudioStage {
     const base = 92 * v.rate
     ramp(e.osc.frequency, base, t, 0.06)
     ramp(e.sub.frequency, base * 0.5, t, 0.06)
+    // The sample carries its own pitch, so revs drive playbackRate instead of
+    // a frequency. Floored well above zero: a buffer source at a rate near 0
+    // does not go quiet, it grinds.
+    if (e.loopSrc) {
+      ramp(e.loopSrc.playbackRate, Math.max(0.25, WebAudioStage.ENGINE_BASE_RATE * v.rate), t, 0.06)
+    }
     ramp(e.gain.gain, Math.max(0.0002, v.gain * 0.16), t, 0.06)
     ramp(e.noiseGain.gain, Math.max(0.0001, (v.boost * 0.35 + v.drift * 0.45) * v.gain), t, 0.05)
     if (e.pan && v.at) {

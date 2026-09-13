@@ -107,6 +107,20 @@ export interface SynthRecipe {
 
 export interface SoundDef {
   source: SoundSource
+  /**
+   * This sound's place in the MIX, 0..1. Multiplied into the per-play gain the
+   * planner computes, which carries distance and event weight instead.
+   *
+   * It lives here rather than inside the source because it is a property of the
+   * SOUND, not of how the sound happens to be produced. It used to live in
+   * `SynthRecipe.gain`, where only the synth path could read it -- so the first
+   * pass at swapping the catalogue over to recorded files silently dropped the
+   * entire mix and left every sound playing at full bus level.
+   *
+   * Defaults to 1 when absent, which is correct for a synth entry: the recipe's
+   * own gain still applies there and this would double it.
+   */
+  level?: number
   bus: Bus
   /**
    * Minimum seconds between two plays of this id. The single most important

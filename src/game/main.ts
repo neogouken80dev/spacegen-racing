@@ -27,6 +27,7 @@ import { createPostFx, type PostFx } from '../render/postfx'
 import { createHud, type Hud } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
 import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
+import { CATALOGUE } from '../audio/catalogue'
 import { Scorer } from '../score/scorer'
 import { createScoreboard, BOARD_SIZE } from '../score/board'
 import { createRecordStore, type RecordStore } from '../score/records'
@@ -1461,5 +1462,8 @@ export function boot(): Game {
   }
   ;(window as unknown as { __GAME__: Game }).__GAME__ = game
   ;(window as unknown as { __TUNING__: typeof T }).__TUNING__ = T
+  // For tools/probe-audio.mjs, which needs to know how many recorded sounds it
+  // should be waiting for before it can tell "not loaded yet" from "silent".
+  ;(window as unknown as { __CATALOGUE__: typeof CATALOGUE }).__CATALOGUE__ = CATALOGUE
   return game
 }

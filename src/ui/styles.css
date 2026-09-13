@@ -2473,7 +2473,22 @@
 
 .sg-screen--results {
   align-items: center;
-  justify-content: center;
+  /* SAFE centring, not plain centring.
+     `justify-content: center` on a fixed-height flex column distributes the
+     overflow EQUALLY off both ends when the content is taller than the box --
+     and the top overflow of a scroll container is unreachable, because
+     scrollTop cannot go negative. Measured at 844x390 (a phone held the way
+     you actually hold a racing game): the title sat at top: -116 and the tab
+     strip at -55, both off the screen with no way to reach them, while the
+     CTAs ran off the bottom.
+     `safe center` centres while it fits and falls back to flex-start when it
+     does not, so the overflow all goes one way -- downward, where the scroll
+     below can reach it. */
+  justify-content: safe center;
+  /* And the scroll itself, as the last resort for a viewport shorter than the
+     most compact form of this screen. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: clamp(10px, 2vmin, 24px);
 }
 
@@ -2501,14 +2516,46 @@
   text-align: center;
 }
 
+/* ---------------------------------------------------------------------------
+   SHORT VIEWPORTS -- a phone held sideways, which is how a racing game is held.
+   
+   844x390 and 667x375 are the common landscape phone boxes, and at 390px of
+   height the fixed furniture on this screen (title, subtitle, tab strip, the
+   three stats, the run score, the buttons, and the gaps between them) eats
+   most of it. Everything below trims that furniture rather than the standings,
+   because the standings are the only part that can scroll: every pixel taken
+   back here is a pixel of finishing order the player can see at a glance.
+   Nothing is hidden -- this is tighter, not less.
+   --------------------------------------------------------------------------- */
+@media (max-height: 540px) {
+  .sg-screen--results {
+    gap: 6px;
+    padding-top: calc(8px + var(--sg-sat));
+    padding-bottom: calc(8px + var(--sg-sab));
+  }
+  .sg-tabpanel { gap: 6px; }
+  .sg-tabs { margin-top: 4px; padding-bottom: 3px; }
+  .sg-results__meta { gap: clamp(10px, 2.4vmin, 24px); }
+  /* The run score stays the loudest thing on the screen, just less tall. */
+  .sg-score-v { font-size: clamp(24px, 4.4vh, 34px); }
+  .sg-row { padding-top: 3px; padding-bottom: 3px; }
+}
+
 .sg-results__rows {
   display: flex;
   flex-direction: column;
   gap: 5px;
   width: min(720px, 100%);
   flex: 0 1 auto;
-  min-height: 0;
+  /* Shrinks, and scrolls what does not fit -- this is the element that gives
+     way so the title, the tabs and the buttons do not have to. */
   overflow-y: auto;
+  overscroll-behavior: contain;
+  /* But not to nothing. With everything around it set `flex: none`, an
+     extreme viewport would otherwise squeeze this to zero and the screen
+     would read as having lost the race result entirely. Two rows' worth is
+     enough to show that a list is there and can be scrolled. */
+  min-height: 96px;
 }
 
 .sg-row {
@@ -3838,6 +3885,16 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* THE SHRINK HAS TO REACH THE ROWS THROUGH HERE.
+     `.sg-results__rows` was built to absorb a short viewport -- it carries
+     `flex: 0 1 auto; min-height: 0; overflow-y: auto` and scrolls internally
+     so the buttons below it stay on screen. Wrapping it in these two panels
+     broke that: a flex item's default `min-height: auto` refuses to shrink
+     below its content, so both wrappers stood at full content height, the
+     shrink never arrived, and the whole screen grew past the viewport instead
+     of the standings list scrolling inside it. */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 /**
@@ -3859,6 +3916,10 @@
   align-items: center;
   gap: clamp(10px, 2vmin, 24px);
   width: 100%;
+  /* Same reason as .sg-tabpanels above -- this is the second link in the
+     chain, and one unbroken link is enough to stop the shrink. */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 /**

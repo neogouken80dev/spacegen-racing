@@ -105,6 +105,30 @@ const measure = await page.evaluate(async () => {
     return peak
   }
 
+  // WAIT FOR THE PACK, NOT FOR THE CLOCK.
+  //
+  // Every one-shot is a recorded file now, and `unlock()` kicks a fetch of the
+  // whole 42-file pack. Cueing 120ms later measures whether that fetch beat a
+  // stopwatch, not whether the audio path works: it reported `oneShot 0` --
+  // a hard silence failure -- for a sound that is perfectly audible half a
+  // second later, while the boost cued 400ms after it passed. Two different
+  // answers for the same code path is the tell that the probe, not the code,
+  // is the thing being measured.
+  //
+  // So block until the buffers are in, and fail if they never arrive -- which
+  // is itself the stronger assertion, because an empty pack is a real bug and
+  // the old wording could not tell it apart from a slow one.
+  const wantFiles = Object.values(window.__CATALOGUE__ ?? {})
+    .filter((d) => d.source?.kind === 'file').length
+  const ready = await (async () => {
+    for (let i = 0; i < 200; i++) {
+      const decoded = [...stage.buffers.values()].filter(Boolean).length
+      if (wantFiles > 0 && decoded >= wantFiles) return { decoded, wantFiles, waited: i * 50 }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return { decoded: [...stage.buffers.values()].filter(Boolean).length, wantFiles, waited: 10000 }
+  })()
+
   const silence = await peakOver(120)
 
   audio.setVolumes({ master: 1, sfx: 1, muted: false })
@@ -125,6 +149,7 @@ const measure = await page.evaluate(async () => {
 
   return {
     state0, after: ctx.state, sampleRate: ctx.sampleRate,
+    ready,
     silence: +silence.toFixed(5),
     oneShot: +oneShot.toFixed(5),
     boost: +boost.toFixed(5),
@@ -204,6 +229,10 @@ if (measure.err) errors.push(measure.err)
 else {
   if (measure.after !== 'running') errors.push(`context is ${measure.after}, not running`)
   // The floor is generous: this is proving a signal EXISTS, not measuring it.
+  if (measure.ready.wantFiles === 0) errors.push('the catalogue has no recorded sounds at all')
+  if (measure.ready.decoded < measure.ready.wantFiles) {
+    errors.push(`only ${measure.ready.decoded}/${measure.ready.wantFiles} sounds decoded after ${measure.ready.waited}ms`)
+  }
   if (measure.oneShot < 0.01) errors.push(`a one-shot produced peak ${measure.oneShot} -- silence`)
   if (measure.boost < 0.01) errors.push(`the boost produced peak ${measure.boost} -- silence`)
   if (measure.muted > measure.oneShot * 0.2) {

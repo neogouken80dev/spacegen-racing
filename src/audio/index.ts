@@ -98,6 +98,17 @@ export const STING_VICTORY = 'audio/sting/victory.mp3'
 export const STING_FINISH = 'audio/sting/finish.mp3'
 
 /**
+ * The engine loop, shared by all eight cars.
+ *
+ * One buffer, eight sources, each with its own playbackRate driven by that
+ * car's revs. The oscillator engine it replaces is still there and still runs
+ * whenever this buffer is missing -- see `AudioStage.setEngine`. That is not
+ * belt-and-braces: it is the only thing that keeps the engine audible in the
+ * node tests and on the first frames of a race before the fetch lands.
+ */
+export const ENGINE_LOOP = 'audio/sfx/engine.mp3'
+
+/**
  * TWO SWITCHES, BECAUSE THE ASSETS ARRIVED SEPARATELY.
  *
  * A URL that does not exist is handled correctly -- a failed fetch is
@@ -181,7 +192,37 @@ class AudioImpl implements AudioSystem {
   get available(): boolean { return this.stage !== null }
   get volumes(): Volumes { return this.vol }
 
-  unlock(): void { this.stage?.unlock() }
+  unlock(): void {
+    this.stage?.unlock()
+    this.preloadSfx()
+  }
+
+  /**
+   * Fetch every recorded sound in the catalogue, once, on unlock.
+   *
+   * `playFile` loads on demand and returns SILENTLY if the buffer has not
+   * arrived -- correct for a sound that may never exist, and wrong as a
+   * shipping default now that all 42 of them do, because it means the FIRST
+   * play of every sound in the game is missing. That is the same failure the
+   * finish sting had before it learned to retry after its load, and it is
+   * worse here: the first drift entry, the first boost and the first countdown
+   * beep of a session are exactly the ones a player notices.
+   *
+   * The whole pack is about 340 kB, so this is one small fetch burst at the
+   * first user gesture rather than something worth staging.
+   */
+  private preloadSfx(): void {
+    const stage = this.stage
+    if (!stage || this.sfxPreloaded) return
+    this.sfxPreloaded = true
+    const urls: string[] = []
+    for (const id of Object.keys(CATALOGUE) as SoundId[]) {
+      const src = CATALOGUE[id].source
+      if (src.kind === 'file') urls.push(src.url)
+    }
+    if (ENGINE_LOOP) urls.push(ENGINE_LOOP)
+    stage.preload(urls)
+  }
 
   setVolumes(v: Partial<Volumes>): void {
     this.vol = { ...this.vol, ...v }
@@ -282,6 +323,8 @@ class AudioImpl implements AudioSystem {
     this.setBed(null, 0.35)
     stage.sting(position === 1 ? STING_VICTORY : STING_FINISH)
   }
+
+  private sfxPreloaded = false
 
   preloadTrack(trackId: string | null): void {
     const stage = this.stage

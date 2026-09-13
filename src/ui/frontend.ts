@@ -502,6 +502,8 @@ class FrontEndImpl implements FrontEnd {
   private readonly previews = new Map<string, TrackPreview>()
 
   private readonly rows: ResultRow[] = []
+  /** The standings scroller. Short viewports shrink it and scroll inside it. */
+  private rowHost!: HTMLElement
   private readonly resTitle: HTMLElement
   private readonly resWhere: HTMLElement
   private readonly resTotal: HTMLElement
@@ -766,6 +768,7 @@ class FrontEndImpl implements FrontEnd {
     const tabGlobal = this.tabs.panel('global')
 
     const rowHost = el('div', 'sg-results__rows', tabResults)
+    this.rowHost = rowHost
     for (let i = 0; i < MAX_ROWS; i++) {
       const row = el('div', 'sg-row', rowHost)
       const pos = el('span', 'sg-row__p', row, '-')
@@ -1149,6 +1152,21 @@ class FrontEndImpl implements FrontEnd {
       row.root.style.animation = ''
     }
 
+    // YOUR ROW, ON SCREEN, WITHOUT SCROLLING FOR IT.
+    //
+    // On a short viewport the standings list is the element that gives way --
+    // it shrinks and scrolls so the title, the tabs and the buttons stay put.
+    // At 844x390, a phone held the way people actually hold a racing game,
+    // that leaves room for about two and a half rows out of eight, and the
+    // list opens at the top. Finishing 8th then means the one row the player
+    // actually cares about is the one they cannot see.
+    //
+    // Centred rather than merely scrolled into view, so the finishing order
+    // either side of them is visible too -- a position means nothing without
+    // the cars it was taken from. `scrollTop` is clamped by the browser, so
+    // this is a no-op when everything already fits.
+    const localRow = local ? this.rows[order.findIndex((r) => r.id === localId)] : null
+
     const def = TRACKS.find((t) => t.id === this.trackId)
     const c = copyFor(this.trackId)
     this.resWhere.textContent = def
@@ -1181,6 +1199,23 @@ class FrontEndImpl implements FrontEnd {
     this.tabs.select('results')
 
     this.show('results')
+
+    // AFTER show(), and a frame later. The screen is `display: none` until
+    // show() runs, so a hidden element reports clientHeight 0 and offsetTop 0
+    // and the arithmetic below silently resolves to "scroll to the top" --
+    // which is exactly what it did on the first attempt, on every viewport.
+    if (localRow && !localRow.root.hidden) {
+      requestAnimationFrame(() => {
+        const host = this.rowHost
+        const row = localRow.root
+        if (!host || !row || host.clientHeight <= 0) return
+        // Centred rather than merely scrolled into view, so the finishing
+        // order either side is visible too -- a position means nothing
+        // without the cars it was taken from. scrollTop is clamped by the
+        // browser, so this is a no-op wherever everything already fits.
+        host.scrollTop = Math.max(0, row.offsetTop - (host.clientHeight - row.offsetHeight) / 2)
+      })
+    }
   }
 
   dispose(): void {
