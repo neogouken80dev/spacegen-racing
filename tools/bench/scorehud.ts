@@ -21,10 +21,16 @@ const q = new URLSearchParams(location.search)
 const host = document.getElementById('host') as HTMLElement
 document.getElementById('bg')!.className = `bench bench--${q.get('bg') ?? 'dark'}`
 
-const hud = createScoreHud(host)
-hud.setVisible(true)
+// The same wrapper game/main.ts builds: the callout and the score panel share
+// one centred stack so they animate as a single block. The bench has to build
+// it too, or it is measuring a layout the game does not have.
+const moment = document.createElement('div')
+moment.className = 'sg-moment'
+host.appendChild(moment)
 
-const cheer = createCheer(host)
+const cheer = createCheer(moment)
+const hud = createScoreHud(moment, host)
+hud.setVisible(true)
 
 function award(kind: ScoreAward['kind'], label: string, base: number, combo: number): ScoreAward {
   return { kind, label, base, combo, points: Math.round(base * combo) }
@@ -67,9 +73,9 @@ const SCENES: Record<string, { state: Partial<ScoreState>; rung?: number }> = {
   },
   // Every rung of the callout ladder, one per bench load, so the copy and the
   // colour ramp can be judged against each other rather than one at a time.
-  callout0: { state: { total: 24000, combo: 2, comboProgress: 0.3, drifting: true, driftBanked: 120, driftTier: 0, awards: [] }, rung: 0 },
-  callout2: { state: { total: 96000, combo: 5, comboProgress: 0.5, drifting: true, driftBanked: 640, driftTier: 1, awards: [] }, rung: 2 },
-  callout5: { state: { total: 742100, combo: 16, comboProgress: 0.8, drifting: true, driftBanked: 1880, driftTier: 3, awards: [] }, rung: 5 },
+  callout0: { state: { total: 24000, combo: 2, comboProgress: 0.3, drifting: true, driftRate: 600, driftBanked: 120, driftTier: 0, awards: [] }, rung: 0 },
+  callout2: { state: { total: 96000, combo: 5, comboProgress: 0.5, drifting: true, driftRate: 1800, driftBanked: 640, driftTier: 1, awards: [] }, rung: 2 },
+  callout5: { state: { total: 742100, combo: 16, comboProgress: 0.8, drifting: true, driftRate: 6400, driftBanked: 1880, driftTier: 3, awards: [] }, rung: 5 },
 
   // The quiet state -- what most of a lap looks like.
   idle: {

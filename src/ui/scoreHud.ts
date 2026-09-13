@@ -162,7 +162,16 @@ class ScoreHudImpl implements ScoreHud {
   private beat = 0
   private lastEvent = ''
 
-  constructor(host: HTMLElement) {
+  /**
+   * @param host      the shared centre-screen stack (`.sg-moment`), which the
+   *                  callout also lives in so the two animate as one block.
+   * @param totalHost where the running total goes. Deliberately NOT the same
+   *                  parent: the centre stack is a centred flow container, and
+   *                  an absolutely-positioned right-hand panel inside it would
+   *                  be positioned against that container rather than against
+   *                  the screen.
+   */
+  constructor(host: HTMLElement, totalHost: HTMLElement = host) {
     this.root = div('sg-score')
     this.root.setAttribute('aria-hidden', 'true')
 
@@ -215,7 +224,7 @@ class ScoreHudImpl implements ScoreHud {
     div('sg-total__k', this.totalRoot).textContent = 'SCORE'
     this.totalEl = div('sg-total__v', this.totalRoot)
     this.totalEl.textContent = '0'
-    host.appendChild(this.totalRoot)
+    totalHost.appendChild(this.totalRoot)
   }
 
   /**
@@ -319,9 +328,13 @@ class ScoreHudImpl implements ScoreHud {
     // Two alternating values rather than one, for the same reason cheer.ts
     // flips its beat: the element never leaves the tree, so re-applying the
     // same attribute would not restart the animation.
+    // The TOTAL flinches whenever it is paid -- that is a small nudge on one
+    // number and reads as the score being earned. The centre block does NOT:
+    // drift-hold pays every single frame, so stamping the whole stack on every
+    // award would be a continuous vibration rather than an entrance. It stamps
+    // when a new event ARRIVES, which setEvent decides.
     if (s.awards.length > 0 || s.rungs.length > 0) {
       this.beat ^= 1
-      this.root.dataset.beat = String(this.beat)
       this.totalRoot.dataset.beat = String(this.beat)
     }
 
@@ -333,11 +346,15 @@ class ScoreHudImpl implements ScoreHud {
       const c = s.combo >= 10 ? s.combo.toFixed(0) : s.combo.toFixed(1)
       if (c !== this.lastCombo) { this.lastCombo = c; this.comboNum.textContent = c }
       this.meterFill.style.transform = `scaleX(${s.comboProgress.toFixed(3)})`
-      const rung = rungIndex(s.combo)
-      if (rung !== this.lastRung) {
-        this.lastRung = rung
-        this.root.dataset.rung = String(rung)
-      }
+    }
+    // OUTSIDE the combo branch. The rung drives the whole escalation ladder --
+    // size, hue, stamp amplitude, the top-rung fringe -- so leaving it unwritten
+    // at combo 1 froze the block at whatever the last slide had reached, and
+    // the next event arrived wearing the previous one's clothes.
+    const rung = rungIndex(s.combo)
+    if (rung !== this.lastRung) {
+      this.lastRung = rung
+      this.root.dataset.rung = String(rung)
     }
 
     // --- the event, which is the whole of the centre panel ------------------
@@ -410,6 +427,10 @@ class ScoreHudImpl implements ScoreHud {
       this.eventEl.textContent = label
       this.shownEvent = 0
       this.lastEventValue = -1
+      // A new moment: stamp it. Alternating, because re-applying the same
+      // animation to an element that never leaves the tree does not restart it.
+      this.beat ^= 1
+      this.root.dataset.beat = String(this.beat)
     }
     this.eventTarget = value
   }
@@ -440,6 +461,6 @@ function rungIndex(combo: number): number {
   return r
 }
 
-export function createScoreHud(host: HTMLElement): ScoreHud {
-  return new ScoreHudImpl(host)
+export function createScoreHud(host: HTMLElement, totalHost?: HTMLElement): ScoreHud {
+  return new ScoreHudImpl(host, totalHost ?? host)
 }

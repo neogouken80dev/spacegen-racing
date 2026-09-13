@@ -2892,21 +2892,51 @@
    bar across the screen.
    ========================================================================== */
 
-.sg-cheer {
+/* ===========================================================================
+   THE MOMENT — one centred stack holding the score panel and the callout.
+
+   These were positioned separately at 13% and 33% and read as two unrelated
+   captions that happened to fire together. They describe ONE thing: the slide,
+   what it is worth, and how good it was. Stacking them in a single flow
+   container is what lets them share an entrance, a colour and a rhythm.
+
+   Still below the band that is already occupied. Measured at 1280x720 during a
+   race: tools buttons x 0.463-0.537 y 0.014-0.075, crosswind x 0.446-0.554
+   y 0.086-0.115. 15% clears both at every width.
+
+   The container itself never animates: it is the plain layout box the placement
+   is argued from, and everything that moves moves inside it.
+   =========================================================================== */
+.sg-moment {
   position: absolute;
   left: 50%;
-  top: 33%;
+  top: 15%;
+  transform: translateX(-50%);
+  width: min(92vw, 980px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(4px, 1.1vmin, 14px);
+  pointer-events: none;
+  text-align: center;
+  z-index: 2;
+}
+
+/* The score block leads; the callout answers under it. */
+.sg-moment > .sg-score { order: 0; }
+.sg-moment > .sg-cheer { order: 1; }
+
+.sg-cheer {
+  position: relative;
   /* The root owns POSITION and OPACITY and nothing else. Every moving part of
      the presentation lives on the two children, so the box this thing occupies
      — the number the placement is argued from — is a plain layout box that no
      animation can walk down the frame. */
-  transform: translate(-50%, -50%);
   opacity: var(--k, 0);
   pointer-events: none;
   text-align: center;
   max-width: min(84vw, 940px);
   will-change: opacity;
-  z-index: 2;
 
   /* The escalation ladder, in four numbers, all keyed off data-w below.
      --amp  how hard the entrance stamps
@@ -3421,7 +3451,6 @@
    most of the time.
    =========================================================================== */
 .sg-score {
-  position: absolute;
   /* The plate below is a ::before at z-index -1, which needs a stacking
      context of its own or it paints behind the whole HUD instead of behind
      this block. `isolation` makes one without touching the z-order. */
@@ -3434,12 +3463,9 @@
      multiplier invisible; only a screenshot found it. Starting at 13% clears
      both at every width and is still unambiguously the top of the screen.
      cheer.ts's line sits at 33%, far enough below to read as a second voice. */
-  left: 50%;
-  top: 13%;
-  transform: translateX(-50%);
+  position: relative;
   pointer-events: none;
   text-align: center;
-  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3466,7 +3492,7 @@
      `data-on` is written by scoreHud.ts; the timing lives here. */
   opacity: 0;
   transition: opacity 520ms ease-out, transform 520ms ease-out;
-  transform: translateX(-50%) scale(0.97);
+  transform: scale(0.97);
 }
 
 .sg-score[data-on="1"] {
@@ -3474,12 +3500,12 @@
   /* Faster in than out: an event should ARRIVE and then linger, not drift into
      view at the same rate it leaves. */
   transition: opacity 110ms ease-out, transform 140ms cubic-bezier(0.16, 0.88, 0.3, 1);
-  transform: translateX(-50%) scale(1);
+  transform: scale(1);
 }
 
 .sg-score[data-reduced="1"] {
   transition: opacity 120ms linear;
-  transform: translateX(-50%);
+  transform: none;
 }
 
 /* ===========================================================================
@@ -4177,6 +4203,56 @@
 .sg-score[data-rung="3"]::before,
 .sg-score[data-rung="4"]::before,
 .sg-score[data-rung="5"]::before { opacity: 1; }
+
+/* ---------------------------------------------------------------------------
+   THE SIZE RAMP, and the label's hue.
+
+   The plate, the fringe and the bars below were already here and already keyed
+   off the rung -- what was missing was the thing that reads first at a glance:
+   SIZE. A x2 event and a x16 event were the same number in the same weight,
+   so the block escalated in decoration while staying flat in presence, which
+   is why it read as a caption next to cheer.ts's lines rather than as part of
+   the same moment.
+
+   The digits keep their gold at every rung while the LABEL takes the rung's
+   hue. One of the two has to hold still or the block has no anchor, and the
+   number is the half being read.
+   --------------------------------------------------------------------------- */
+.sg-score[data-rung="2"] .sg-score__value { font-size: clamp(38px, 7.4vw, 72px); }
+.sg-score[data-rung="3"] .sg-score__value { font-size: clamp(42px, 8.2vw, 80px); }
+.sg-score[data-rung="4"] .sg-score__value { font-size: clamp(46px, 9.0vw, 88px); }
+.sg-score[data-rung="5"] .sg-score__value { font-size: clamp(50px, 9.8vw, 96px); }
+
+.sg-score__event { color: var(--sc); }
+.sg-score[data-rung="3"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
+.sg-score[data-rung="4"] .sg-score__event { font-size: clamp(16px, 3.0vw, 28px); }
+.sg-score[data-rung="5"] .sg-score__event { font-size: clamp(17px, 3.3vw, 31px); letter-spacing: 0.2em; }
+
+/* THE STAMP. The entrance cheer.ts's lines have and this block did not.
+   `--amp` climbs with the rung so a big event lands harder. Two alternating
+   keyframe names because re-applying one animation to an element that never
+   leaves the tree does not restart it -- the same reason cheer.ts flips its
+   beat. Fired on a NEW EVENT, never on an award: drift-hold pays every frame,
+   and stamping on every payment is a vibration, not an entrance. */
+.sg-score { --amp: 0.5; }
+.sg-score[data-rung="2"] { --amp: 0.75; }
+.sg-score[data-rung="3"] { --amp: 1; }
+.sg-score[data-rung="4"] { --amp: 1.25; }
+.sg-score[data-rung="5"] { --amp: 1.5; }
+
+@keyframes sgScoreStampA {
+  0%   { transform: scale(calc(1 + 0.16 * var(--amp))); }
+  55%  { transform: scale(calc(1 - 0.03 * var(--amp))); }
+  100% { transform: scale(1); }
+}
+@keyframes sgScoreStampB {
+  0%   { transform: scale(calc(1 + 0.16 * var(--amp))); }
+  55%  { transform: scale(calc(1 - 0.03 * var(--amp))); }
+  100% { transform: scale(1); }
+}
+.sg-score[data-beat="0"] .sg-score__stack { animation: sgScoreStampA 240ms cubic-bezier(0.16, 0.88, 0.3, 1) 1; }
+.sg-score[data-beat="1"] .sg-score__stack { animation: sgScoreStampB 240ms cubic-bezier(0.16, 0.88, 0.3, 1) 1; }
+.sg-score[data-reduced="1"] .sg-score__stack { animation: none; }
 
 /* THE FRINGE, from rung 3. Two coloured offsets on the glyphs -- static, so it
    is a LOOK rather than a movement and survives reduced motion untouched. The

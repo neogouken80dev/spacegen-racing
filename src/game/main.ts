@@ -213,10 +213,23 @@ export class Game {
 
     this.hud = createHud(container)
     this.hud.root.style.display = 'none'
-    // Inside the HUD root so it is shown, hidden and disposed with it, and so
-    // the ceremony's `is-ceremony` rule can put it away in one selector.
-    this.cheer = createCheer(this.hud.root)
-    this.scoreHud = createScoreHud(this.hud.root)
+    // ONE BLOCK, NOT TWO.
+    //
+    // The score panel and the callout used to be independently positioned --
+    // 13% and 33% -- and read as two unrelated captions that happened to fire
+    // at the same time. They are describing ONE moment: the slide, what it is
+    // worth, and how good it was. So they now share a flow container and stack
+    // as a single unit, which is also what lets them share an entrance and a
+    // colour instead of each having their own.
+    //
+    // Inside the HUD root so all three are shown, hidden and disposed with it,
+    // and so the ceremony's `is-ceremony` rule still puts them away in one
+    // selector.
+    const moment = document.createElement('div')
+    moment.className = 'sg-moment'
+    this.hud.root.appendChild(moment)
+    this.cheer = createCheer(moment)
+    this.scoreHud = createScoreHud(moment, this.hud.root)
     this.hud.skipButton.addEventListener('click', (e) => {
       e.preventDefault()
       if (this.phase === 'ceremony') this.finishRace()

@@ -62,8 +62,13 @@ describe('styles.css', () => {
     // The HUD sits directly above cheer.ts's callouts, which are set in
     // --sg-display. When .sg-score inherited .sg-hud's --sg-ui instead, the
     // loudest element in the game was set in the settings-menu face.
-    const block = /\.sg-score\s*\{([\s\S]*?)\}/.exec(CLEAN)
-    expect(block, '.sg-score rule not found').toBeTruthy()
+    // ANCHORED TO THE START OF A LINE, and to a selector that is exactly
+    // `.sg-score`. The first version matched the first `.sg-score {` anywhere
+    // in the file, which silently became `.sg-moment > .sg-score { order: 0 }`
+    // the moment the panel was put inside a flow container -- a rule with no
+    // font-family in it, so the test failed on a stylesheet that was correct.
+    const block = /^\.sg-score\s*\{([\s\S]*?)^\}/m.exec(CLEAN)
+    expect(block, 'the bare `.sg-score` rule was not found').toBeTruthy()
     expect(block![1]).toMatch(/font-family:\s*var\(--sg-display\)/)
   })
 })
