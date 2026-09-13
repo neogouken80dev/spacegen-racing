@@ -53,6 +53,18 @@ const POP_SLOTS = 4
 const EVENT_HOLD = 1.4
 
 /**
+ * One reused formatter for the running total.
+ *
+ * The total is the fastest-changing text in the game -- during a deep combo it
+ * is a different string every frame -- and `Number.prototype.toLocaleString`
+ * builds a fresh Intl.NumberFormat on every call. Constructing it once and
+ * calling `.format()` is the same output for a fraction of the cost, and the
+ * integer comparison below means it is only reached when the digits actually
+ * moved.
+ */
+const GROUPED = new Intl.NumberFormat('en-US')
+
+/**
  * The slide's name, by tier, escalating the way the reference does.
  *
  * Index is `driftTier + 1`, so -1 (charging, no rung banked yet) is a plain
@@ -104,11 +116,12 @@ class ScoreHudImpl implements ScoreHud {
   private shown = 0
   private target = 0
   private reduced = false
-  private lastText = ''
+  private lastValue = -1
   private lastCombo = ''
   private lastRung = -1
   private visible = true
   private eventHold = 0
+  private beat = 0
   private lastEvent = ''
 
   constructor(host: HTMLElement) {
@@ -166,7 +179,7 @@ class ScoreHudImpl implements ScoreHud {
     this.shown = 0
     this.target = 0
     this.lastRung = -1
-    this.lastText = ''
+    this.lastValue = -1
     this.lastCombo = ''
     this.valueEl.textContent = '0'
     this.comboEl.hidden = true
@@ -196,10 +209,32 @@ class ScoreHudImpl implements ScoreHud {
       this.shown += gap * (1 - Math.exp(-CHASE * Math.max(0, dt)))
     }
 
-    const text = String(Math.floor(this.shown))
-    if (text !== this.lastText) {
-      this.lastText = text
-      this.valueEl.textContent = text
+    // GROUPED, like every other number in the widget. This one was not, and at
+    // 64px a seven-figure total read as an unbroken wall of digits -- the
+    // opposite of the brief, which wants the number legible WHILE it sprints.
+    // The separators also give the eye fixed landmarks, so a counter running
+    // too fast to read still shows at a glance how big it has got.
+    //
+    // Compared as an integer rather than as a string so the format() call is
+    // skipped on frames where the digits did not move.
+    const n = Math.floor(this.shown)
+    if (n !== this.lastValue) {
+      this.lastValue = n
+      this.valueEl.textContent = GROUPED.format(n)
+    }
+
+    // THE TICK PULSE. A counter that only changes its digits reads as a number
+    // being updated; a counter that flinches every time it is paid reads as a
+    // number being EARNED, which is the whole brief. Driven off award events
+    // rather than off the digits changing, because during a slide the digits
+    // change every frame and a pulse on every frame is a vibration.
+    //
+    // Two alternating values rather than one, for the same reason cheer.ts
+    // flips its beat: the element never leaves the tree, so re-applying the
+    // same attribute would not restart the animation.
+    if (s.awards.length > 0 || s.rungs.length > 0) {
+      this.beat ^= 1
+      this.root.dataset.beat = String(this.beat)
     }
 
     // --- the combo ----------------------------------------------------------

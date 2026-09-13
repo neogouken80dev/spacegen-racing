@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>score HUD bench</title>
+  
+  <style>
+    /* A stand-in for the track behind the HUD. The widget has to survive both
+       a bright sky and a black one, so the bench offers both. */
+    html, body { height: 100%; margin: 0; }
+    body { background: #05070d; }
+    .bench { position: fixed; inset: 0; }
+    .bench--light { background: linear-gradient(#cfe4f5, #f4f7fa 60%, #dfe7ee); }
+    .bench--dark  { background: linear-gradient(#04060c, #0a1020 60%, #050a14); }
+  </style>
+</head>
+<body>
+  <div class="bench bench--dark" id="bg"></div>
+  <div id="host" style="position:fixed;inset:0;pointer-events:none"></div>
+  <script type="module" src="./scorehud.ts"></script>
+</body>
+</html>

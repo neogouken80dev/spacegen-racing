@@ -166,6 +166,17 @@ export interface Cheer {
    */
   comboRung(rung: number): void
   setLevel(level: CheerLevel): void
+  /**
+   * The PLAYER's reduced-motion choice, which is not the same as the OS one.
+   *
+   * This widget only ever read `prefers-reduced-motion`, so a player who turned
+   * motion down inside the game still got every animation here -- a gap that
+   * did not matter while the only movement was a fade, and does now that the
+   * callout has rules flying out of it. The setting is pushed in the way it is
+   * pushed to the VFX system and the score HUD rather than re-read here, so all
+   * three agree about one value.
+   */
+  setReducedMotion(reduced: boolean): void
   /** Wipe pending state between races so a rematch starts silent. */
   reset(): void
   dispose(): void
@@ -351,7 +362,7 @@ class CheerImpl implements Cheer {
 
   private viewH = 720
   private readonly onResize: () => void
-  private readonly mq: MediaQueryList | null
+  private mq: MediaQueryList | null
   private readonly onMq: () => void
 
   constructor(host: HTMLElement) {
@@ -382,8 +393,27 @@ class CheerImpl implements Cheer {
     this.mq = typeof matchMedia === 'function'
       ? matchMedia('(prefers-reduced-motion: reduce)') : null
     this.reduced = this.mq ? this.mq.matches : false
-    this.onMq = (): void => { this.reduced = this.mq ? this.mq.matches : false }
+    this.root.dataset.reduced = this.reduced ? '1' : '0'
+    this.onMq = (): void => {
+      this.reduced = this.mq ? this.mq.matches : false
+      this.root.dataset.reduced = this.reduced ? '1' : '0'
+    }
     if (this.mq && this.mq.addEventListener) this.mq.addEventListener('change', this.onMq)
+  }
+
+  setReducedMotion(reduced: boolean): void {
+    // AND STOP LISTENING TO THE OS. The media query is only a SEED here: the
+    // game reads `prefers-reduced-motion` once at start-up into its own
+    // `reduceMotion`, and from then on the player's in-game toggle owns the
+    // value and pushes it to every consumer. Leaving this widget's own
+    // listener attached would make it the one consumer with a second writer --
+    // a later OS-level change would quietly overwrite the player's choice here
+    // and nowhere else, so the callouts would animate while the VFX, the
+    // camera and the score HUD all stayed still.
+    if (this.mq && this.mq.removeEventListener) this.mq.removeEventListener('change', this.onMq)
+    this.mq = null
+    this.reduced = reduced
+    this.root.dataset.reduced = reduced ? '1' : '0'
   }
 
   setLevel(level: CheerLevel): void {

@@ -3375,6 +3375,10 @@
    =========================================================================== */
 .sg-score {
   position: absolute;
+  /* The plate below is a ::before at z-index -1, which needs a stacking
+     context of its own or it paints behind the whole HUD instead of behind
+     this block. `isolation` makes one without touching the z-order. */
+  isolation: isolate;
   /* TOP CENTRE, but starting below the band that is already occupied. Measured
      at 1280x720 during a race:
        tools buttons  x 0.463-0.537  y 0.014-0.075
@@ -3393,6 +3397,17 @@
   flex-direction: column;
   align-items: center;
   gap: 3px;
+  /* THE DISPLAY FACE, explicitly.
+     This block previously set its type with `font: <weight> <size>/1 inherit`
+     shorthands, which are INVALID -- a CSS-wide keyword may not appear as part
+     of a shorthand value -- so every one of them was discarded and the whole
+     widget rendered at the 16px/400 UI default inherited from .sg-hud. The
+     screenshots still looked plausible, which is how it survived.
+     Splitting those into longhands fixed the size and the weight but left the
+     family inheriting .sg-hud's --sg-ui, so the loudest element on screen was
+     set in the same face as the settings menu, sitting directly above
+     cheer.ts's callouts in Arial Black. One face for both. */
+  font-family: var(--sg-display);
   /* Hue of the current combo rung. Neutral until a combo exists. */
   --sc: var(--sg-ink);
 }
@@ -3414,10 +3429,12 @@
 }
 
 .sg-score__value {
-  font: 800 clamp(26px, 5vw, 46px)/1 inherit;
+  font-size: clamp(34px, 6.6vw, 64px);
+  font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   font-style: italic;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
   color: var(--sg-gold);
   /* A dark outline plus a soft halo, the same two-part stack cheer.ts uses --
      it is what keeps this legible over both a white sky and a black one. */
@@ -3440,14 +3457,18 @@
 }
 
 .sg-score__x {
-  font: 700 clamp(14px, 2.4vw, 22px)/1 inherit;
+  font-size: clamp(17px, 3vw, 28px);
+  font-weight: 700;
+  line-height: 1;
   font-style: italic;
   color: var(--sg-ink);
-  opacity: 0.85;
+  opacity: 0.8;
 }
 
 .sg-score__mult {
-  font: 800 clamp(18px, 3.2vw, 30px)/1 inherit;
+  font-size: clamp(24px, 4.4vw, 42px);
+  font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   font-style: italic;
   color: var(--sg-ink);
@@ -3458,14 +3479,18 @@
 .sg-score__line--event { gap: 10px; }
 
 .sg-score__event {
-  font: 700 clamp(11px, 1.9vw, 16px)/1 inherit;
-  letter-spacing: 0.1em;
+  font-size: clamp(13px, 2.3vw, 21px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.14em;
   color: var(--sg-ink);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.7);
 }
 
 .sg-score__eventv {
-  font: 700 clamp(11px, 1.9vw, 16px)/1 inherit;
+  font-size: clamp(15px, 2.7vw, 24px);
+  font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--sc);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px color-mix(in srgb, var(--sc) 40%, transparent);
@@ -3473,8 +3498,8 @@
 
 /* How far through the current rung, full width of the block. */
 .sg-score__meter {
-  width: clamp(90px, 15vw, 150px);
-  height: 3px;
+  width: clamp(120px, 20vw, 210px);
+  height: 4px;
   margin-top: 2px;
   background: rgba(255, 255, 255, 0.18);
   border-radius: 2px;
@@ -3503,7 +3528,9 @@
 }
 
 .sg-score__pop {
-  font: 600 clamp(10px, 1.7vw, 13px)/1.25 inherit;
+  font-size: clamp(10px, 1.7vw, 13px);
+  font-weight: 600;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.06em;
   color: var(--sg-ink);
@@ -3568,20 +3595,26 @@
 }
 
 .sg-score-k {
-  font: 600 10px/1 inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0.22em;
   color: var(--sg-dim);
 }
 
 .sg-score-v {
-  font: 700 clamp(30px, 6vw, 52px)/1 inherit;
+  font-size: clamp(30px, 6vw, 52px);
+  font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--sg-gold);
   text-shadow: 0 0 18px rgba(255, 210, 63, 0.4);
 }
 
 .sg-score-rank {
-  font: 600 11px/1 inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0.16em;
   color: var(--sg-green);
 }
@@ -3594,7 +3627,9 @@
 }
 
 .sg-name__k {
-  font: 600 10px/1 inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0.2em;
   color: var(--sg-dim);
 }
@@ -3602,7 +3637,9 @@
 .sg-name__in {
   width: 8.5em;
   padding: 5px 8px;
-  font: 700 14px/1 inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--sg-ink);
@@ -3636,7 +3673,9 @@
 }
 
 .sg-board__title {
-  font: 600 9px/1 inherit;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0.2em;
   color: var(--sg-mute);
   text-align: center;
@@ -3658,7 +3697,9 @@
   padding: 4px 8px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.03);
-  font: 500 12px/1.35 inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
   color: var(--sg-dim);
 }
 
@@ -3700,7 +3741,9 @@
 
 .sg-board__empty,
 .sg-board__note {
-  font: 500 10px/1.4 inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
   color: var(--sg-mute);
   text-align: center;
   padding: 3px 0 0;
@@ -3738,7 +3781,9 @@
   border: 1px solid transparent;
   border-radius: 3px 3px 0 0;
   padding: 6px 16px 7px;
-  font: 600 11px/1 inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--sg-mute);
@@ -3841,7 +3886,9 @@
   padding: 4px 8px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.03);
-  font: 500 12px/1.35 inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
   color: var(--sg-dim);
 }
 
@@ -3877,7 +3924,267 @@
   grid-column: 3;
   justify-self: start;
   align-self: center;
-  font: 700 9px/1 inherit;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.2em;
   color: var(--sg-green);
+}
+
+/* ===========================================================================
+   THE SCORE READOUT, STYLISED
+   ---------------------------------------------------------------------------
+   Everything below is ESCALATION: the widget at a x1 combo is deliberately
+   plain, and each rung adds a channel rather than changing one. That is the
+   same grammar cheer.ts uses for its drift ladder, for the same reason -- a
+   player should be able to tell how good a run is from across the room, and
+   four channels arriving in sequence does that where one channel getting
+   slowly bluer does not.
+
+     rung 0+   the number takes the rung's hue and the bracket appears
+     rung 2+   a soft plate behind the block, so it stops fighting the road
+     rung 3+   the number gains a chromatic fringe, static so it survives RM
+     rung 4+   the bracket ignites
+
+   All of it is transform, opacity, colour and shadow on elements built once.
+   Nothing here can trigger layout inside the game loop.
+   =========================================================================== */
+
+/* THE BRACKET. Two rules either side of the block, angled with the type's own
+   italic so they read as part of the same object rather than as a box drawn
+   around it. Invisible until a combo exists -- at x1 this widget is one gold
+   number and nothing else, which is the resting state the escalation needs. */
+.sg-score__line::before,
+.sg-score__line::after {
+  content: '';
+  width: 3px;
+  height: 0.78em;
+  align-self: center;
+  background: var(--sc);
+  transform: skewX(-12deg);
+  opacity: 0;
+  transition: opacity 200ms linear;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--sc) 60%, transparent);
+}
+
+.sg-score__line--event::before,
+.sg-score__line--event::after { display: none; }
+
+.sg-score[data-rung] .sg-score__line::before,
+.sg-score[data-rung] .sg-score__line::after { opacity: 0.85; }
+
+.sg-score[data-rung="4"] .sg-score__line::before,
+.sg-score[data-rung="4"] .sg-score__line::after,
+.sg-score[data-rung="5"] .sg-score__line::before,
+.sg-score[data-rung="5"] .sg-score__line::after {
+  box-shadow: 0 0 16px var(--sc), 0 0 34px color-mix(in srgb, var(--sc) 70%, transparent);
+  animation: sgScoreBar 620ms ease-in-out infinite alternate;
+}
+
+@keyframes sgScoreBar {
+  from { transform: skewX(-12deg) scaleY(1); }
+  to { transform: skewX(-12deg) scaleY(1.35); }
+}
+
+/* THE PLATE. A soft radial ground behind the block from rung 2, because by
+   then the number is large and bright enough to be fighting whatever road is
+   under it. Radial rather than a filled box: a rectangle here reads as a
+   dialog, and the HUD's own rule is that nothing occludes the racing line. */
+.sg-score::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150%;
+  height: 150%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--sc) 16%, transparent) 0%,
+    rgba(2, 4, 10, 0.42) 38%,
+    rgba(0, 0, 0, 0) 72%
+  );
+  opacity: 0;
+  transition: opacity 260ms linear;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.sg-score[data-rung="2"]::before,
+.sg-score[data-rung="3"]::before,
+.sg-score[data-rung="4"]::before,
+.sg-score[data-rung="5"]::before { opacity: 1; }
+
+/* THE FRINGE, from rung 3. Two coloured offsets on the glyphs -- static, so it
+   is a LOOK rather than a movement and survives reduced motion untouched. The
+   same trick and the same argument as cheer.ts's Singularity treatment. */
+.sg-score[data-rung="3"] .sg-score__value,
+.sg-score[data-rung="4"] .sg-score__value,
+.sg-score[data-rung="5"] .sg-score__value {
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.9),
+    0 0 4px rgba(0, 0, 0, 0.8),
+    -2px 0 0 rgba(255, 60, 120, 0.55),
+    2px 0 0 rgba(60, 220, 255, 0.55),
+    0 0 26px color-mix(in srgb, var(--sc) 55%, transparent);
+}
+
+/* THE TICK. One flinch per award, not per digit change: during a slide the
+   digits change every frame and a pulse on each would be a vibration. Two
+   alternating attribute values restart it without the element leaving the
+   tree. */
+.sg-score[data-beat="0"] .sg-score__value { animation: sgTickA 220ms cubic-bezier(0.2, 0, 0, 1); }
+.sg-score[data-beat="1"] .sg-score__value { animation: sgTickB 220ms cubic-bezier(0.2, 0, 0, 1); }
+
+@keyframes sgTickA {
+  0% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+@keyframes sgTickB {
+  0% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+/* The hot state's own scale has to survive the tick finishing, so it is
+   restated here at a higher specificity than the keyframes' resting value. */
+.sg-score[data-hot="1"] .sg-score__value { transform: scale(1.07); }
+
+/* Reduced motion: the escalation keeps every channel that is a LOOK -- hue,
+   bracket, plate, fringe -- and drops every one that is a MOVEMENT. RM asks
+   for no strobing, not for no feedback, which is the rule vfx.ts follows. */
+.sg-score[data-reduced="1"] .sg-score__value,
+.sg-score[data-reduced="1"] .sg-score__line::before,
+.sg-score[data-reduced="1"] .sg-score__line::after {
+  animation: none !important;
+  transform: none;
+}
+.sg-score[data-reduced="1"] .sg-score__line::before,
+.sg-score[data-reduced="1"] .sg-score__line::after { transform: skewX(-12deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-score__value,
+  .sg-score__line::before,
+  .sg-score__line::after { animation: none !important; }
+  .sg-score__value { transform: none; }
+  .sg-score__line::before,
+  .sg-score__line::after { transform: skewX(-12deg); }
+}
+
+/* ===========================================================================
+   CALLOUTS: MORE POSITIVE FEEDBACK, ON THE EXISTING LADDER
+   ---------------------------------------------------------------------------
+   The ladder in this file already switches channels on at different rungs --
+   size every rung, the stamp every rung, the shockwave at Nova, the chromatic
+   fringe at Singularity. Two more are added here, on the same grammar, so a
+   bigger moment is doing more things rather than the same thing louder:
+
+     rung 2+   SPEED RULES, a pair of bars that dash outward from behind the
+               words and are gone inside a third of a second
+     rung 3+   A SECOND, WIDER WAVE behind the first, arriving late enough to
+               read as a second front rather than a thicker one
+
+   Both obey the rules this widget was written to: no filled panel, no stroke
+   on the box edge, nothing that outlives `hold` + `fade`, and nothing that
+   occludes more of the road than the words already do. Both are transform and
+   opacity on elements that exist at rest, so neither touches layout.
+
+   REDUCED MOTION DROPS BOTH ENTIRELY. Unlike the chromatic fringe these are
+   movements, not looks, and a pair of bars flying out of a word is exactly the
+   thing the RM path exists to suppress. The line still goes up, still in the
+   right size and hue, because RM asks for no strobing rather than no praise.
+   =========================================================================== */
+
+.sg-cheer__line {
+  /* The rules hang off the line rather than the root so they inherit its
+     transform: when the stamp overshoots and settles, they travel with the
+     words instead of sliding against them. */
+  position: relative;
+}
+
+.sg-cheer__line::before,
+.sg-cheer__line::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 0.9em;
+  height: 2px;
+  margin-top: -1px;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0), var(--cc, #7abeff));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sg-cheer__line::before { right: 100%; margin-right: 0.32em; }
+.sg-cheer__line::after {
+  left: 100%;
+  margin-left: 0.32em;
+  background: linear-gradient(270deg, rgba(0, 0, 0, 0), var(--cc, #7abeff));
+}
+
+/* Fired by the same beat flip that restarts the stamp, so the rules and the
+   words are always the same age. */
+.sg-cheer[data-w="2"][data-beat="0"] .sg-cheer__line::before,
+.sg-cheer[data-w="3"][data-beat="0"] .sg-cheer__line::before { animation: sgRuleL 340ms ease-out; }
+.sg-cheer[data-w="2"][data-beat="1"] .sg-cheer__line::before,
+.sg-cheer[data-w="3"][data-beat="1"] .sg-cheer__line::before { animation: sgRuleL 340ms ease-out; }
+.sg-cheer[data-w="2"][data-beat="0"] .sg-cheer__line::after,
+.sg-cheer[data-w="3"][data-beat="0"] .sg-cheer__line::after { animation: sgRuleR 340ms ease-out; }
+.sg-cheer[data-w="2"][data-beat="1"] .sg-cheer__line::after,
+.sg-cheer[data-w="3"][data-beat="1"] .sg-cheer__line::after { animation: sgRuleR 340ms ease-out; }
+
+@keyframes sgRuleL {
+  0% { opacity: 0; transform: translateX(1.1em) scaleX(0.2); }
+  35% { opacity: 0.95; }
+  100% { opacity: 0; transform: translateX(-0.7em) scaleX(1.6); }
+}
+@keyframes sgRuleR {
+  0% { opacity: 0; transform: translateX(-1.1em) scaleX(0.2); }
+  35% { opacity: 0.95; }
+  100% { opacity: 0; transform: translateX(0.7em) scaleX(1.6); }
+}
+
+/* The second front. Top rung only, behind the first and a beat later, at a
+   third of its alpha -- a wave leaving a wave, not a brighter one. */
+.sg-cheer[data-w="3"] .sg-cheer__wave::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side ellipse at 50% 50%,
+    rgba(0, 0, 0, 0) 58%,
+    var(--cw, rgba(122, 190, 255, 0.26)) 80%,
+    rgba(0, 0, 0, 0) 98%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sg-cheer[data-w="3"][data-beat="0"] .sg-cheer__wave::after,
+.sg-cheer[data-w="3"][data-beat="1"] .sg-cheer__wave::after {
+  animation: sgWave2 620ms 110ms ease-out;
+}
+
+@keyframes sgWave2 {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
+  25% { opacity: 0.34; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.9); }
+}
+
+.sg-cheer[data-reduced="1"] .sg-cheer__line::before,
+.sg-cheer[data-reduced="1"] .sg-cheer__line::after,
+.sg-cheer[data-reduced="1"] .sg-cheer__wave::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-cheer__line::before,
+  .sg-cheer__line::after,
+  .sg-cheer__wave::after { animation: none !important; opacity: 0 !important; }
 }

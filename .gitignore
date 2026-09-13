@@ -11,3 +11,6 @@ shots/
 # patch rather than by remote. Committing them would duplicate the history as
 # text, and there is a new one most sessions.
 *.patch
+
+# design benches (tools/bench) build output
+tools/bench/dist/

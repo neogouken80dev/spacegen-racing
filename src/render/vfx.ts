@@ -305,6 +305,40 @@ const _rgb2 = new Float32Array(3)
  *  across a call that clobbers _rgb or _rgb2. */
 const _dcol = new Float32Array(3)
 const _dcol2 = new Float32Array(3)
+/**
+ * THE ENTRY KICK and THE CHARGE AURA.
+ *
+ * Both were asked for as feel rather than as information: the slide should land
+ * with a shove, and holding it should look like the car is winding something up.
+ * Numbers live here rather than in TUNING because they are presentation with no
+ * opinion from the sim or the balance harness -- the same argument that keeps
+ * score/rules.ts out of tuning.ts.
+ */
+const KICK_BACK_SPEED = 15.5
+/** Ring life and reach. Ground-oriented, so SHOCK_MAX_GROUND caps the radius. */
+const KICK_RING_LIFE = 0.34
+const KICK_RING_TO = 9.0
+/** Seconds behind the first front. Long enough to read as two, not as a blur. */
+const KICK_RING_BEAT = 0.085
+
+/**
+ * The aura's emission rate per second, at zero charge and at full.
+ *
+ * It climbs with the charge rather than with the TIER so the build is
+ * continuous: a player holding a slide sees it thicken every frame instead of
+ * in four steps, and the steps still land because the COLOUR changes on them.
+ */
+const AURA_RATE_MIN = 30
+const AURA_RATE_MAX = 124
+/** How far the licks are thrown up, and how far they trail behind the car. */
+const AURA_RISE = 6.6
+const AURA_TRAIL = 7.0
+/** Lateral push per m/s^2 of crosswind. Small: a lean, not a bend. */
+const AURA_WIND = 0.16
+
+/** The aura's own colour. See the note on _scol for why it is not _dcol. */
+const _acol = new Float32Array(3)
+
 /** The drift SNAP's colour. Its own scratch because driftSnap() is called from
  *  inside driftTierUp(), which already owns _dcol2, and from the driftStart
  *  event handler, which runs before the frame's _dcol has been resolved. */
@@ -1012,6 +1046,8 @@ class RacerFx {
   coreAcc = 0
   /** Ground pool under the chassis. */
   underAcc = 0
+  /** Flame-aura emission carry. See driftAura(). */
+  auraAcc = 0
   /** Continuous thruster exhaust. */
   thrustAcc = 0
   /** Periodic hard thruster pulse — the machine straining to hold the charge. */
@@ -1920,12 +1956,13 @@ class Vfx implements VfxSystem {
         case 'driftStart':
           this.ring(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06), SMOKE_RGB, 6.0, 0.30, 1.2, 5.0, true)
           fx.gatherAcc = 0; fx.gatherRing = 0; fx.coreAcc = 0
-          fx.underAcc = 0; fx.thrustAcc = 0; fx.strainAcc = 0
+          fx.underAcc = 0; fx.thrustAcc = 0; fx.strainAcc = 0; fx.auraAcc = 0
           // ENTRY IS THE MOMENT THAT MATTERS MOST and it used to be one smoke
           // ring — the quietest one-shot in this whole switch, for the state
           // change a player most needs to feel. See driftSnap() for what a
           // crack is made of and why it is made of THAT and not of a flash.
           this.driftSnap(fx, 0, true, 1)
+          this.driftKick()
           break
         case 'driftEnd': {
           if (it.tier >= 0) {
@@ -2103,6 +2140,11 @@ class Vfx implements VfxSystem {
       // that tightens from ~3.6m to ~1.2m across a band, on a rate that
       // roughly triples, converging on a point under the rear axle.
       this.driftGather(dt, fx, tier, tc, charge01, inward, sparkWash, body)
+
+      // ---- THE AURA ----------------------------------------------------
+      // The continuous half of the charge statement: it thickens every frame
+      // the slide is held, where the tier speaks in four colour steps.
+      this.driftAura(dt, fx, tc, charge01, body, r.windPush)
 
       // ---- THRUSTER STRAIN --------------------------------------------
       this.driftThrusters(dt, fx, tier, tc, charge01, sparkWash)
@@ -2291,6 +2333,7 @@ class Vfx implements VfxSystem {
       fx.gatherRing = 0
       fx.coreAcc = 0
       fx.underAcc = 0
+      fx.auraAcc = 0
       fx.thrustAcc = 0
       fx.strainAcc = 0
       fx.sprayAcc = 0
@@ -2728,6 +2771,195 @@ class Vfx implements VfxSystem {
    * @param tier  0-3. Entry fires at 0 with `entry` set.
    * @param beat  1 for the first crack, `beatScale` for the echo.
    */
+  /**
+   * THE ENTRY KICK: a shove backwards and a ring outwards.
+   *
+   * driftSnap() already cracks the flank, which announces the STATE change.
+   * This is the physical one -- the car planting and throwing everything it was
+   * carrying out of the back, and a front expanding off the contact patch. The
+   * two do different jobs and are deliberately aimed on different axes: the
+   * snap runs along the flank, this runs backwards and outwards, so they read
+   * as one event with depth rather than as two effects in the same place.
+   *
+   * Anchored on the CONTACT POINT for the ring and on the chassis for the
+   * throw. A shockwave that belongs to the road has to lie on the road -- on a
+   * gravity track that is a wall, and `ground: true` puts it there because the
+   * spawn axis is the racer's own up (see setAxis at the top of updateRacer).
+   */
+  private driftKick(): void {
+    const q = _bQ
+    if (q <= 0) return
+    const rm = this.reduced
+    const hz = _bHz
+
+    // Entry has no tier yet, so it borrows tier 0's hue washed hard toward
+    // white -- the same argument driftSnap makes, and for the same reason: on
+    // Rustfall the ice-cyan of tier 0 is the colour of the road lighting, and
+    // an un-washed entry disappears into the thing it should stand out from.
+    _acol[0] = DRIFT_RGB[0] * 0.45 + WHITE_RGB[0] * 1.05
+    _acol[1] = DRIFT_RGB[1] * 0.45 + WHITE_RGB[1] * 1.05
+    _acol[2] = DRIFT_RGB[2] * 0.45 + WHITE_RGB[2] * 1.05
+
+    // ---- 1. THE THROW ---------------------------------------------------
+    // Straight out of the back, off the tail, with a little rise so it does
+    // not simply vanish under the car at chase-camera height. Two materials:
+    // sparks carry the direction and the speed, smoke gives it a body that
+    // survives long enough to be passed THROUGH as the car drives away, which
+    // is the half that sells it as something the car left behind.
+    const bf = -hz * 0.95
+    this.burst(
+      pX(bf, 0, 0.10), pY(bf, 0, 0.10), pZ(bf, 0, 0.10),
+      dX(-1, 0, 0.22), dY(-1, 0, 0.22), dZ(-1, 0, 0.22),
+      Math.round(16 * q), KICK_BACK_SPEED, 0.30, _acol, 0.85,
+      0.34, 0.17, K_SPARK, -9, 2.6,
+    )
+    this.burst(
+      pX(bf, 0, 0.06), pY(bf, 0, 0.06), pZ(bf, 0, 0.06),
+      dX(-1, 0, 0.30), dY(-1, 0, 0.30), dZ(-1, 0, 0.30),
+      Math.round(9 * q), KICK_BACK_SPEED * 0.45, 0.55, SMOKE_RGB, 3.2,
+      0.60, 0.52, K_SMOKE, 0.6, 2.0,
+    )
+
+    // ---- 2. THE FRONT ---------------------------------------------------
+    // shockRing rather than ring(): it takes a FINAL size and clamps it, which
+    // is the convention here after growth-per-second was found to produce
+    // rings far larger than intended. Born slightly ahead of the contact point
+    // so the wave looks like it left the car rather than the tarmac behind it.
+    this.shockRing(
+      gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05),
+      _acol, 1.5, KICK_RING_LIFE, 0.9, KICK_RING_TO, true,
+    )
+    // The second front, dropped entirely under reduced motion -- two rings
+    // 85ms apart is exactly the flicker the RM path exists to suppress, and
+    // the first one has already announced the event.
+    if (!rm) {
+      this.defer(
+        KICK_RING_BEAT, gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05),
+        _acol, D_DRIFT_SNAP, 0,
+      )
+    }
+  }
+
+  /**
+   * THE CHARGE AURA: the car visibly winding something up while the slide is
+   * held, licking upward off the hull, leaning with the crosswind and trailing
+   * behind as the car moves through its own flame.
+   *
+   * PARTICLES, NOT A SHELL MESH, and that is the important decision. A
+   * continuous surface around the car would be a new geometry, a material per
+   * racer, twelve more draw calls and something to dispose -- and it would be a
+   * FILLED shape sitting between the camera and the car at exactly the moment
+   * the player needs to see the apex. Licks leave gaps. You can see the road
+   * through them, they overlap into a body at high charge without ever becoming
+   * an opaque wall, and they cost pool slots this system already budgets.
+   *
+   * WHY IT CLIMBS WITH CHARGE AND NOT WITH TIER: the tier already speaks, in
+   * colour, and it speaks in four steps. The aura is the continuous half of the
+   * same statement -- it thickens every frame a player holds the slide, which
+   * is the thing that makes holding it one beat longer feel like it is doing
+   * something. Both together give a build with steps in it.
+   */
+  private driftAura(
+    dt: number, fx: RacerFx, tc: number, charge01: number,
+    body: number, windPush: number,
+  ): void {
+    const q = _bQ
+    if (q <= 0) return
+    // Under reduced motion the aura is thinned rather than removed: it is a
+    // sustained glow, not a strobe, so it breaks none of RM's actual rules --
+    // but it is also a lot of moving pixels and halving it is the courteous
+    // reading of the request.
+    const rm = this.reduced ? 0.5 : 1
+    const hx = _bHx, hz = _bHz
+
+    // The drift palette, dimmed by the body-gain budget. This is the rule the
+    // file states twice: any filled or overlapping shape must divide
+    // DRIFT_BODY_GAIN back out, or tier 3 whites the frame out. The aura is
+    // the most overlapping thing in the drift set, so it takes the full
+    // division and then some.
+    _acol[0] = _dcol[0] * body * 0.62
+    _acol[1] = _dcol[1] * body * 0.62
+    _acol[2] = _dcol[2] * body * 0.62
+
+    const rate = (AURA_RATE_MIN + (AURA_RATE_MAX - AURA_RATE_MIN) * charge01) * q * rm
+    fx.auraAcc += dt * rate
+    let guard = 0
+    while (fx.auraAcc >= 1 && guard < 30) {
+      fx.auraAcc -= 1
+      guard++
+
+      // Born on a ring around the hull rather than at a point: a flame that
+      // leaves one emitter is a jet. Biased toward the back, because that is
+      // where the energy is being made and it keeps the nose readable.
+      const a = rnd() * TAU
+      const ca = Math.cos(a), sa = Math.sin(a)
+      const f = -hz * 0.25 + ca * hz * 0.85
+      const sdir = sa * hx * 1.05
+      const u = 0.02 + rnd() * 0.30
+
+      // Up, out, backwards, and sideways with the wind.
+      //
+      //   up        the lick itself, stronger at high charge
+      //   outward   so it hugs the hull instead of erupting from the centre
+      //   backward  the car drives out of its own aura, which is what makes
+      //             the trail rather than a halo that follows the car around
+      //   wind      r.windPush is a signed lateral acceleration from the sim,
+      //             positive toward the track's right. Using the racer's own
+      //             right is a small-angle approximation of that and costs
+      //             nothing; at racing slip angles the two are close.
+      // The lick climbs harder AND narrows as the charge builds: at low charge
+      // it is a wide shimmer hugging the sills, at full charge it is a column
+      // streaming off the roofline. That shape change is what reads as winding
+      // up, where simply emitting more of the same reads as a thicker haze.
+      const rise = AURA_RISE * (0.45 + charge01 * 1.15)
+      const out = (0.62 - charge01 * 0.22)
+      const wind = windPush * AURA_WIND
+      const vf = -AURA_TRAIL * (0.35 + rnd() * 0.5)
+      const vs = sa * out + wind
+
+      this.spawn(
+        pX(f, sdir, u), pY(f, sdir, u), pZ(f, sdir, u),
+        dX(vf, vs, rise), dY(vf, vs, rise), dZ(vf, vs, rise),
+        _acol[0], _acol[1], _acol[2],
+        0.30 + rnd() * 0.26,
+        0.26 + charge01 * 0.40,
+        0, 0, 1.7, K_SPRITE,
+      )
+
+      // Every fourth lick is a SPARK: a thin bright streak with a hard tip.
+      // The sprites give the aura its body and the sparks give it an edge --
+      // without them a stack of soft sprites is a smudge, which is the same
+      // failure driftSnap's blades were written up for.
+      if ((guard & 3) === 0) {
+        this.spawn(
+          pX(f, sdir, u + 0.1), pY(f, sdir, u + 0.1), pZ(f, sdir, u + 0.1),
+          dX(vf * 0.7, vs * 1.3, rise * 1.45),
+          dY(vf * 0.7, vs * 1.3, rise * 1.45),
+          dZ(vf * 0.7, vs * 1.3, rise * 1.45),
+          _acol[0] * 1.9, _acol[1] * 1.9, _acol[2] * 1.9,
+          0.20 + rnd() * 0.14, 0.10 + charge01 * 0.09,
+          0, 0, 2.1, K_SPARK,
+        )
+      }
+    }
+
+    // At full charge the aura gets a crown: a slow shell rising off the roof,
+    // which is the silhouette read from behind the car where the licks are
+    // foreshortened into the bodywork.
+    if (charge01 > 0.72 && tc >= 2) {
+      if (rnd() < dt * 9 * q * rm) {
+        this.spawn(
+          pX(-hz * 0.1, 0, _bHy * 1.15), pY(-hz * 0.1, 0, _bHy * 1.15), pZ(-hz * 0.1, 0, _bHy * 1.15),
+          dX(-1.4, windPush * AURA_WIND, 3.4),
+          dY(-1.4, windPush * AURA_WIND, 3.4),
+          dZ(-1.4, windPush * AURA_WIND, 3.4),
+          _acol[0] * 0.8, _acol[1] * 0.8, _acol[2] * 0.8,
+          0.42, 0.55 + charge01 * 0.5, 1.1, 0, 1.4, K_SHELL,
+        )
+      }
+    }
+  }
+
   private driftSnap(fx: RacerFx, tier: number, entry: boolean, beat: number): void {
     const q = _bQ
     if (q <= 0) return

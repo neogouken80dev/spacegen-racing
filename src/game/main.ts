@@ -231,7 +231,13 @@ export class Game {
       getReducedMotion: () => this.reduceMotion,
     })
     this.settings.onQualityChange = (q) => this.setTier(q)
-    this.settings.onReducedMotionChange = (on) => { this.reduceMotion = on }
+    this.settings.onReducedMotionChange = (on) => {
+      this.reduceMotion = on
+      // All three motion consumers from one value. The VFX system reads
+      // `this.reduceMotion` on its own each frame; these two are pushed.
+      this.cheer.setReducedMotion(on)
+      this.scoreHud.setReducedMotion(on)
+    }
     this.settings.onVfxIntensityChange = (glare, screen) => {
       this.vfxGlare = glare
       this.vfxScreen = screen

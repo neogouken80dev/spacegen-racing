@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --host",
+    "bench": "vite --config tools/bench/vite.bench.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "headless": "tsx tools/headless.ts",
     "balance": "tsx tools/balance.ts",
-    "verify": "npm run typecheck && npm run test && npm run headless -- --assert"
+    "verify": "npm run typecheck && npm run test && npm run headless -- --assert",
+    "css": "node tools/probe-css.mjs"
   },
   "dependencies": {
     "three": "^0.171.0"
@@ -22,6 +24,7 @@
     "@types/node": "^26.4.1",
     "@types/three": "^0.171.0",
     "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
