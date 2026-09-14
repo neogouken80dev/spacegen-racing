@@ -82,6 +82,9 @@ export const MUSIC: Record<string, { bed: string; final?: string }> = {
   cryostatic: { bed: 'audio/music/frosthelm.mp3' },
   aetherion: { bed: 'audio/music/namaresh.mp3' },
   hollowchoir: { bed: 'audio/music/centurion-prime.mp3' },
+  // No bed of its own yet. `MUSIC` is looked up per track and a miss is
+  // handled upstream, so a circuit without music is silent rather than broken;
+  // pointing it at a neighbour's bed would be worse than silence.
 }
 
 export const MUSIC_TITLE = 'audio/music/title.mp3'

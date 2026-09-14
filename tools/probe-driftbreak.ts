@@ -1,21 +1,27 @@
 /**
  * HOW OFTEN DOES A DRIFT END FOR A REASON THE PLAYER DID NOT CHOOSE?
  *
- * Reported from play: bounces and barrier contacts break a slide and fire the
- * boost at a moment the player did not pick. Both exits run through the same
- * line in vehicle.ts -- `const exit = !eff.drift || !canDrift` -- and only the
- * first of those is the player. The other two are the car being off the deck
- * for longer than `drift.airGrace` and the speed falling under
- * `drift.minSpeedToDrift`, and BOTH of them pay the full release boost on the
- * way out. There is a third, separate path that cancels the slide outright on a
- * collision above `drift.collisionCancelSpeed`, paying nothing.
+ * Reported three times, each time after a pass that had only WIDENED the
+ * windows: bounces, barriers and (the one that was actually biting) weapon
+ * stuns break a slide and fire the boost at a moment the player did not pick.
  *
- * Nothing measured any of it. `drift.test.ts` proves the mechanic; the balance
- * harness counts tiers reached. Neither can tell a slide the player cashed in
- * from one the road took off them.
+ * THIS PROBE USED TO GUESS. It reconstructed the cause from the previous
+ * frame's state -- wallTime, airTime, speed -- and picked whichever condition
+ * happened to be true. That is an inference, not a measurement: it cannot see a
+ * cause it was not told to look for, and the cause that was actually firing
+ * (`eff.drift` blanked to false by an EMP stun) was not in its list. It scored
+ * the build 3.8% and called it fixed while the reported bug was still there.
  *
- * So: run real races and classify every drift end by which condition actually
- * fired on that frame.
+ * It now classifies by what the sim EMITS. There is exactly one code path that
+ * ends a drift the player's way, and it pushes `driftEnd`. Respawn and weapon
+ * spin-out zero the slide directly and push nothing. So:
+ *
+ *   driftSide went non-zero -> 0 WITH a driftEnd event  = the player let go
+ *   driftSide went non-zero -> 0 WITHOUT one            = the car was taken away
+ *
+ * That is exact. There is no third answer for it to miss, and a new cancel
+ * added anywhere in the sim shows up here as an unattributed end without anyone
+ * having to remember to teach this file about it.
  *
  *   npx tsx tools/probe-driftbreak.ts
  */
@@ -24,66 +30,87 @@ import { Race } from '../src/sim/race'
 import { TRACKS } from '../src/content/tracks'
 import { CHASSIS } from '../src/content/chassis'
 import { PILOTS } from '../src/content/pilots'
-import { TUNING as T } from '../src/content/tuning'
 
-let totalEnds = 0, unchosen = 0
+const SEEDS = [20260904, 7717, 1234567]
+
+let totalEnds = 0
+let stolen = 0
+const rows: string[] = []
+
 for (const def of TRACKS) {
-  const t = new Track(def)
-  const race = new Race(t, {
-    seed: 20260904, totalLaps: 3, racerCount: 8, trackId: def.id,
-    chassisIds: Array.from({ length: 8 }, (_, i) => CHASSIS[i % CHASSIS.length].id),
-    pilotIds: Array.from({ length: 8 }, (_, i) => PILOTS[i % PILOTS.length].id),
-    localRacerIndex: -1, aiSkill: Array.from({ length: 8 }, (_, i) => 2 + (i % 3)),
-  })
-  const was = race.state.racers.map(() => 0)
-  const prevAir = race.state.racers.map(() => 0)
-  const prevSpd = race.state.racers.map(() => 0)
-  const prevWall = race.state.racers.map(() => 0)
-  const by = new Map<string, number>()
-  for (let f = 0; f < 60 * 420 && race.state.phase !== 'finished'; f++) {
-    race.step()
-    race.state.racers.forEach((r, k) => {
-      if (was[k] !== 0 && r.driftSide === 0) {
-        // Which of the three non-player exits was true on the frame it ended.
-        const cause = prevWall[k] > 0 ? 'barrier contact'
-          : prevAir[k] >= T.drift.airGrace ? 'off the deck'
-            : prevSpd[k] < T.drift.minSpeedToDrift ? 'speed collapsed'
-              : 'the player let go'
-        by.set(cause, (by.get(cause) ?? 0) + 1)
-      }
-      was[k] = r.driftSide
-      prevAir[k] = r.airTime
-      prevSpd[k] = Math.hypot(r.vel.x, r.vel.z)
-      prevWall[k] = r.wallTime
+  let n = 0, chose = 0, respawned = 0, spun = 0, other = 0, blanked = 0
+  for (const seed of SEEDS) {
+    const t = new Track(def)
+    const race = new Race(t, {
+      seed, totalLaps: 3, racerCount: 8, trackId: def.id,
+      chassisIds: Array.from({ length: 8 }, (_, i) => CHASSIS[i % CHASSIS.length].id),
+      pilotIds: Array.from({ length: 8 }, (_, i) => PILOTS[i % PILOTS.length].id),
+      localRacerIndex: -1, aiSkill: Array.from({ length: 8 }, (_, i) => 2 + (i % 3)),
     })
+    const was = race.state.racers.map(() => 0)
+    for (let f = 0; f < 60 * 420 && race.state.phase !== 'finished'; f++) {
+      race.step()
+      race.state.racers.forEach((r, k) => {
+        if (was[k] !== 0 && r.driftSide === 0) {
+          n++
+          // The events array is this frame's, cleared per step.
+          const paid = r.events.some(e => e.t === 'driftEnd')
+          // A driftEnd fired while the car was in a control blackout is NOT the
+          // player, even though it went down the player's code path: `eff` is
+          // blanked to a dead frame during spin/stun/respawn, so reading
+          // `eff.drift` there is indistinguishable from a release, and it pays
+          // the boost. This is the bucket that was actually being reported and
+          // that the old inferential probe had no way to see.
+          const blackout = r.spinTime > 0 || r.stunTime > 0 || r.respawnTime > 0
+          if (paid && blackout) blanked++
+          else if (paid) chose++
+          else if (r.respawnTime > 0) respawned++
+          else if (r.spinTime > 0) spun++
+          else other++
+        }
+        was[k] = r.driftSide
+      })
+    }
   }
-  const n = [...by.values()].reduce((a, b) => a + b, 0)
-  const chose = by.get('the player let go') ?? 0
-  totalEnds += n; unchosen += n - chose
-  const parts = [...by.entries()].sort((a, b) => b[1] - a[1])
-    .map(([c, v]) => `${c} ${((100 * v) / n).toFixed(0)}%`)
-  console.log(`${def.name.padEnd(16)} ${String(n).padStart(4)} drift ends   ${parts.join('   ')}`)
+  totalEnds += n
+  // Respawn and spin-out are the car being taken away outright -- loud,
+  // attributable, and they pay no boost. An end in neither bucket and with no
+  // driftEnd event is a cancel nobody declared, which is the failure this probe
+  // exists to catch.
+  stolen += other
+  // BLANKED IS REPORTED, NOT GATED, and the distinction matters. It counts
+  // releases that happened to land inside a control blackout -- which, now that
+  // the exit reads the true `input` rather than the blanked `eff`, are real
+  // releases: an AI's `driftHold` timer expiring while it happens to be
+  // spinning. The bucket cannot tell those from the bug, because both push the
+  // same event, so gating on it here would fail the build for something
+  // correct. The bug itself is owned by a scripted repro instead --
+  // tests/drift.test.ts, "an EMP stun does not end a drift" -- which sets the
+  // stun deliberately and checks the slide survives it. Watch this number: a
+  // jump means a new blackout source arrived and wants looking at.
+  const pc = (v: number) => `${((100 * v) / Math.max(1, n)).toFixed(1)}%`
+  rows.push(`${def.name.padEnd(16)} ${String(n).padStart(5)} ends   player ${pc(chose).padStart(6)}   respawn ${pc(respawned).padStart(6)}   spun ${pc(spun).padStart(6)}   BLANKED ${pc(blanked).padStart(6)}   UNDECLARED ${pc(other).padStart(6)}`)
 }
-const pct = (100 * unchosen) / totalEnds
-console.log(`\nended by something other than the player: ${pct.toFixed(1)}%  (${unchosen}/${totalEnds})`)
-// MEASURED, not guessed at. On the thresholds this replaced -- airGrace 0.25,
-// groundStickMargin 0.22 (i.e. no hysteresis), collisionCancelSpeed 8.0 --
-// 11.0% of all drift ends across the four circuits were taken off the player,
-// and Frosthelm alone was at 21%. It is 3.8% now.
+
+for (const r of rows) console.log(r)
+const pct = (100 * stolen) / totalEnds
+console.log(`\nended by a cancel nobody declared: ${pct.toFixed(2)}%  (${stolen}/${totalEnds})`)
+
+// THE GATE IS ZERO UNDECLARED, and it can be zero because the classification is
+// exact rather than inferential. Every drift end is the player's button, a
+// respawn, or a spin-out. Anything else is a regression by definition.
 //
-// The floor is not zero and should not be: a real ramp launch ends a slide on
-// purpose, and a car that genuinely stops cannot keep drifting. 8% is above
-// what the fixed build produces and below what the broken one did.
-//
-// THE GATE IS ON THE COMBINATION, and single-knob attribution at this sample
-// size is noise -- reverting the hysteresis alone measured 1.6% and reverting
-// airGrace alone 5.4%, both BELOW the 3.8% of the build with everything in.
-// That is not a paradox, it is one seed per circuit: a sim change moves every
-// racing line, so the denominator moves too (630 drift ends against 811 on the
-// old thresholds). Anyone wanting to attribute a single knob here needs several
-// seeds, which is the same rule the roster passes already run under.
-if (pct > 8) {
-  console.log(`\nFAILED: the road takes ${pct.toFixed(1)}% of all drifts off the player`)
+// SABOTAGE-TESTED, all three, because a probe that has never been seen red is
+// not evidence of anything:
+//   restore the vehicle.ts wall cancel      -> 1.10% undeclared, 20 ends
+//   restore the race.ts car-to-car cancel   -> 3.27% undeclared, 60 ends
+//   restore `!eff.drift` for the exit       -> 3.25% blanked, 60 ends, and the
+//                                              scripted EMP test goes red
+// The last of those is the one that was actually being reported, and note what
+// it did to the OLD version of this file: it scored that build 3.8% and printed
+// DRIFT OWNERSHIP OK.
+if (stolen > 0) {
+  console.log(`\nFAILED: ${stolen} drift ends came from a cancel that is not the player, a respawn or a spin-out`)
   process.exit(1)
 }
-console.log('\nDRIFT OWNERSHIP OK')
+console.log('\nDRIFT OWNERSHIP OK -- the button is the only exit')

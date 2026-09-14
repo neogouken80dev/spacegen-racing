@@ -448,11 +448,12 @@ export class Race {
           a.vel.z -= nz * imp * ratioA * locoA.knockbackMult
           b.vel.x += nx * imp * ratioB * locoB.knockbackMult
           b.vel.z += nz * imp * ratioB * locoB.knockbackMult
-          if (Math.abs(sep) > T.drift.collisionCancelSpeed) {
-            for (const r of [a, b]) {
-              if (r.driftSide !== 0) { r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0 }
-            }
-          }
+          // NO DRIFT CANCEL ON CONTACT. A slam used to zero both cars' slides
+          // above `drift.collisionCancelSpeed`. It is gone for the same reason
+          // the wall cancel in vehicle.ts is gone: the drift button is the only
+          // thing that ends a drift. A bump still costs both cars every metre
+          // per second the impulse above takes off them, which is the whole of
+          // what contact is meant to cost.
           // THE CONTACT, PUBLISHED FOR THE ART. Fired on every frame the pair
           // is closing, with `force` as the closing speed along the normal --
           // so rubbing side by side is a trickle and a real slam is a burst,

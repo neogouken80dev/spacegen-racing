@@ -394,7 +394,19 @@ describe('the AI', () => {
     //           of the three. Lap floor is 55s and this is 55.15 -- close
     //           enough that the next thing to make this track faster has to
     //           lengthen it or slow the field, not shave it again.
-    expect(avg).toBeCloseTo(55.15, 2)
+    //   55.48s  The drift button became the ONLY exit from a drift: the wall
+    //           cancel, the car-to-car cancel and `collisionCancelSpeed` are
+    //           all gone, and the exit test reads the true `input` instead of
+    //           the `eff` frame that a stun blanks. SLOWER by 0.33s, and away
+    //           from the floor, which was not the goal but is welcome. It is
+    //           slower because the AI used to be PAID for its mistakes: a
+    //           blanked `eff` during a stun, and every wall clip above the
+    //           cancel threshold, both fired a full release boost at a moment
+    //           nobody chose. Eight cars over three laps collect a lot of those.
+    //           Taking the free boosts away costs the field a third of a second
+    //           -- which is the clearest evidence available that the bug was
+    //           real and was firing constantly.
+    expect(avg).toBeCloseTo(55.475, 2)
   })
 })
 

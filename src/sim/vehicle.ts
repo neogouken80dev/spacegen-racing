@@ -692,11 +692,80 @@ export function stepVehicle(
       r.events.push({ t: 'driftStart' })
     }
   } else {
-    // Counter-steering CONTROLS the slide, it does not end it. Only releasing
-    // the drift button, dropping below the minimum speed, or a hard collision
-    // exits. This is the Mario Kart behaviour: the stick chooses the line
-    // inside the slide, and you decide when to cash it in.
-    const exit = !eff.drift || !canDrift
+    /**
+     * THE BUTTON IS THE ONLY WAY OUT. ASKED FOR IN THOSE WORDS.
+     *
+     * This was `!eff.drift || !canDrift`, and `canDrift` is false when the car
+     * is under `minSpeedToDrift` or has been off the deck longer than
+     * `airGrace`. Both of those exits pay the FULL RELEASE BOOST on their way
+     * out, so a bounce, a crest or a wall that scrubbed a few m/s cashed the
+     * player's slide in for them -- reported twice, and the second time after a
+     * pass that had only widened the windows rather than removing the
+     * conditions. Widening a window makes a bug rarer; it does not make it not
+     * happen, and "rarer" is worse to play against than "always", because the
+     * player stops being able to predict it.
+     *
+     * `canDrift` still gates ENTRY, which is a different question: you cannot
+     * START a slide in mid-air or below walking pace. Once it is running, only
+     * the button ends it.
+     *
+     * Three things that used to lean on this, and where they went:
+     *   - the hard-collision cancel further down is gone entirely, and so is
+     *     the car-to-car one in race.ts, for the same reason;
+     *   - a car that has stopped can no longer bank charge for standing still.
+     *     That is handled where the charge accrues, by pausing it -- NOT by
+     *     ending the slide, which would be this condition again wearing a
+     *     different name.
+     *
+     * AND IT READS `input`, NOT `eff`. This is the one that was actually being
+     * reported. `eff` is blanked to a dead frame whenever `disabled` is true --
+     * spin, stun or respawn -- so an EMP landing on a drifting car set
+     * `eff.drift` false, which this line could not tell from the player letting
+     * go: the slide ended AND the full release boost fired, on a frame the
+     * player was still holding the button. `empBomb` is the live case, because
+     * it sets `stunTime` directly instead of going through `hit()`, which
+     * zeroes the slide itself. That is exactly the report -- "I suddenly fall
+     * out of it and get a boost, even though I have not released the drift
+     * button" -- and no amount of tuning the collision thresholds was ever
+     * going to reach it.
+     *
+     * A stun takes away steering and throttle. It does not take the player's
+     * thumb off the button, so it no longer ends their drift. Releasing during
+     * a stun still exits, because that is a choice they made.
+     *
+     * The two exits that remain are total loss of the car, both of which zero
+     * the slide themselves before this block runs and neither of which pays a
+     * boost: a respawn (above, ~line 400) and a weapon spin-out (`hit()` in
+     * race.ts). Both are loud, attributable events the player can see coming.
+     *
+     * WHAT IT COSTS, MEASURED AT 2400 RACES EACH WAY.
+     *
+     *   Bulwark win share   28.4% +/-1.8  ->  30.0%   (about one sigma)
+     *   Bulwark Tier-3 share  54.0%       ->  59.3%   (clearly real)
+     *   Elkarim AI lap        55.15s      ->  55.48s  (SLOWER; see below)
+     *
+     * The tier share is the mechanism and the win share is the consequence:
+     * drifts now survive contact, and the chassis that spends the most of its
+     * race in contact is the heavy one. The lap getting SLOWER is the clearest
+     * evidence the bug was real and was firing constantly -- the field used to
+     * be PAID for its mistakes, because a blanked `eff` during a stun and every
+     * wall clip above the old cancel threshold both fired a full release boost
+     * at a moment nobody chose.
+     *
+     * That lands Bulwark exactly on the balance band's 30.0% ceiling. It is NOT
+     * corrected here, and deliberately: it was already at 28.4% before this
+     * change, the roster's win shares are an integer-point system with a long
+     * measured history (see content/chassis.ts, where Bulwark has been dragged
+     * off the FLOOR twice), and a chassis nerf bundled into a bug fix is how
+     * that history gets unreadable. It wants its own pass.
+     *
+     * Two things were tried here first and BOTH measured as doing nothing, so
+     * neither shipped -- recorded so nobody spends the afternoon again:
+     *   - scrubbing drift charge on wall contact  (30.3% vs 30.2%: contact
+     *     during a drift is far rarer for the AI than it looks);
+     *   - breaking the chain on a hard impact     (30.2%, T3 unmoved).
+     */
+    const exit = !input.drift
     if (exit) {
       const tier = r.driftTier
 
@@ -773,7 +842,16 @@ export function stepVehicle(
       const chainMult = 1 + r.chainStacks * T.drift.chainBonusPerStack
       const rate = derived.driftChargeMult * loco.driftChargeMult * chainMult
         * lerp(T.drift.chargeAtWide, 1.0, inward01)
-      r.driftCharge += DT * rate * lerp(0.55, 1.0, speedFrac)
+      // CHARGE PAUSES BELOW WALKING PACE; THE DRIFT DOES NOT END.
+      //
+      // With the button as the only exit, a car sitting still with drift held
+      // would otherwise bank tier after tier for doing nothing -- the accrual
+      // is per SECOND, not per metre, so speed only scales it. Freezing the
+      // charge takes the exploit away without taking the slide away, which is
+      // the distinction the whole of this block now turns on.
+      if (Math.abs(newLong) > T.drift.minSpeedToDrift) {
+        r.driftCharge += DT * rate * lerp(0.55, 1.0, speedFrac)
+      }
       let tier = -1
       for (let i = T.drift.tierTimes.length - 1; i >= 0; i--) {
         if (r.driftCharge >= T.drift.tierTimes[i]) { tier = i; break }
@@ -1768,12 +1846,13 @@ export function stepVehicle(
             }
           }
         }
-        // A guarded impact does not break the drift either. Absorbing the speed
-        // loss but still cancelling the slide would take the more valuable half
-        // of what the hit cost and call it protection.
-        if (!guarded && severity > T.drift.collisionCancelSpeed) {
-          r.driftSide = 0; r.driftCharge = 0; r.driftTier = -1; r.chainStacks = 0
-        }
+        // THE COLLISION CANCEL IS GONE. It used to zero the slide and the
+        // charge above `drift.collisionCancelSpeed`, which is the harsher of
+        // the two ways a barrier could take a drift: no boost, no charge,
+        // nothing. Raising the threshold to 26 m/s made it rare; the ask was
+        // that it not happen, so the branch is removed rather than tuned. A
+        // barrier still costs every metre per second it always did.
+
         r.events.push({ t: 'wall', force: severity, px: r.pos.x, py: r.pos.y, pz: r.pos.z, nx: wallNormalX, ny: wallNormalY, nz: wallNormalZ })
       }
     }

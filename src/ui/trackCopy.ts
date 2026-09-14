@@ -116,6 +116,21 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
       'gift on the straight and a bill at both ends of it. Hovercraft feel it ' +
       'worst -- the cushion they ride on is the thing that is missing.',
   },
+  emberfall: {
+    world: 'Volcanic Shield',
+    hook: 'A third of the lap is ash, and neither set piece is a corner.',
+    difficulty: 'Medium',
+    note:
+      'The two things you will remember are the two things that cannot ' +
+      'decide the race. A full vertical loop through a lava tube and two ' +
+      'turns of corkscrew bored through the shield are both geodesics -- the ' +
+      'road curves, the surface curves with it, and the sim reads them as ' +
+      'dead straight, so nothing brakes and nothing drifts. Hold the ' +
+      'throttle and enjoy them. The lap is actually decided on the ash beds: ' +
+      'a third of the circuit on gravel, wide and banked and fast, where ' +
+      'your corner model and the AI\'s disagree by the most. Then the rim, ' +
+      'where an updraft pushes you at a barrier you are allowed to lean on.',
+  },
 }
 
 const UNRATED: TrackCopy = {

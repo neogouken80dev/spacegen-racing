@@ -49,8 +49,8 @@ const FRAME = arg('frame', 'aimed')
 // pass of tuning. Name the target.
 const TARGET = arg('target', 'auto')
 const NAMES = {
-  rustfall: 'Rustfall', cryostatic: 'Cryostatic',
-  aetherion: 'Aetherion', hollowchoir: 'Hollow',
+  rustfall: 'Elkarim', cryostatic: 'Frosthelm',
+  aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar',
 }
 
 const browser = await chromium.launch({

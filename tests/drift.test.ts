@@ -6,6 +6,7 @@ import { resetAI } from '../src/sim/ai'
 import { emptyInput } from '../src/sim/types'
 import { TUNING as T } from '../src/content/tuning'
 import { CHASSIS, getDerived, getLocomotion } from '../src/content/chassis'
+import { ITEM_PARAMS } from '../src/content/items'
 import type { SimConfig, InputFrame } from '../src/sim/types'
 
 const cfg = (chassisId = 'solaire'): SimConfig => ({
@@ -510,5 +511,98 @@ describe('drift: a held slide eases off instead of winding tighter', () => {
     const earlyRatio = counterYaw(early.log) / lockYaw(early.log, Math.round(EARLY * 60))
     const lateRatio = counterYaw(late.log) / lockYaw(late.log, Math.round(LATE * 60))
     expect(lateRatio).toBeGreaterThan(earlyRatio)
+  })
+})
+
+describe('drift: the button is the only exit', () => {
+  /**
+   * Drive to speed, hold a drift for `hold` seconds, then run `mid` on the
+   * racer (an EMP, a shove, whatever) and keep holding for another second.
+   * Returns the racer plus whether a drift boost was ever paid out.
+   */
+  function interrupt(mid: (r: ReturnType<typeof drive>['r']) => void, hold = 1.2) {
+    resetAI()
+    const race = new Race(new Track(TEST_PLAIN), cfg())
+    const r = race.state.racers[0]
+    while (race.state.phase === 'countdown') race.step()
+
+    const warm = { ...emptyInput(), throttle: 1 }
+    for (let f = 0; f < 900; f++) {
+      race.setInput(0, warm)
+      race.step()
+      if (r.grounded && Math.hypot(r.vel.x, r.vel.z) > 45) break
+    }
+
+    const held = { ...emptyInput(), throttle: 1, steer: 1, drift: true }
+    for (let f = 0; f < Math.round(hold * 60); f++) { race.setInput(0, held); race.step() }
+    const sideBefore = r.driftSide
+    const tierBefore = r.driftTier
+
+    mid(r)
+
+    let boosted = false
+    for (let f = 0; f < 60; f++) {
+      race.setInput(0, held)
+      race.step()
+      if (r.boostSource === 'drift') boosted = true
+    }
+    return { r, sideBefore, tierBefore, boosted }
+  }
+
+  it('an EMP stun does not end a drift, and does not fire the boost', () => {
+    // THE REPORTED BUG, EXACTLY. `empBomb` sets `stunTime` directly instead of
+    // going through `hit()` (which zeroes the slide itself). `stunTime` makes
+    // `disabled` true, which blanks `eff` to a dead input frame -- and the exit
+    // test used to read `eff.drift`, so a dead frame was indistinguishable from
+    // the player letting go. The slide ended and the full release boost fired
+    // on a frame the player was still holding the button:
+    //
+    //   "I suddenly fall out of it and get a boost, even though i have not
+    //    released the drift button."
+    //
+    // The statistical probe could not see this -- both paths push `driftEnd`,
+    // so to anything counting events it looked like a normal release. It needs
+    // a scripted repro, which is this.
+    const p = ITEM_PARAMS.empBomb
+    const { r, sideBefore, boosted } = interrupt((x) => { x.stunTime = p.stunTime })
+    expect(sideBefore).not.toBe(0)
+    expect(r.driftSide).toBe(sideBefore)
+    expect(boosted).toBe(false)
+  })
+
+  it('releasing the button DURING a stun still exits, because that is a choice', () => {
+    // The fix must not go so far that a stun makes the drift unquittable.
+    resetAI()
+    const race = new Race(new Track(TEST_PLAIN), cfg())
+    const r = race.state.racers[0]
+    while (race.state.phase === 'countdown') race.step()
+    const warm = { ...emptyInput(), throttle: 1 }
+    for (let f = 0; f < 900; f++) {
+      race.setInput(0, warm); race.step()
+      if (r.grounded && Math.hypot(r.vel.x, r.vel.z) > 45) break
+    }
+    const held = { ...emptyInput(), throttle: 1, steer: 1, drift: true }
+    for (let f = 0; f < 72; f++) { race.setInput(0, held); race.step() }
+    expect(r.driftSide).not.toBe(0)
+
+    r.stunTime = ITEM_PARAMS.empBomb.stunTime
+    const let_go = { ...emptyInput(), throttle: 1, steer: 1, drift: false }
+    for (let f = 0; f < 12; f++) { race.setInput(0, let_go); race.step() }
+    expect(r.driftSide).toBe(0)
+  })
+
+  it('a wall hard enough to be a crash does not end a drift', () => {
+    // `drift.collisionCancelSpeed` used to zero the slide outright above a
+    // closing speed -- 8.0 m/s, then 26.0, then removed. Asked for directly:
+    // "keep performing the drift during the bounce phase and when hitting the
+    // barriers, even though it will slow down the speed of the drift."
+    const { r, sideBefore } = interrupt((x) => {
+      // Fire the car sideways into the barrier at a speed well past what the
+      // old threshold called a crash, without touching the drift state.
+      x.vel.x += 40 * Math.cos(x.yaw)
+      x.vel.z -= 40 * Math.sin(x.yaw)
+    })
+    expect(sideBefore).not.toBe(0)
+    expect(r.driftSide).toBe(sideBefore)
   })
 })

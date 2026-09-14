@@ -239,7 +239,7 @@ const CHASSIS = (process.argv.find((a) => a.startsWith('--chassis=')) ?? '').sli
 // updated when they were renamed. Card selection no longer uses this -- see
 // data-track below -- so a stale entry here fails the UI assertion loudly
 // instead of timing out on a locator, which is the better failure.
-const TRACK_NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime' }
+const TRACK_NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar' }
 const trackId = (process.argv.find((a) => a.startsWith('--track=')) ?? '--track=rustfall').slice(8)
 const trackName = TRACK_NAMES[trackId]
 if (!trackName) {

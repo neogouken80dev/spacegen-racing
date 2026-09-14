@@ -22,7 +22,7 @@ import { join, extname } from 'node:path'
 
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).split('=')[1]
 const TRACK = arg('track', 'rustfall')
-const NAMES = { rustfall: 'Rustfall', cryostatic: 'Cryostatic', aetherion: 'Aetherion', hollowchoir: 'Hollow' }
+const NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar' }
 
 const ROOT = new URL('../dist/', import.meta.url).pathname
 const MIME = {

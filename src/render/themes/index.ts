@@ -50,12 +50,14 @@ import { RUSTFALL_THEME } from './rustfall'
 import { CRYOSTATIC_THEME } from './cryostatic'
 import { AETHERION_THEME } from './aetherion'
 import { HOLLOWCHOIR_THEME } from './hollowchoir'
+import { EMBERFALL_THEME } from './emberfall'
 
 const THEMES: Record<string, Theme> = {
   [RUSTFALL_THEME.id]: RUSTFALL_THEME,
   [CRYOSTATIC_THEME.id]: CRYOSTATIC_THEME,
   [AETHERION_THEME.id]: AETHERION_THEME,
   [HOLLOWCHOIR_THEME.id]: HOLLOWCHOIR_THEME,
+  [EMBERFALL_THEME.id]: EMBERFALL_THEME,
 }
 
 export function themeFor(trackId: string): Theme {

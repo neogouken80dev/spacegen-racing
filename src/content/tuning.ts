@@ -470,26 +470,21 @@ export const TUNING = {
      * down rather than left to be rediscovered.
      */
     releaseKick: [3.0, 6.0, 10.0, 15.0],
-    /** Relative impact speed above which drift charge is lost. */
     /**
-     * A DRIFT NOW SURVIVES A BARRIER. Asked for directly: "keep performing the
-     * drift during the bounce phase and when hitting the barriers, even though
-     * it will slow down the speed of the drift."
+     * `collisionCancelSpeed` WAS HERE AND IS NOT COMING BACK.
      *
-     * 8.0 m/s of closing rate cancelled the slide, which on a circuit with
-     * bounce corridors and 19m-wide corners is most of a lap's contacts -- and
-     * the cancel is the harsher of the two ways a drift can end: it zeroes the
-     * charge and pays nothing. Worse, the OTHER exit path pays a full release
-     * boost, so clipping a wall mid-slide either robbed the player of the
-     * charge they had built or fired their boost for them at a moment they did
-     * not choose. Both were reported as the same complaint.
+     * It was the impact speed above which a barrier or a rival deleted your
+     * slide. Its history is the argument against reintroducing it: 8.0 m/s
+     * cancelled on most of a lap's contacts and was reported; raising it to
+     * 26.0 made the same thing happen rarely, which plays WORSE than always,
+     * because the player can no longer predict it; it was reported again.
      *
-     * 26 m/s is a genuine crash -- well above `hardImpactSpeed` at 18 -- so a
-     * head-on into a barrier still ends the slide, and a scrape, a kerb or a
-     * bounce wall no longer does. The speed cost is untouched: the barrier
-     * still takes what it always took.
+     * The drift button is now the only thing that ends a drift. Contact still
+     * costs speed -- every metre per second the impulse takes off, on a wall or
+     * on another car -- and that is the whole of what contact is meant to cost.
+     * If a future pass wants a barrier to punish a slide harder, price it in
+     * grip or speed, not by taking the slide away.
      */
-    collisionCancelSpeed: 26.0,
     /** Re-enter a drift within this window to keep a chain. */
     chainWindow: 0.40,
     chainBonusPerStack: 0.15,
