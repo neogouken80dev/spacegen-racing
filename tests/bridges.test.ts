@@ -585,6 +585,12 @@ describe('the flat tracks cannot reach any of this', () => {
     //             pinned to a race ON Rustfall, so moving Rustfall moves it,
     //             and a hash that did not move would mean the new node table
     //             had not reached the sim at all.
-    expect(race.hash()).toBe('c38e0c6c')
+    //   c2749a03  barriers bounce. `collision.restitution` 0.28 -> 0.40 and a
+    //             mass-scaled yaw kick on impact, both asked for directly as
+    //             "bounce naturally away from the wall". This one IS a change
+    //             to the shared sim and every track that has a barrier feels
+    //             it; it is expected to move, and a hash that did not would
+    //             mean neither change had reached the collision path.
+    expect(race.hash()).toBe('c2749a03')
   })
 })

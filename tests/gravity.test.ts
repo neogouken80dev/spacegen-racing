@@ -375,7 +375,18 @@ describe('the AI', () => {
     //           buys more than the extra distance costs. This line measures the
     //           TRACK now, not the sim: nothing in vehicle.ts, ai.ts or the
     //           tuning table moved, and the other three circuits are untouched.
-    expect(avg).toBeCloseTo(56.10, 2)
+    //   55.91s  a barrier now bounces the nose off itself. Two sim changes
+    //           land together and both were asked for: restitution 0.28 ->
+    //           0.40, so more of the into-wall speed comes back OUT, and a yaw
+    //           kick on impact that turns the nose away from the panel, scaled
+    //           by 1/mass. FASTER by 0.19s, which is the right direction and a
+    //           small number for it: the AI rarely hits anything hard enough
+    //           to qualify (the kick is gated at 6.3 m/s of closing rate), so
+    //           what moved is the handful of real contacts a field of eight
+    //           makes in three laps, not the barrier-leaning it does in every
+    //           corner. The sustained nose correction that rides along is
+    //           faded out with speed and cannot touch a car that is cornering.
+    expect(avg).toBeCloseTo(55.91, 2)
   })
 })
 

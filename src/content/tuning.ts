@@ -850,7 +850,18 @@ export const TUNING = {
   collision: {
     /** Impulse ratio is clamped here so a tank cannot delete a bike. */
     maxMassRatio: 3.0,
-    restitution: 0.28,
+    /**
+     * How much of the into-wall speed comes back OUT of the wall.
+     *
+     * 0.28 -> 0.40. A barrier that absorbs nearly three quarters of the
+     * approach leaves the car parked against it with its nose still in, which
+     * is the thing reported: "it will still point the vehicle's direction into
+     * the wall". A real panel pushes back. Still well under the bounce walls'
+     * own 0.65, which are a designed trampoline rather than a barrier, and the
+     * `wsp > spd` cap downstream means this redistributes the speed carried in
+     * and can never add to it.
+     */
+    restitution: 0.40,
     bounceWallRestitution: 0.65,
     /** Fraction of a bounce-wall impact redirected along the wall tangent. */
     bounceWallForward: 0.60,
@@ -947,17 +958,72 @@ export const TUNING = {
      * in about 0.8s, which reads as being helped up rather than as the car
      * being taken away.
      */
-    wallRecoverRate: 2.0,
+    wallRecoverRate: 2.6,
     /**
-     * Heading error, in degrees off the track tangent, before the recovery turn
-     * engages at all.
+     * THE YAW KICK, in radians, at a full-speed impact.
      *
-     * 55 is above anything a drift produces -- the sustained slide angle is 32
-     * and the arc holds it there -- so leaning a drift on a barrier, which is a
-     * real technique on this game's bounce corridors, is untouched. Below this
-     * the player is pointing broadly down the road and needs no help.
+     * A sustained turn is the wrong shape for this on its own, and raising the
+     * restitution proved it: a car that bounces off in two frames gives a
+     * per-second assist almost nothing to work with, so the nose left the
+     * barrier pointing exactly where it arrived. Measured, the sustained turn
+     * alone moved a 155-degree entry by 25 degrees over a whole second of
+     * repeated contact and by nothing at all across a clean bounce.
+     *
+     * A real panel does not gently persuade a car to turn -- it rotates it, at
+     * the moment of contact, by an amount that depends on how hard it was hit.
+     * 0.55 rad is 31 degrees at a full-speed impact and scales down linearly
+     * with the closing rate, so a graze barely twitches.
      */
-    wallRecoverAngle: 55,
+    wallNoseKick: 0.55,
+    /**
+     * Share of `hardImpactSpeed` the closing rate must reach before the kick
+     * fires at all.
+     *
+     * THIS IS THE DIFFERENCE BETWEEN A BOUNCE AND A TWITCH, and leaving it out
+     * cost a balance gate. The first cut fired the kick on any contact above
+     * 0.5 m/s of closing, which on a real circuit means every barrier scrape
+     * an AI makes through every corner -- measured previously at 6,690 wall
+     * contacts across four seeds. Nudging the nose on all of them threw the
+     * field off line and hit the chassis that leans on barriers hardest:
+     * Dray-9 fell to 5.5% of wins against a 12% floor, and the lap mean
+     * dropped 0.95s because everyone was being helped round the corners.
+     *
+     * 0.35 of 18 m/s is about 6.3 m/s of closing rate -- a thump, not a
+     * graze. A car holding a line against a barrier closes on it at nearly
+     * zero and is left alone.
+     */
+    wallNoseKickMin: 0.35,
+    /**
+     * Mass, in kg, at which the kick is delivered at full strength. Heavier
+     * cars rotate less from the same impulse, lighter ones more.
+     *
+     * NOT DECORATION -- this is what stopped the kick from wrecking a chassis.
+     * Dray-9 is the heaviest thing on the grid and the one that leans on
+     * barriers hardest, so a mass-blind kick hit it most often and threw it off
+     * line: measured at 200 races it fell to 5.5-8.0% of wins against a 12%
+     * floor with respawns nearly doubled, while every other chassis was fine.
+     * Scaling by 1/mass is both the physically honest answer and the one that
+     * gives the tank back its composure.
+     */
+    wallNoseKickMass: 1100,
+    /**
+     * How far OFF THE WALL the nose has to be pointing before the recovery
+     * stops turning it, in degrees.
+     *
+     * THIS REPLACES A GATE ON HEADING ERROR AGAINST THE TANGENT, and the change
+     * is the whole fix. The old rule only helped a car that was broadside or
+     * backwards -- past 55 degrees off the tangent. A car sitting 30 degrees
+     * off the tangent with its nose buried in the barrier was inside the gate,
+     * so nothing turned it and the player was left driving into a wall: the
+     * reported "sometimes it will still point the vehicle's direction into the
+     * wall".
+     *
+     * The question the recovery now asks is not "how wrong is this heading"
+     * but "is this car pointing at the wall", which is the question the player
+     * is asking. 14 degrees of clearance is enough that the next frame of
+     * throttle takes the car away from the barrier rather than back along it.
+     */
+    wallNoseAwayAngle: 14,
     racerRadius: 1.9,
   },
 

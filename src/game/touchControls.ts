@@ -118,9 +118,52 @@ export function axisCurve(raw: number, deadzone: number): number {
   return raw < 0 ? -out : out
 }
 
-/** Floating stick travel, CSS px, from origin to full lock. */
-const STICK_RADIUS = 70
-const STICK_DEADZONE = 0.10
+/**
+ * Floating stick travel, CSS px, from origin to full lock.
+ *
+ * WAS 70, WHICH IS A GAMEPAD'S THROW ON A SURFACE THAT HAS NONE. A thumbstick
+ * has a rim you can feel and a spring that tells you how far you have pushed
+ * it; a finger on glass has neither, so the only feedback about how much lock
+ * is on is the car's response -- and 70px of travel put most of the useful
+ * range beyond where a thumb naturally reaches from a resting grip. Reported
+ * as the mobile controls feeling slow to respond.
+ *
+ * 50px is roughly a thumb's comfortable arc from a held position, so full lock
+ * is reachable without regripping and half lock lands where a thumb is already
+ * going.
+ */
+const STICK_RADIUS = 50
+const STICK_DEADZONE = 0.06
+
+/**
+ * THE TOUCH STICK'S OWN RESPONSE, and deliberately not `axisCurve`.
+ *
+ * `axisCurve` blends 60% smoothstep with 40% linear, which is right for a
+ * GAMEPAD: a physical stick self-centres, drifts, and is held under tension, so
+ * a soft shoulder out of the deadzone stops a resting thumb steering the car.
+ * Applied to a touch surface it is a tax -- a finger is exactly where the
+ * player put it, and the softening means a quarter of the travel returns about
+ * a seventh of the lock.
+ *
+ * This is 88% linear, which is the "almost 1:1" that was asked for: half travel
+ * is half lock to within a percent. The remaining 12% of smoothstep, plus a
+ * deadzone cut from 0.10 to 0.06, is the smallest shoulder that still stops a
+ * thumb resting on the pad from nudging the nose.
+ *
+ * Measured, displacement in px -> steer, old against new:
+ *   10px  0.023 -> 0.138   (x6.0)     30px  0.328 -> 0.579  (x1.8)
+ *   20px  0.149 -> 0.354   (x2.4)     50px  0.730 -> 1.000  (x1.4)
+ *   25px  0.233 -> 0.466   (x2.0)     70px  1.000 -> 1.000  (full lock at 50)
+ */
+export function stickCurve(raw: number, deadzone: number): number {
+  const a = raw < 0 ? -raw : raw
+  if (a <= deadzone) return 0
+  let n = (a - deadzone) / (1 - deadzone)
+  if (n > 1) n = 1
+  const s = n * n * (3 - 2 * n)
+  const out = 0.88 * n + 0.12 * s
+  return raw < 0 ? -out : out
+}
 
 /** Tilt steering, degrees of roll. */
 const TILT_DEADZONE_DEG = 4
@@ -728,7 +771,7 @@ class TouchControlsImpl implements TouchControls {
         const by = this.stickOy - this.zoneTop
         this.base.style.transform = 'translate3d(' + bx + 'px,' + by + 'px,0)'
       }
-      this.stickSteer = axisCurve(dx / STICK_RADIUS, STICK_DEADZONE)
+      this.stickSteer = stickCurve(dx / STICK_RADIUS, STICK_DEADZONE)
       const kx = this.stickOx + dx - this.zoneLeft
       const ky = this.stickOy + dy - this.zoneTop
       this.knob.style.transform = 'translate3d(' + kx + 'px,' + ky + 'px,0)'

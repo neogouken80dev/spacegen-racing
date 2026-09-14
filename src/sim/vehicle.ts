@@ -1673,21 +1673,95 @@ export function stepVehicle(
          *   - it turns the NOSE only. No velocity is added, and the car still
          *     has to drive itself out.
          */
-        {
-          const wantYaw = Math.atan2(tan.x, tan.z)
-          const off = angleDelta(r.yaw, wantYaw)
+        /**
+         * THE KICK: the nose is rotated away from the barrier ON THE CONTACT
+         * FRAME, by an amount set by how hard the car went in.
+         *
+         * This is the half that makes it read as bouncing off something solid.
+         * The sustained turn below can only work while the car is touching the
+         * wall, and with the restitution raised to 0.40 a clean hit is over in
+         * two frames -- measured, the nose came off the barrier pointing within
+         * a degree of where it arrived. An impulse does not care how long the
+         * contact lasted.
+         *
+         * Rotated toward `wallNormal`, which points away from the barrier, and
+         * clamped so it can never swing the nose past the normal into the
+         * track: a bounce turns the car off the wall, it does not spin it.
+         */
+        if (r.driftSide === 0
+          && severity > T.collision.hardImpactSpeed * T.collision.wallNoseKickMin) {
+          // Scaled by 1/mass: the same blow turns a light car further than a
+          // heavy one, which is both what a real impact does and what keeps
+          // the tank of the roster from being spun out of every corner.
+          const kick = T.collision.wallNoseKick
+            * clamp01(severity / T.collision.hardImpactSpeed)
+            * clamp01(T.collision.wallNoseKickMass / Math.max(1, derived.massKg))
+          if (_grav) {
+            const dot = clamp(r.fwd.x * wallNormalX + r.fwd.y * wallNormalY + r.fwd.z * wallNormalZ, -1, 1)
+            const cx = r.fwd.y * wallNormalZ - r.fwd.z * wallNormalY
+            const cy = r.fwd.z * wallNormalX - r.fwd.x * wallNormalZ
+            const cz = r.fwd.x * wallNormalY - r.fwd.y * wallNormalX
+            const e = Math.atan2(cx * r.up.x + cy * r.up.y + cz * r.up.z, dot)
+            vrotAxis(r.fwd, r.up, clamp(e, -kick, kick))
+            r.yaw = Math.atan2(r.fwd.x, r.fwd.z)
+          } else {
+            const e = angleDelta(r.yaw, Math.atan2(wallNormalX, wallNormalZ))
+            r.yaw += clamp(e, -kick, kick)
+            if (r.yaw > Math.PI) r.yaw -= Math.PI * 2
+            if (r.yaw < -Math.PI) r.yaw += Math.PI * 2
+          }
+        }
+        // NOT WHILE DRIFTING. Leaning a slide on a barrier is a technique on
+        // this game's bounce corridors, and inside a drift the nose points into
+        // the corner by design -- on an inside wall that reads as "pointing at
+        // the barrier" and is exactly what the player asked for.
+        // BEING STUCK IS A LOW-SPEED STATE, and that is what scopes this.
+        //
+        // Contact alone is not the condition. A car carrying 50 m/s along a
+        // barrier -- which on Cryostatic's ice sweeper is most of the corner --
+        // is not stuck, it is cornering, and nudging its nose on every frame of
+        // that quietly steers it through a corner the surface is supposed to
+        // make hard: measured, the ice sweeper's own signature test lost 8% of
+        // its margin. A car that is genuinely pinned has lost its speed to the
+        // wall, so fading the assist out with speed separates the two without
+        // needing to name either. `deflectFullSpeed` is the same 30 m/s the
+        // impact deflect above already fades across.
+        if (r.driftSide === 0) {
+          /**
+           * The heading it is turned toward is the track direction, BIASED OFF
+           * THE WALL: `tan` down the circuit plus a share of the barrier's
+           * inward normal. A car nudged back onto the exact tangent is still
+           * one steering input from touching the wall again, and at a shallow
+           * angle it simply re-contacts on the next frame. Aiming a little
+           * further in is what makes it read as a bounce off something solid
+           * rather than a slide along it.
+           */
+          const bias = Math.tan(T.collision.wallNoseAwayAngle * (Math.PI / 180))
+          let wx = tan.x * dir + wallNormalX * bias
+          let wy = _grav ? tan.y * dir + wallNormalY * bias : 0
+          let wz = tan.z * dir + wallNormalZ * bias
+          const wl = Math.hypot(wx, wy, wz) || 1
+          wx /= wl; wy /= wl; wz /= wl
+          // The gate is "is the nose pointing at the wall", not "how far off
+          // the tangent is it". `wallNormal` points INWARD, away from the
+          // barrier, so a negative dot is a nose buried in it -- and anything
+          // below the bias angle is close enough to count.
+          const away = r.fwd.x * wallNormalX + r.fwd.z * wallNormalZ
+            + (_grav ? r.fwd.y * wallNormalY : 0)
           const handsOn = Math.min(1, Math.abs(eff.steer))
-          if (Math.abs(off) > T.collision.wallRecoverAngle * (Math.PI / 180)) {
-            const step = T.collision.wallRecoverRate * (1 - handsOn) * DT
+          if (away < Math.sin(T.collision.wallNoseAwayAngle * (Math.PI / 180))) {
+            const slow = 1 - clamp01(spd / T.collision.deflectFullSpeed)
+            const step = T.collision.wallRecoverRate * (1 - handsOn) * slow * DT
             if (_grav) {
-              const dot = clamp(r.fwd.x * tan.x + r.fwd.y * tan.y + r.fwd.z * tan.z, -1, 1)
-              const cx = r.fwd.y * tan.z - r.fwd.z * tan.y
-              const cy = r.fwd.z * tan.x - r.fwd.x * tan.z
-              const cz = r.fwd.x * tan.y - r.fwd.y * tan.x
+              const dot = clamp(r.fwd.x * wx + r.fwd.y * wy + r.fwd.z * wz, -1, 1)
+              const cx = r.fwd.y * wz - r.fwd.z * wy
+              const cy = r.fwd.z * wx - r.fwd.x * wz
+              const cz = r.fwd.x * wy - r.fwd.y * wx
               const e = Math.atan2(cx * r.up.x + cy * r.up.y + cz * r.up.z, dot)
               vrotAxis(r.fwd, r.up, clamp(e, -step, step))
               r.yaw = Math.atan2(r.fwd.x, r.fwd.z)
             } else {
+              const off = angleDelta(r.yaw, Math.atan2(wx, wz))
               r.yaw += clamp(off, -step, step)
               if (r.yaw > Math.PI) r.yaw -= Math.PI * 2
               if (r.yaw < -Math.PI) r.yaw += Math.PI * 2

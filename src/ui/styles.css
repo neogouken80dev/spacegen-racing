@@ -2690,6 +2690,153 @@
   justify-content: center;
 }
 
+/* ===========================================================================
+   THE RESULTS SCREEN ON A PHONE: TABS DOWN THE LEFT, BUTTONS OUT OF THE WAY.
+
+   Reported from play, and both halves are the same cause. The screen is a flex
+   COLUMN, so the title, the subtitle, the tab strip and the CTA row each take a
+   full band of height before the content gets any -- on a 914px-tall landscape
+   phone that is most of the screen, and `.sg-btn--huge` at 5.6vmin plus 0.5em
+   of padding is a 100px-tall button three times over. What is left for the
+   standings is a sliver, and anything that overflows it paints UNDER the CTA
+   row, which is later in the DOM: that is the SAVE button hiding behind
+   REMATCH and the board note hiding behind GARAGE.
+
+   A grid fixes both properly rather than by shaving numbers. Grid rows cannot
+   overlap, so the CTA can no longer be painted over; and moving the tab strip
+   into a left-hand rail gives its whole band of height back to the content:
+
+       head head
+       sub  sub
+       tabs body
+       cta  cta
+
+   The body row is `minmax(0, 1fr)` and scrolls inside itself, so it is the
+   part that gives way -- the same contract `.sg-results__rows` already had,
+   now enforced one level up where the overflow actually was.
+
+   Desktop keeps the centred horizontal strip. This is a phone layout, not a
+   redesign of a screen nobody complained about.
+   =========================================================================== */
+@media (max-width: 860px), (max-height: 560px) {
+  /* THE SELECTOR HAS TO OUT-SPECIFY THE ONE THAT SHOWS THE SCREEN.
+     `.sg-fe[data-screen="results"] .sg-screen--results { display: flex }` is
+     (0,2,1) and it is what makes this screen visible at all. A plain
+     `.sg-screen--results { display: grid }` is (0,1,0) and loses to it
+     silently: the grid-template never applies, every `grid-area` below is
+     inert, and the layout stays the flex column it was -- which is exactly
+     what the first cut of this block did, measured as the title sitting 192px
+     off centre with no other symptom. */
+  .sg-fe[data-screen="results"] .sg-screen--results {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "head"
+      "sub"
+      "tabs"
+      "body"
+      "cta";
+    align-items: stretch;
+    justify-items: center;
+    column-gap: clamp(8px, 2vw, 18px);
+    row-gap: 4px;
+    padding-inline: clamp(8px, 2vw, 20px);
+  }
+  .sg-results__title { grid-area: head; align-self: end; }
+  .sg-results__where { grid-area: sub; align-self: start; }
+  .sg-tabs { grid-area: tabs; }
+  .sg-tabpanels { grid-area: body; }
+  /* `margin-top: auto` is the flex idiom that pinned this to the bottom. The
+     grid's last row does that structurally, and leaving the margin in makes
+     the row's own height wrong. */
+  .sg-results__cta { grid-area: cta; margin-top: 0; }
+
+  .sg-tabpanels { width: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
+  /* The buttons stop being the biggest thing on the screen. Scoped to this row
+     so the Paused screen's Resume -- which has a whole screen to itself and no
+     content to crowd -- is left alone. */
+  .sg-results__cta {
+    gap: 8px;
+    flex-wrap: nowrap;
+    padding-top: 2px;
+  }
+  .sg-results__cta .sg-btn--huge {
+    font-size: clamp(14px, 3.1vmin, 26px);
+    padding: 0.42em 1.15em;
+    box-shadow: 0 5px 0 #06546f, 0 12px 22px rgba(0, 0, 0, 0.5);
+  }
+  .sg-results__cta .sg-btn--huge.sg-btn--gold {
+    box-shadow: 0 5px 0 #7a5600, 0 12px 22px rgba(0, 0, 0, 0.5);
+  }
+  .sg-results__cta .sg-btn--huge:active { transform: translateY(3px); }
+  .sg-results__cta .sg-btn { font-size: clamp(11px, 2.4vmin, 18px); }
+}
+
+/* ===========================================================================
+   THE RAIL ITSELF, AND WHY IT IS NOT ON EVERY PHONE.
+
+   The rail buys vertical space by spending horizontal space, so it belongs
+   only where height is the scarce dimension. A landscape phone at 900x410 has
+   that problem and the rail is the answer. A portrait phone at 390x844 has the
+   opposite one: measured with the rail on, the labels cost 120px of a 390px
+   screen and the records table truncated to "Fastes... Solaire...". It keeps
+   the horizontal strip, which costs it nothing it has.
+
+   Both still get the single-column grid above, because the CTA overlap it
+   fixes is a stacking problem and has nothing to do with orientation.
+   =========================================================================== */
+@media (max-height: 560px), (max-width: 860px) and (orientation: landscape) {
+  .sg-fe[data-screen="results"] .sg-screen--results {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "head head"
+      "sub  sub"
+      "tabs body"
+      "cta  cta";
+  }
+
+  /* A column, hard left, with its rule down the right-hand side instead of
+     along the bottom -- the panel still reads as attached to the selected tab,
+     just from the side. */
+  .sg-tabs {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    justify-content: flex-start;
+    align-self: start;
+    width: auto;
+    margin: 0;
+    padding: 0 8px 0 0;
+    border-bottom: none;
+    border-right: 1px solid var(--sg-line);
+  }
+  .sg-tab {
+    border-radius: 3px 0 0 3px;
+    padding: 9px 8px 9px 10px;
+    text-align: right;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+  }
+  .sg-tab.is-on {
+    border-color: var(--sg-line);
+    border-bottom-color: var(--sg-line);
+    border-right-color: transparent;
+  }
+  /* The selected marker rotates with the strip: a bar down the rule, not one
+     along it. */
+  .sg-tab.is-on::after {
+    left: auto;
+    right: -7px;
+    top: 22%;
+    bottom: 22%;
+    width: 2px;
+    height: auto;
+  }
+}
+
 @keyframes sgRowIn {
   from {
     opacity: 0;
@@ -2937,10 +3084,24 @@
    The container itself never animates: it is the plain layout box the placement
    is argued from, and everything that moves moves inside it.
    =========================================================================== */
+/* ===========================================================================
+   WHERE THE MOMENT SITS, AND WHY IT MOVED TWICE.
+
+   30% read as mid-screen and sat on the car; reported from play on both
+   desktop and phone. It is now 25% on a desktop viewport -- clear of the tools
+   cluster (y 0.014-0.075) and the crosswind strip (y 0.086-0.115) by a wide
+   margin, and high enough that the racing line underneath it is visible.
+
+   On a phone it goes higher still and the type halves, because the same 25%
+   of a 390px-tall landscape viewport is 98px down a screen the car occupies
+   the middle of, and a number sized in `vw` on a 2000px-wide phone screen is
+   enormous. Both are handled in the media block below rather than by a
+   different widget.
+   =========================================================================== */
 .sg-moment {
   position: absolute;
   left: 50%;
-  top: 30%;
+  top: 25%;
   transform: translateX(-50%);
   width: min(92vw, 980px);
   display: flex;
@@ -3513,6 +3674,14 @@
   font-family: var(--sg-display);
   /* Hue of the current combo rung. Neutral until a combo exists. */
   --sc: var(--sg-ink);
+  /* ONE KNOB FOR THE WHOLE BLOCK'S TYPE SIZE.
+     Every font-size under .sg-score is multiplied by this, so a phone can halve
+     the entire cluster -- number, multiplier, caption, and all fourteen of the
+     rung and magnitude escalation sizes -- without fourteen overrides that
+     would then have to be kept in step with the originals. It scales the
+     LAYOUT, unlike a transform, so the callout underneath moves up with it
+     instead of leaving a hole where the big number used to be. */
+  --sgs: 1;
 
   /* NOT A PERMANENT FIXTURE.
      This block exists only while something is worth points: it appears on an
@@ -3616,6 +3785,19 @@
   .sg-total__v { font-size: clamp(15px, 2.2vw, 22px); }
 }
 
+/* THE PHONE GETS HALF THE TYPE AND SITS HIGHER.
+   `--sgs` multiplies every font-size in the block (see its declaration on
+   .sg-score), so this is the whole of the size change: the number, the
+   multiplier, the caption and all fourteen escalation sizes come down
+   together, and because it scales the layout rather than painting a transform
+   over it, the callout underneath rises with it.
+   14% clears the tools cluster and the crosswind strip on a landscape phone
+   and leaves the middle of the screen -- where the car is -- alone. */
+@media (max-width: 860px), (max-height: 560px) {
+  .sg-moment { top: 14%; }
+  .sg-score { --sgs: 0.5; }
+}
+
 .sg-score__stack {
   display: flex;
   flex-direction: column;
@@ -3639,7 +3821,7 @@
      68px minimum is sensible on a 390px screen and too big on a 320px one, and
      measured at peak swell the line ran -23..343 in a 320px viewport. The
      `min(..., 16vw)` is what stops the floor outgrowing the screen it is on. */
-  font-size: min(clamp(44px, 8.6vw, 84px), 16vw);
+  font-size: calc((min(clamp(44px, 8.6vw, 84px), 16vw)) * var(--sgs));
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -3667,7 +3849,7 @@
 }
 
 .sg-score__x {
-  font-size: min(clamp(21px, 3.8vw, 36px), 5.5vw);
+  font-size: calc((min(clamp(21px, 3.8vw, 36px), 5.5vw)) * var(--sgs));
   font-weight: 700;
   line-height: 1;
   font-style: italic;
@@ -3676,7 +3858,7 @@
 }
 
 .sg-score__mult {
-  font-size: min(clamp(32px, 6vw, 58px), 8vw);
+  font-size: calc((min(clamp(32px, 6vw, 58px), 8vw)) * var(--sgs));
   font-weight: 800;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -3692,7 +3874,7 @@
    merged into a single stack. It stays a step smaller and a step calmer than
    the number: two shouting lines is no hierarchy at all. */
 .sg-score__event {
-  font-size: clamp(13px, 2.3vw, 21px);
+  font-size: calc((clamp(13px, 2.3vw, 21px)) * var(--sgs));
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.14em;
@@ -3711,9 +3893,9 @@
     0 1px 0 rgba(0, 0, 0, 0.9),
     0 0 10px color-mix(in srgb, var(--sc) 70%, transparent);
 }
-.sg-score[data-mag="2"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
+.sg-score[data-mag="2"] .sg-score__event { font-size: calc((clamp(15px, 2.7vw, 25px)) * var(--sgs)); }
 .sg-score[data-mag="3"] .sg-score__event {
-  font-size: clamp(17px, 3.1vw, 29px);
+  font-size: calc((clamp(17px, 3.1vw, 29px)) * var(--sgs));
   letter-spacing: 0.2em;
 }
 
@@ -4289,21 +4471,21 @@
    hue. One of the two has to hold still or the block has no anchor, and the
    number is the half being read.
    --------------------------------------------------------------------------- */
-.sg-score[data-rung="2"] .sg-score__value { font-size: min(clamp(50px, 9.8vw, 96px), 16vw); }
-.sg-score[data-rung="3"] .sg-score__value { font-size: min(clamp(56px, 11vw, 108px), 16vw); }
-.sg-score[data-rung="4"] .sg-score__value { font-size: min(clamp(62px, 12.2vw, 118px), 16vw); }
-.sg-score[data-rung="5"] .sg-score__value { font-size: min(clamp(68px, 13.4vw, 130px), 16vw); }
+.sg-score[data-rung="2"] .sg-score__value { font-size: calc((min(clamp(50px, 9.8vw, 96px), 16vw)) * var(--sgs)); }
+.sg-score[data-rung="3"] .sg-score__value { font-size: calc((min(clamp(56px, 11vw, 108px), 16vw)) * var(--sgs)); }
+.sg-score[data-rung="4"] .sg-score__value { font-size: calc((min(clamp(62px, 12.2vw, 118px), 16vw)) * var(--sgs)); }
+.sg-score[data-rung="5"] .sg-score__value { font-size: calc((min(clamp(68px, 13.4vw, 130px), 16vw)) * var(--sgs)); }
 
 /* A five- or six-figure number is a bigger number; it should look like one even
    at a low multiplier. Capped at 16vw for the same reason the rung sizes are --
    the line is `white-space: nowrap` and a 320px screen is unforgiving. */
-.sg-score[data-mag="2"] .sg-score__value { font-size: min(clamp(58px, 11.4vw, 112px), 16vw); }
-.sg-score[data-mag="3"] .sg-score__value { font-size: min(clamp(66px, 13vw, 126px), 16vw); }
+.sg-score[data-mag="2"] .sg-score__value { font-size: calc((min(clamp(58px, 11.4vw, 112px), 16vw)) * var(--sgs)); }
+.sg-score[data-mag="3"] .sg-score__value { font-size: calc((min(clamp(66px, 13vw, 126px), 16vw)) * var(--sgs)); }
 
 .sg-score__event { color: var(--sc); }
-.sg-score[data-rung="3"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
-.sg-score[data-rung="4"] .sg-score__event { font-size: clamp(16px, 3.0vw, 28px); }
-.sg-score[data-rung="5"] .sg-score__event { font-size: clamp(17px, 3.3vw, 31px); letter-spacing: 0.2em; }
+.sg-score[data-rung="3"] .sg-score__event { font-size: calc((clamp(15px, 2.7vw, 25px)) * var(--sgs)); }
+.sg-score[data-rung="4"] .sg-score__event { font-size: calc((clamp(16px, 3.0vw, 28px)) * var(--sgs)); }
+.sg-score[data-rung="5"] .sg-score__event { font-size: calc((clamp(17px, 3.3vw, 31px)) * var(--sgs)); letter-spacing: 0.2em; }
 
 /* ---------------------------------------------------------------------------
    THE SWELL — the number growing with how hard it is climbing.

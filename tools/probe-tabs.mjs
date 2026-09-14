@@ -288,40 +288,94 @@ console.log('record who :', JSON.stringify(
  * So this measures every major block's own centre against the viewport's, at
  * desktop, tablet and phone. Centring is a number, not an impression.
  */
+/**
+ * `rail: true` marks a viewport where the tab strip is a LEFT-HAND RAIL rather
+ * than a centred horizontal strip. There, centring is measured against the
+ * BODY COLUMN -- the space to the right of the rail -- because the content is
+ * deliberately not centred on the viewport any more. Measuring it against the
+ * screen would report the rail working as a regression.
+ */
 const CENTRE_AT = [
-  { label: 'desktop', w: 1280, h: 900 },
-  { label: 'tablet', w: 834, h: 1112 },
-  { label: 'phone', w: 390, h: 844 },
+  { label: 'desktop', w: 1280, h: 900, rail: false },
+  { label: 'tablet', w: 834, h: 1112, rail: true },
+  { label: 'phone', w: 390, h: 844, rail: false },
+  { label: 'phoneLS', w: 900, h: 410, rail: true },
 ]
 const SELECTORS = [
-  '.sg-results__title', '.sg-results__where', '.sg-tabs',
+  '.sg-results__title', '.sg-results__where',
   '.sg-results__rows', '.sg-results__meta', '.sg-results__score',
   '.sg-results__cta',
 ]
 
-const measureCentre = () => page.evaluate((sels) => {
+const measureCentre = (rail) => page.evaluate(({ sels, rail }) => {
+  // The centre everything is measured against: the viewport, or -- once the
+  // tabs are a rail -- the column of screen left over beside it.
+  const panels = document.querySelector('.sg-screen--results .sg-tabpanels')
+  const pb = panels ? panels.getBoundingClientRect() : null
   const vw = document.documentElement.clientWidth
+  const axis = rail && pb && pb.width > 2 ? pb.x + pb.width / 2 : vw / 2
+  const span = rail && pb && pb.width > 2 ? pb.width : vw
   const out = []
   for (const sel of sels) {
     const el = document.querySelector('.sg-screen--results ' + sel)
     if (!el) continue
     const b = el.getBoundingClientRect()
     if (b.width < 2) continue
+    // The header and the button row span the WHOLE screen in the rail layout
+    // -- they sit across both grid columns -- so they are still measured
+    // against the viewport. Only what lives inside the panels moved.
+    const full = sel === '.sg-results__title' || sel === '.sg-results__where'
+      || sel === '.sg-results__cta'
+    const a = full ? vw / 2 : axis
+    const sp = full ? vw : span
     out.push({
       sel,
-      off: +(((b.x + b.width / 2) - vw / 2)).toFixed(1),
-      frac: +(Math.abs((b.x + b.width / 2) - vw / 2) / vw).toFixed(4),
-      overflow: +(Math.max(0, b.width - vw)).toFixed(0),
+      off: +(((b.x + b.width / 2) - a)).toFixed(1),
+      frac: +(Math.abs((b.x + b.width / 2) - a) / sp).toFixed(4),
+      overflow: +(Math.max(0, b.width - sp)).toFixed(0),
     })
   }
-  return { vw, out, docW: document.documentElement.scrollWidth }
-}, SELECTORS)
+  /**
+   * THE OVERLAP, which is the bug this screen was actually reported for.
+   *
+   * The CTA row is the last child of a flex column, so when the panel above it
+   * overflowed, the buttons painted ON TOP of the content instead of being
+   * pushed off the bottom: the SAVE button sat behind REMATCH and the board
+   * note behind GARAGE. Nothing measured it -- the centring sweep above only
+   * ever looked at x.
+   *
+   * Every element inside the panels is tested against the CTA row's box. Any
+   * intersection at all is a failure; there is no acceptable amount of a
+   * button sitting over the thing it is meant to sit under.
+   */
+  const cta = document.querySelector('.sg-screen--results .sg-results__cta')
+  const hits = []
+  let ctaFrac = 0
+  if (cta && panels) {
+    const c = cta.getBoundingClientRect()
+    ctaFrac = +(c.height / document.documentElement.clientHeight).toFixed(3)
+    const walk = (el) => {
+      const b = el.getBoundingClientRect()
+      if (b.width < 1 || b.height < 1) return
+      const over = Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top)
+      const side = Math.min(b.right, c.right) - Math.max(b.left, c.left)
+      if (over > 0.5 && side > 0.5 && el.textContent && el.textContent.trim()) {
+        hits.push({ cls: el.className || el.tagName, by: +over.toFixed(0) })
+        return   // report the outermost offender, not every descendant
+      }
+      for (const ch of el.children) walk(ch)
+    }
+    walk(panels)
+  }
+  return { vw, out, hits: hits.slice(0, 4), ctaFrac,
+    docW: document.documentElement.scrollWidth }
+}, { sels: SELECTORS, rail })
 
 console.log('\ncentring:')
 for (const vp of CENTRE_AT) {
   await page.setViewportSize({ width: vp.w, height: vp.h })
   await page.waitForTimeout(500)
-  const m = await measureCentre()
+  const m = await measureCentre(vp.rail)
   const worst = m.out.reduce((a, b) => (b.frac > a.frac ? b : a), { sel: '-', off: 0, frac: 0 })
   console.log(`  ${vp.label.padEnd(8)} ${String(vp.w).padStart(4)}px  worst ${worst.sel} ${worst.off}px (${(worst.frac * 100).toFixed(2)}%)  scrollW ${m.docW}`)
   for (const e of m.out) {
@@ -332,6 +386,17 @@ for (const vp of CENTRE_AT) {
   }
   // A results screen must never scroll sideways on a phone.
   if (m.docW > vp.w + 1) errors.push(`${vp.label}: the page scrolls horizontally (${m.docW} > ${vp.w})`)
+  if (m.hits.length) {
+    errors.push(`${vp.label}: the CTA row covers ${m.hits.map((h) => `"${String(h.cls).slice(0, 40)}" by ${h.by}px`).join(', ')}`)
+  }
+  // The buttons are not allowed to be a quarter of the screen.
+  if (vp.rail && m.ctaFrac > 0.25) {
+    errors.push(`${vp.label}: the CTA row is ${(m.ctaFrac * 100).toFixed(0)}% of the viewport height`)
+  }
+  console.log(`  ${' '.repeat(10)}cta ${(m.ctaFrac * 100).toFixed(0)}% tall, overlaps ${m.hits.length}`)
+  // One frame of each layout for a human to look at. The rail is a shape, and
+  // a shape is not something a number can sign off.
+  await page.screenshot({ path: new URL(`../shots/results-${vp.label}.png`, import.meta.url).pathname })
 }
 await page.setViewportSize({ width: 1280, height: 900 })
 await page.waitForTimeout(400)
