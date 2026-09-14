@@ -15,7 +15,7 @@
  *
  *   npx tsx tools/probe-ring.ts --len=3100 --tight=60 --loose=95 [--seed=3]
  */
-import { ringStats, curveAt, type Harm } from '../src/content/tracks/ring'
+import { ringStats, ringSelfDistance, curveAt, type Harm } from '../src/content/tracks/ring'
 
 /**
  * Cheap plan length. The full `ringStats` walks 4000 points AND computes an
@@ -40,6 +40,15 @@ const TARGET = arg('len', 3100)
 const TIGHT = arg('tight', 58)
 const LOOSE = arg('loose', 100)
 const VARIANT = arg('seed', 0)
+/**
+ * How far apart two unrelated stretches of the lap must stay, in plan.
+ *
+ * The shape search used to check only length and radius, and three circuits
+ * shipped with parts of the road folded back to within a metre of each other.
+ * 150m of centreline separation leaves ~110m of daylight between two 20m
+ * ribbons -- room for verge, barrier and scenery, not a near miss.
+ */
+const MIN_SELF = arg('self', 150)
 
 function harm(r1: number, e: number, a2: number, b2: number, a3: number, b3: number): Harm[] {
   return [
@@ -62,6 +71,8 @@ for (let r1 = 360; r1 <= 600; r1 += 20)
             const s = ringStats(H)
             if (s.minR < TIGHT || s.minR > LOOSE) continue
             if (Math.abs(s.len - TARGET) > 90) continue
+            // The curve must be SIMPLE. See MIN_SELF.
+            if (ringSelfDistance(H) < MIN_SELF) continue
             found.push({ score: Math.abs(s.len - TARGET), H, s, key: `${r1}/${e.toFixed(2)}/${a2}/${b2}/${a3}/${b3}` })
           }
 
@@ -78,6 +89,6 @@ for (const f of found) {
 }
 console.log(`${found.length} shapes in band; ${picked.length} distinct:\n`)
 picked.forEach((f, i) => {
-  console.log(`[${i}] ${f.key}   len ${f.s.len.toFixed(0)}m   tightest ${f.s.minR.toFixed(0)}m`)
+  console.log(`[${i}] ${f.key}   len ${f.s.len.toFixed(0)}m   tightest ${f.s.minR.toFixed(0)}m   self-clear ${ringSelfDistance(f.H).toFixed(0)}m`)
   if (i === VARIANT) console.log(`    ${JSON.stringify(f.H.map((h) => ({ k: h.k, ax: +h.ax.toFixed(1), bx: +h.bx.toFixed(1), az: +h.az.toFixed(1), bz: +h.bz.toFixed(1) })))}`)
 })

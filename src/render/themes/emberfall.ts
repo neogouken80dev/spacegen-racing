@@ -68,6 +68,10 @@ const OBSIDIAN = 0x14101a
 const LAVA = 0xff5a10
 const LAVA_CORE = 0xffa848
 const EMBER = 0xff8a3c
+/** The seams in the road. Deliberately dim -- see the veins block in `landmarks`. */
+const VEIN = 0xb04408
+/** The full-width wash that stops the deck reading as a hole. Barely a colour. */
+const WASH = 0x241008
 
 /* ------------------------------------------------------------------ props */
 
@@ -232,26 +236,26 @@ function landmarks(ctx: ThemeContext): void {
     })
   }
 
-  /* ---- THE MOLTEN SEAM, and why the loop needs one at all.
+  /* ---- THE MOLTEN SEAMS, one per loop, and why the loops need them at all.
    *
-   * Photographed at the apex, the Lava Tube came out very nearly black. The
-   * corkscrew did not, and the difference is instructive: the corkscrew carries
-   * a boost strip through its middle, and the emissive chevrons light the whole
-   * bore from the inside. The loop has no strip -- it must not, because a
-   * geodesic set piece that also hands out speed is a gift with no bill -- so
+   * Photographed at the apex, the first Lava Tube came out very nearly black.
+   * The corkscrew did not, and the difference is instructive: the corkscrew
+   * carries a boost strip through its middle, and the emissive chevrons light
+   * the whole bore from the inside. A loop has no strip -- it must not, because
+   * a geodesic set piece that also hands out speed is a gift with no bill -- so
    * it had nothing lighting it at all. A headline set piece the player cannot
    * see is not a set piece.
    *
-   * So the tube gets a seam of its own: a ring of molten rock concentric with
-   * the loop and just outside the corridor, plus two warm point lights inside
-   * the bore. The ring is emissive and does no lighting work by itself (that is
-   * what the bloom pass sees); the two lights are what actually puts the road
-   * surface back in the frame. Geometry derived from the two tags rather than
-   * from the track's own constants -- the art layer reads content, never
-   * imports it. ---- */
-  const iTube = ctx.tagSample('lavatube')
-  const iApex = ctx.tagSample('lavatube-apex')
-  if (iTube >= 0 && iApex >= 0) {
+   * So each of the three loops gets a seam of molten rock concentric with it,
+   * plus two warm point lights inside the bore. The ring is emissive and does
+   * no lighting work by itself (that is what the bloom pass sees); the two
+   * lights are what actually puts the road surface back in the frame. Geometry
+   * is derived from each loop's own two tags rather than from the track's
+   * constants -- the art layer reads content, it never imports it. ---- */
+  for (let li = 1; li <= 3; li++) {
+    const iTube = ctx.tagSample(`loop${li}`)
+    const iApex = ctx.tagSample(`loop${li}-apex`)
+    if (iTube < 0 || iApex < 0) continue
     const a = track.samples[iTube], b = track.samples[iApex]
     const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
     const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
@@ -262,24 +266,214 @@ function landmarks(ctx: ThemeContext): void {
     ctx.own(ringGeo)
     const ringMat = new THREE.MeshBasicMaterial({ color: LAVA, fog: true })
     ctx.own(ringMat)
-    const ring = new THREE.Mesh(ringGeo, ringMat)
-    ring.position.set(cx, cy, cz)
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat)
+    ringMesh.position.set(cx, cy, cz)
     // The torus lies in its own XY plane; stand it up and swing it to face
     // along the road, so it is concentric with the loop rather than crossing it.
-    ring.rotation.y = Math.atan2(fx, fz) + Math.PI / 2
-    ctx.add(ring)
+    ringMesh.rotation.y = Math.atan2(fx, fz) + Math.PI / 2
+    ctx.add(ringMesh)
 
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0xff7a2a, 2.1, loopR * 3.4, 1.7)
+        const L = new THREE.PointLight(0xff7a2a, 3.0, loopR * 4.2, 1.6)
         L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
         ctx.add(L)
       }
     }
-    // A slow breath on the seam, so the tube is alive rather than a lit prop.
+    // A slow breath, offset per loop so the three do not pulse in lockstep.
+    const phase = li * 1.9
     ctx.onUpdate((f: FrameInfo) => {
-      const g = 0.82 + 0.18 * Math.sin(f.time * 0.9)
+      const g = 0.82 + 0.18 * Math.sin(f.time * 0.9 + phase)
       ringMat.color.setHex(LAVA).multiplyScalar(g)
+    })
+  }
+
+  /* ---- MAGMA VEINS IN THE ROAD ITSELF.
+   *
+   * Reported directly: the track floor reads as "all black and unfinished".
+   * That is the mid-to-dark rule taken one step too far -- basalt at 0x1c1614
+   * under a weak key is a correct value for a volcanic road and an unreadable
+   * one for a racing line, because nothing in the frame tells you where the
+   * surface is between the barriers.
+   *
+   * The road's albedo cannot be the answer: `SURFACE_HEX` in trackMesh is a
+   * GLOBAL shared with every circuit, so brightening basalt here would repaint
+   * Elkarim. So the light goes ON the road as geometry the theme owns -- three
+   * wandering seams of cooling crust, laid on the deck and following its
+   * banking and its loops.
+   *
+   * DIM AND PULSING, on instruction and for a reason the file already knows:
+   * this planet's entire emissive budget is meant to be thin, rare and bright,
+   * and a glowing racing line competing with the cars would undo the value
+   * separation the rest of the theme is built on. The veins sit at roughly a
+   * third of the chassis' own luminance and breathe slowly, so they read as
+   * ground the player can judge distance against rather than as a light.
+   *
+   * One mesh, one draw call, no depth writes -- it is a decal on a surface that
+   * is already there, and writing depth would fight the road at grazing angles.
+   */
+  {
+    const S = track.samples
+    const STRIDE = 2
+
+    /**
+     * Two layers, and the first one is the actual fix.
+     *
+     * THE WASH is a single very faint warm sheet across the full road width. It
+     * does almost nothing you can point at and it is the reason the deck stops
+     * reading as a hole in the screen: basalt at 0x1c1614 under this planet's
+     * weak key lands near black, and a surface with no value at all gives the
+     * eye nothing to judge distance or camber against. At 0.07 it lifts the
+     * road just off black without approaching the chassis, which sit an order
+     * of magnitude brighter.
+     *
+     * THE CRACKS are the texture on top. The first version of these ran a heat
+     * term at 0.0013 rad/m -- a 4,833m wavelength on a 3,152m lap, so "heat"
+     * never completed a cycle and every seam came out as one unbroken red
+     * stripe down the road. They now cycle every 40-90m, which is what makes
+     * them cooling crust rather than a painted racing line, and there are six
+     * thin ones instead of three fat ones.
+     */
+    const pos: number[] = []
+    const col: number[] = []
+    const idx: number[] = []
+
+    const pushStrip = (
+      lat: (s: number, w: number) => number,
+      half: (s: number, w: number) => number,
+      heat: (s: number) => number,
+      tint: THREE.Color,
+    ) => {
+      const first = pos.length / 3
+      let row = 0
+      for (let i = 0; i <= S.length; i += STRIDE) {
+        const smp = S[i % S.length]
+        const s = i * 1.5
+        const l = lat(s, smp.width)
+        const h = half(s, smp.width)
+        const g = Math.max(0, heat(s))
+        for (const side of [-1, 1]) {
+          const off = l + side * h
+          pos.push(
+            smp.pos.x + smp.right.x * off + smp.normal.x * 0.07,
+            smp.pos.y + smp.right.y * off + smp.normal.y * 0.07,
+            smp.pos.z + smp.right.z * off + smp.normal.z * 0.07,
+          )
+          col.push(tint.r * g, tint.g * g, tint.b * g)
+        }
+        if (row > 0) {
+          const a0 = first + (row - 1) * 2
+          idx.push(a0, a0 + 1, a0 + 2, a0 + 1, a0 + 3, a0 + 2)
+        }
+        row++
+      }
+    }
+
+    // 1. The wash: the full drivable width at every sample, so it widens with
+    // the road across the ash beds and pinches through the loops on its own.
+    pushStrip(() => 0, (_s, w) => w * 0.98, () => 1, new THREE.Color(WASH))
+
+    // 2. Six cracks. Offsets spread across the corridor, each wandering on its
+    // own slow frequency and breaking into segments on a fast one.
+    const CRACKS = [
+      { off: -0.62, w: 0.55, wander: 0.0037, seg: 0.086, ph: 0.0 },
+      { off: -0.30, w: 0.38, wander: 0.0061, seg: 0.124, ph: 1.3 },
+      { off: -0.06, w: 0.62, wander: 0.0029, seg: 0.071, ph: 2.6 },
+      { off: 0.22, w: 0.44, wander: 0.0052, seg: 0.103, ph: 3.9 },
+      { off: 0.48, w: 0.58, wander: 0.0034, seg: 0.068, ph: 5.2 },
+      { off: 0.71, w: 0.33, wander: 0.0071, seg: 0.141, ph: 0.7 },
+    ]
+    const crackCol = new THREE.Color(VEIN)
+    for (const c of CRACKS) {
+      pushStrip(
+        // WANDER HARD. At 0.16 of a half-width the six seams ran parallel down
+        // the deck and read as lane markings; at 0.34, with a second slower
+        // term beating against the first, they cross each other and the road
+        // reads as cracked ground instead of a painted circuit.
+        (s, w) => (c.off + 0.34 * Math.sin(s * c.wander + c.ph)
+          + 0.14 * Math.sin(s * c.wander * 0.41 + c.ph * 2.2)) * w,
+        (s) => c.w * (0.6 + 0.6 * Math.abs(Math.sin(s * c.wander * 2.7 + c.ph))),
+        // Sharpened hard so the seam is mostly DARK with bright stretches,
+        // rather than a stripe that merely varies.
+        (s) => Math.max(0, Math.sin(s * c.seg + c.ph) * 0.7 + 0.5 * Math.sin(s * c.seg * 2.3 + c.ph * 1.7)) ** 2.2,
+        crackCol,
+      )
+    }
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+    geo.setIndex(idx)
+    geo.computeBoundingSphere()
+    ctx.own(geo)
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true, fog: true, transparent: true, opacity: 0.5,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })
+    ctx.own(mat)
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.renderOrder = 2
+    ctx.add(mesh)
+    ctx.onUpdate((f: FrameInfo) => {
+      // Two beats at different rates so the pulse never looks metronomic, and
+      // shallow: this is meant to be the ground breathing, not a strobe.
+      mat.opacity = 0.44 + 0.10 * Math.sin(f.time * 0.7) + 0.05 * Math.sin(f.time * 1.9)
+    })
+  }
+
+  /* ---- LAVA BOILING OFF THE FLATS.
+   *
+   * The planet's horizon was static: a lava field that never moves is a
+   * painting of one. This is a pool of bursts scattered on the terrain well off
+   * the road, each swelling out of the ground, brightening, and sinking back on
+   * its own cycle -- one InstancedMesh, one draw call, matrices rewritten per
+   * frame and nothing allocated.
+   *
+   * Placed with `clearOfTrack` so a burst can never erupt through the deck, and
+   * kept to the middle distance: close enough to read through the fog, far
+   * enough that its glow is graded most of the way onto the fog colour before
+   * it reaches the frame. ---- */
+  if (quality.tier !== 'low') {
+    const N = Math.round(54 * (quality.propDensity ?? 1))
+    const burstGeo = new THREE.SphereGeometry(1, 6, 5)
+    ctx.own(burstGeo)
+    const burstMat = new THREE.MeshBasicMaterial({ color: LAVA_CORE, fog: true })
+    ctx.own(burstMat)
+    const inst = new THREE.InstancedMesh(burstGeo, burstMat, N)
+    inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    inst.frustumCulled = false
+    const rnd = mulberry32(0xb0115)
+    const spots: { x: number; z: number; y: number; r: number; t0: number; period: number }[] = []
+    const m = track.samples.length
+    let guard = 0
+    while (spots.length < N && guard++ < N * 40) {
+      const smp = track.samples[Math.floor(rnd() * m)]
+      const tl = Math.hypot(smp.tangent.x, smp.tangent.z) || 1
+      const ox = smp.tangent.z / tl, oz = -smp.tangent.x / tl
+      const side = rnd() < 0.5 ? -1 : 1
+      const d = 60 + rnd() * 260
+      const x = smp.pos.x + ox * d * side, z = smp.pos.z + oz * d * side
+      const r = 3 + rnd() * 9
+      if (!ctx.clearOfTrack(x, z, r + 6)) continue
+      const g = ctx.ground(x, z)
+      spots.push({ x, z, y: g.y, r, t0: rnd() * 6, period: 3.4 + rnd() * 4.6 })
+    }
+    const mtx = new THREE.Matrix4()
+    for (let i = 0; i < N; i++) mtx.makeScale(0, 0, 0), inst.setMatrixAt(i, mtx)
+    ctx.add(inst)
+    ctx.onUpdate((f: FrameInfo) => {
+      for (let i = 0; i < spots.length; i++) {
+        const sp = spots[i]
+        const t = ((f.time + sp.t0) % sp.period) / sp.period
+        // Swell fast, sink slow: a burst is an eruption, not a sine wave.
+        const rise = t < 0.25 ? t / 0.25 : Math.max(0, 1 - (t - 0.25) / 0.75)
+        const k = rise * rise * (3 - 2 * rise)
+        const sc = sp.r * (0.25 + 0.75 * k)
+        mtx.makeScale(sc, sc * (0.45 + 0.9 * k), sc)
+        mtx.setPosition(sp.x, sp.y - sp.r * 0.45 + sc * 0.8 * k, sp.z)
+        inst.setMatrixAt(i, mtx)
+      }
+      inst.instanceMatrix.needsUpdate = true
     })
   }
 
@@ -378,7 +572,7 @@ export const EMBERFALL_THEME: Theme = {
       {
         name: 'collapsed-tube', geo: propArch(pal, seg), count: 26,
         radius: 13, gap: 6.5, spread: 150, scale: [0.85, 1.6],
-        cluster: { tag: 'lavatube', span: 300, share: 0.50 },
+        cluster: { tag: 'loop2', span: 300, share: 0.50 },
       },
     ]
   },
@@ -399,8 +593,8 @@ export const EMBERFALL_THEME: Theme = {
    * threshold.
    */
   motes: {
-    count: 520, box: 76, size: [0.06, 0.22], pixel: 150, maxPixels: 5,
-    alpha: 0.85, fall: -2.4, streak: 0.35,
+    count: 1150, box: 92, size: [0.05, 0.26], pixel: 165, maxPixels: 6,
+    alpha: 0.92, fall: -2.9, streak: 0.42,
     color: (_pal, fog) => new THREE.Color(EMBER).lerp(fog, 0.18),
   },
 

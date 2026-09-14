@@ -114,6 +114,46 @@ export function ring(H: Harm[], spacing: number): RingPoint[] {
 }
 
 /** Plan length and the radius range, for searching coefficient space. */
+/**
+ * The closest the closed curve comes to ITSELF, in plan, ignoring neighbours.
+ *
+ * ADDED AFTER THE FACT, and it is the check this module should have had from
+ * the first line. `ringStats` measured length and radius -- the two things a
+ * lap is usually judged on -- and said nothing about whether the curve is
+ * SIMPLE. A harmonic ring with strong k=2 and k=3 terms will happily fold a
+ * lobe back against another part of itself, and three of the four circuits
+ * authored on this module shipped with two stretches of road running 0.2 to
+ * 1.3m apart at the same elevation. Nothing else could see it: they are correct
+ * on length, on curvature, on lap time and on respawns, and wrong in plan.
+ *
+ * `ignore` is the arc-length window either side of a point that counts as its
+ * own neighbourhood rather than a separate part of the lap.
+ */
+export function ringSelfDistance(H: Harm[], ignore = 240): number {
+  const N = 720
+  const pts: { x: number; z: number; s: number }[] = []
+  let s = 0
+  let prev = curveAt(H, 0)
+  for (let i = 0; i < N; i++) {
+    const t = (2 * Math.PI * i) / N
+    const p = curveAt(H, t)
+    s += Math.hypot(p.x - prev.x, p.z - prev.z)
+    pts.push({ x: p.x, z: p.z, s })
+    prev = p
+  }
+  const total = s
+  let best = Infinity
+  for (let i = 0; i < N; i++) {
+    for (let j = i + 1; j < N; j++) {
+      const d = Math.abs(pts[i].s - pts[j].s)
+      if (Math.min(d, total - d) < ignore) continue
+      const dist = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z)
+      if (dist < best) best = dist
+    }
+  }
+  return best
+}
+
 export function ringStats(H: Harm[]): { len: number; minR: number; maxR: number } {
   const N = 4000
   let len = 0, minR = Infinity, maxR = 0
@@ -156,4 +196,82 @@ export function envelope(u: number, from: number, to: number, edge = 0.25): numb
   const f = d / span
   const e = Math.max(1e-6, edge)
   return Math.max(0, Math.min(1, Math.min(f / e, (1 - f) / e)))
+}
+
+
+/* ===========================================================================
+ * STAGGERED LOOPS
+ * =========================================================================== */
+
+/**
+ * A LOOP WHOSE ENTRY AND EXIT ARE NOT THE SAME ROAD.
+ *
+ * Reported from play: "the loop de-loop launches into itself". A circle
+ * traversed once does not intersect itself, so the loop was never the problem
+ * -- the problem is that a textbook loop RETURNS TO ITS OWN ENTRY POINT, so the
+ * approach road and the exit road occupy the same ground and the car flies up
+ * through the deck it is about to land on. tools/probe-selfclear.ts measures
+ * that directly: 0.1m of clearance between surfaces, against the 2m that counts
+ * as separate ground.
+ *
+ * ADVANCING THE LOOP FORWARD DOES NOT FIX IT, and the reason is worth keeping.
+ * At the apex a loop travels BACKWARDS relative to the road, so a forward
+ * advance and the loop's own swing cancel: measured as a 1.6m step between
+ * nodes whose neighbours were 23m apart -- a chord ratio of 17 and an 11m
+ * phantom corner the AI braked for. It also needs the advance to exceed the
+ * loop's circumference to work at all, which for three loops is 40% of a lap.
+ *
+ * What works is LATERAL. The loop consumes no distance along the ring and
+ * slides `stagger` metres across the corridor between going up and coming down
+ * -- in at one side, out at the other. Entry and exit are then a stagger apart,
+ * every chord through the loop is within a metre of every other because nothing
+ * is cancelling, and the result is the diagonal-axis loop a driver expects.
+ *
+ * The slide is a smoothstep so its DERIVATIVE is zero at both mouths as well as
+ * its value; a linear crossing hands the entry a visible kink. It runs from
+ * -stagger/2 to +stagger/2 rather than 0 to stagger so the debt is shared
+ * between the approach and the exit -- see `loopBias`.
+ */
+export function staggeredLoop(
+  f: number, r: number, stagger: number, side: number,
+): { fwd: number; up: number; lat: number } {
+  const th = 2 * Math.PI * f
+  const sm = f * f * (3 - 2 * f)
+  return {
+    fwd: r * Math.sin(th),
+    up: r * (1 - Math.cos(th)),
+    lat: side * stagger * (sm - 0.5),
+  }
+}
+
+/**
+ * The lateral lead-in and lead-out either side of each staggered loop.
+ *
+ * A loop leaves the road half a stagger off the racing line, so the ring has to
+ * absorb it: the approach drifts to -stagger/2 over `blend` of the lap and the
+ * exit comes back from +stagger/2 over the same. At 0.05 of a ~2500m ring that
+ * is 125m to shed 27m -- about 12 degrees, a lane change rather than a chicane.
+ */
+export function loopBias(
+  u: number, loops: { at: number; side: number }[], stagger: number, blend: number,
+): number {
+  let bias = 0
+  for (const L of loops) {
+    let d = u - L.at
+    if (d > 0.5) d -= 1
+    if (d < -0.5) d += 1
+    if (d < 0 && d > -blend) {
+      const t = 1 + d / blend
+      bias += L.side * -0.5 * stagger * (t * t * (3 - 2 * t))
+    } else if (d > 0 && d < blend) {
+      const t = 1 - d / blend
+      bias += L.side * 0.5 * stagger * (t * t * (3 - 2 * t))
+    }
+  }
+  return bias
+}
+
+/** Nodes per loop, matched to the ring's own chord rather than to smoothness. */
+export function loopSteps(r: number): number {
+  return Math.max(14, Math.round((2 * Math.PI * r) / 18))
 }
