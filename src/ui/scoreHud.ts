@@ -130,6 +130,23 @@ const GROUPED = new Intl.NumberFormat('en-US')
  */
 const DRIFT_LABEL = ['DRIFT', 'GOOD DRIFT', 'GREAT DRIFT', 'AWESOME DRIFT', 'INSANE DRIFT']
 
+/**
+ * THE MAGNITUDE LADDER: thousands, tens of thousands, hundreds of thousands.
+ *
+ * Separate from the combo rung on purpose. A rung is what the MULTIPLIER is
+ * doing; this is what the NUMBER is doing, and the two do not move together --
+ * a long slide at x2 crosses 10,000 without ever climbing a rung, and that
+ * crossing is the moment worth marking. Each step gets an instant stamp, a
+ * spark burst and a hotter hue, so the widget escalates as the figure does
+ * rather than only as the multiplier does.
+ */
+function magnitudeOf(v: number): number {
+  if (v >= 100000) return 3
+  if (v >= 10000) return 2
+  if (v >= 1000) return 1
+  return 0
+}
+
 function div(cls: string, parent?: HTMLElement): HTMLDivElement {
   const el = document.createElement('div')
   el.className = cls
@@ -166,7 +183,6 @@ class ScoreHudImpl implements ScoreHud {
   private readonly comboNum: HTMLElement
   private readonly meterFill: HTMLElement
   private readonly meterEl: HTMLElement
-  private readonly eventLine: HTMLElement
   private readonly eventEl: HTMLElement
   private readonly popWrap: HTMLElement
   /** The right-hand running-total panel, and the digits inside it. */
@@ -198,6 +214,10 @@ class ScoreHudImpl implements ScoreHud {
   private eventHold = 0
   private beat = 0
   private lastEvent = ''
+  /** Last magnitude step the displayed figure had reached. See magnitudeOf. */
+  private lastMag = 0
+  /** Alternates so the magnitude stamp restarts on an element that never unmounts. */
+  private magBeat = 0
 
   /**
    * @param host      the shared centre-screen stack (`.sg-moment`), which the
@@ -214,13 +234,22 @@ class ScoreHudImpl implements ScoreHud {
 
     const stack = div('sg-score__stack', this.root)
 
-    // Line one: what is happening. The label leads, because the number under
-    // it is meaningless without knowing what earned it.
-    this.eventEl = div('sg-score__event', stack)
-
-    // Line two: what it is worth, with the multiplier on the same baseline.
-    // This is now the big gold number the widget is built around -- it used to
-    // be the running total, and the total has moved to its own panel.
+    /**
+     * LINE ONE IS THE NUMBER, and the order here was the bug on screen.
+     *
+     * This block used to carry two lines -- a running total and a separate
+     * "event" line -- and `eventLine` was the handle used to hide the second
+     * one when there was no event to show. The rework made the event value the
+     * headline and moved the total to its own panel, and pointed `eventLine` at
+     * the new big-number line. `reset()` still hid it at the start of every
+     * race and nothing ever un-hid it, so for the whole of a race the player
+     * saw the small label and NOTHING ELSE: measured in a real browser, the
+     * value line rendered 0x0 while its own textContent read "32". The field is
+     * gone rather than fixed, because the thing it referred to no longer exists.
+     *
+     * The number also leads now, matching the reference: big figure and
+     * multiplier on top, the name of what earned it underneath.
+     */
     const valueLine = div('sg-score__line', stack)
     this.valueEl = div('sg-score__value', valueLine)
     this.valueEl.textContent = '0'
@@ -228,7 +257,9 @@ class ScoreHudImpl implements ScoreHud {
     this.comboEl.hidden = true
     div('sg-score__x', this.comboEl).textContent = '×'
     this.comboNum = div('sg-score__mult', this.comboEl)
-    this.eventLine = valueLine
+
+    // Line two: what is happening, under the figure it earned.
+    this.eventEl = div('sg-score__event', stack)
 
     // The rung meter, full width of the block, so the escalation reads as
     // belonging to the whole thing rather than to the multiplier chip alone.
@@ -323,6 +354,8 @@ class ScoreHudImpl implements ScoreHud {
     this.lastValue = -1
     this.lastEventValue = -1
     this.lastCombo = ''
+    this.lastMag = 0
+    this.root.dataset.mag = '0'
     this.valueEl.textContent = '0'
     this.totalEl.textContent = '0'
     this.root.dataset.on = '0'
@@ -331,7 +364,6 @@ class ScoreHudImpl implements ScoreHud {
     for (const sp of this.sparks) sp.hidden = true
     this.comboEl.hidden = true
     this.meterEl.hidden = true
-    this.eventLine.hidden = true
     this.eventHold = 0
     this.lastEvent = ''
     this.root.dataset.hot = '0'
@@ -444,6 +476,21 @@ class ScoreHudImpl implements ScoreHud {
     if (ne !== this.lastEventValue) {
       this.lastEventValue = ne
       this.valueEl.textContent = GROUPED.format(ne)
+      // Keyed off the number ON SCREEN, not off the target, so the stamp lands
+      // on the frame the player watches the digit turn over rather than on the
+      // frame the scorer decided it.
+      const mag = magnitudeOf(ne)
+      if (mag !== this.lastMag) {
+        // Only ever an escalation. The chase can overshoot downward between
+        // events and a stamp on the way back down is a flinch, not a moment.
+        if (mag > this.lastMag) {
+          this.magBeat ^= 1
+          this.root.dataset.magpop = String(this.magBeat)
+          this.burst(12 + mag * 6)
+        }
+        this.lastMag = mag
+        this.root.dataset.mag = String(mag)
+      }
     }
 
     // --- THE SWELL ----------------------------------------------------------
@@ -526,6 +573,8 @@ class ScoreHudImpl implements ScoreHud {
       this.eventEl.textContent = label
       this.shownEvent = 0
       this.lastEventValue = -1
+      this.lastMag = 0
+      this.root.dataset.mag = '0'
       // A new moment: stamp it. Alternating, because re-applying the same
       // animation to an element that never leaves the tree does not restart it.
       this.beat ^= 1

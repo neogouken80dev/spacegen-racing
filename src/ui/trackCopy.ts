@@ -55,12 +55,20 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
   rustfall: {
     world: 'Junkyard Planet',
     hook: 'The track physically rearranges itself.',
-    difficulty: 'Easy',
+    // HARD, and rated that way AFTER the reshape rather than before it. The
+    // authored circuit really was the easy one -- two 32m hairpins that nobody
+    // could take quickly and nobody could get wrong. Opening them to 64m turned
+    // both into corners you commit to at nearly 50 m/s, and the two places this
+    // track can actually end a race -- the unbarriered chasm and the flyover
+    // descent -- are both reached faster than they used to be.
+    difficulty: 'Hard',
     note:
-      'The first track a new player sees: wide, forgiving and legible. A long ' +
-      'primary straight into a Class C hairpin, an oil-slick crane drop, a ' +
-      'banked Tier-4 sweeper, the chasm jump, then a bounce corridor that ' +
-      'gives back everything you throw at it and the esses home.',
+      'Fast, open and unforgiving of a late lift. The long primary straight ' +
+      'feeds a 200m sweep you carry speed through rather than a hairpin you ' +
+      'stop for, and the same is true of the loop onto the home straight. ' +
+      'Speed is the difficulty here: the chasm jump has no barriers on either ' +
+      'side of its landing, the banked Tier-4 sweeper arrives with more of it ' +
+      'than before, and the flyover drops you back onto the circuit at pace.',
   },
   cryostatic: {
     world: 'Ice Tundra Planet',
@@ -76,9 +84,16 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
   aetherion: {
     world: 'Ancient-Futurist City',
     hook: 'The road is not always there.',
-    difficulty: 'Hard',
+    // EASY, which is a judgement about LEARNABILITY rather than about how much
+    // is going on. Every hazard here is telegraphed and on a fixed beat -- the
+    // spans run to a 3.2s cycle you can count, the doomed half flashes first,
+    // the warp gate is where it always is -- so the lap rewards knowing it and
+    // punishes very little else. Nothing on it depends on carrying speed you
+    // might not have.
+    difficulty: 'Easy',
     note:
-      'Three spans of the causeway are light, not stone, and they cycle out ' +
+      'A lap you learn rather than one you survive. Three spans of the ' +
+      'causeway are light, not stone, and they cycle out ' +
       'and back on a shared 3.2-second beat that runs away down the deck at ' +
       'about 52 m/s: ride the wave or drop through it. Then the rotunda takes ' +
       '270 degrees of the lap up a vertical wall, where the updraft runs along ' +

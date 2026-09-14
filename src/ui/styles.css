@@ -3686,8 +3686,11 @@
 }
 
 /* Line two: what is happening right now and what it is worth. */
-.sg-score__line--event { gap: 10px; }
-
+/* THE CALLOUT, under the figure it earned.
+   It carries the escalation hue rather than plain ink, so the two lines read as
+   one object that is heating up together -- which is the whole reason they were
+   merged into a single stack. It stays a step smaller and a step calmer than
+   the number: two shouting lines is no hierarchy at all. */
 .sg-score__event {
   font-size: clamp(13px, 2.3vw, 21px);
   font-weight: 700;
@@ -3695,6 +3698,23 @@
   letter-spacing: 0.14em;
   color: var(--sg-ink);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.7);
+  transition: color 180ms linear, font-size 180ms ease-out;
+}
+
+/* From the thousands up, the label joins the number's hue. Below that the
+   figure is small enough that colouring the caption too would be noise. */
+.sg-score[data-mag="1"] .sg-score__event,
+.sg-score[data-mag="2"] .sg-score__event,
+.sg-score[data-mag="3"] .sg-score__event {
+  color: var(--sc);
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.9),
+    0 0 10px color-mix(in srgb, var(--sc) 70%, transparent);
+}
+.sg-score[data-mag="2"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
+.sg-score[data-mag="3"] .sg-score__event {
+  font-size: clamp(17px, 3.1vw, 29px);
+  letter-spacing: 0.2em;
 }
 
 .sg-score__eventv {
@@ -3758,6 +3778,19 @@
 .sg-score[data-rung="3"] { --sc: var(--sg-white); }
 .sg-score[data-rung="4"] { --sc: #ffb020; }
 .sg-score[data-rung="5"] { --sc: #ff7a1a; }
+
+/* THE MAGNITUDE LADDER OVERRIDES THE RUNG LADDER, and only upward.
+   These come after the rung block so they win on equal specificity, which is
+   the intent: a long slide that has banked 40,000 at a modest multiplier has
+   earned the hot colour whatever the multiplier says. Rungs 4 and 5 are already
+   hotter than anything here, so they are re-stated below to take it back. */
+.sg-score[data-mag="1"] { --sc: var(--sg-gold); }
+.sg-score[data-mag="2"] { --sc: #ffb020; }
+.sg-score[data-mag="3"] { --sc: #ff5a1a; }
+.sg-score[data-rung="4"][data-mag="1"],
+.sg-score[data-rung="4"][data-mag="2"] { --sc: #ffb020; }
+.sg-score[data-rung="5"][data-mag="1"],
+.sg-score[data-rung="5"][data-mag="2"] { --sc: #ff7a1a; }
 
 /* Reduced motion: the number lands rather than runs (scorer side), and nothing
    here scales or slides. The resting state of every element is already the
@@ -4196,9 +4229,6 @@
   box-shadow: 0 0 8px color-mix(in srgb, var(--sc) 60%, transparent);
 }
 
-.sg-score__line--event::before,
-.sg-score__line--event::after { display: none; }
-
 .sg-score[data-rung] .sg-score__line::before,
 .sg-score[data-rung] .sg-score__line::after { opacity: 0.85; }
 
@@ -4264,6 +4294,12 @@
 .sg-score[data-rung="4"] .sg-score__value { font-size: min(clamp(62px, 12.2vw, 118px), 16vw); }
 .sg-score[data-rung="5"] .sg-score__value { font-size: min(clamp(68px, 13.4vw, 130px), 16vw); }
 
+/* A five- or six-figure number is a bigger number; it should look like one even
+   at a low multiplier. Capped at 16vw for the same reason the rung sizes are --
+   the line is `white-space: nowrap` and a 320px screen is unforgiving. */
+.sg-score[data-mag="2"] .sg-score__value { font-size: min(clamp(58px, 11.4vw, 112px), 16vw); }
+.sg-score[data-mag="3"] .sg-score__value { font-size: min(clamp(66px, 13vw, 126px), 16vw); }
+
 .sg-score__event { color: var(--sc); }
 .sg-score[data-rung="3"] .sg-score__event { font-size: clamp(15px, 2.7vw, 25px); }
 .sg-score[data-rung="4"] .sg-score__event { font-size: clamp(16px, 3.0vw, 28px); }
@@ -4309,6 +4345,34 @@
 }
 .sg-score[data-pop="0"] .sg-score__stack { animation: sgScorePopA 420ms cubic-bezier(0.16, 0.9, 0.28, 1) 1; }
 .sg-score[data-pop="1"] .sg-score__stack { animation: sgScorePopB 420ms cubic-bezier(0.16, 0.9, 0.28, 1) 1; }
+
+/* CROSSING A THOUSAND, TEN THOUSAND, A HUNDRED THOUSAND.
+   Asked for as "popping in size from larger to normal size almost instantly",
+   which is a different shape from the rung bounce above: that one grows out of
+   rest and settles back, this one ARRIVES big and collapses. So it starts at
+   full scale on frame one and is over in a quarter of a second -- the size
+   change is punctuation, not an animation to watch.
+   Two names for the same reason every other stamp in this file has two: the
+   element never leaves the tree, and re-applying a running animation to it does
+   not restart it.
+   These are declared AFTER the rung pop so that when both fire on the same
+   frame -- a rung and a magnitude step often land together -- the bigger of the
+   two is the one that plays. */
+@keyframes sgScoreMagA {
+  0%   { transform: scale(1.75); filter: brightness(2.1); }
+  38%  { transform: scale(0.965); filter: brightness(1.15); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+@keyframes sgScoreMagB {
+  0%   { transform: scale(1.75); filter: brightness(2.1); }
+  38%  { transform: scale(0.965); filter: brightness(1.15); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.sg-score[data-magpop="0"] .sg-score__stack { animation: sgScoreMagA 260ms cubic-bezier(0.1, 0.75, 0.2, 1) 1; }
+.sg-score[data-magpop="1"] .sg-score__stack { animation: sgScoreMagB 260ms cubic-bezier(0.1, 0.75, 0.2, 1) 1; }
+
+/* Stillness wins over every stamp in this block. */
+.sg-score[data-reduced="1"] .sg-score__stack { animation: none !important; }
 
 /* ---------------------------------------------------------------------------
    THE SPARKS.

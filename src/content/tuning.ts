@@ -929,6 +929,35 @@ export const TUNING = {
     wallDeflect: 3.2,
     /** Speed at which the deflect drops to its weakest, m/s. */
     deflectFullSpeed: 30.0,
+    /**
+     * THE RECOVERY TURN, which is a different job from the deflect above.
+     *
+     * `wallDeflect` is priced off the IMPACT: it is scaled by `impactShare`,
+     * which carries `contactFade` and a severity that falls to zero the moment
+     * the car stops closing on the barrier. That is correct for what it was
+     * built for -- unsticking a car that is driving into a wall -- and it is
+     * useless for the case a player actually complains about. Measured: a car
+     * that hit the barrier at 95-170 degrees off the tangent was still sitting
+     * 92-100 degrees off it a full second later, on every chassis, at every
+     * entry angle. The deflect had already spent itself.
+     *
+     * So this one is priced off the SITUATION instead: while the car is in
+     * contact with a wall and pointing substantially the wrong way, its nose is
+     * turned back down the circuit at this rate in rad/s. 2.0 swings 90 degrees
+     * in about 0.8s, which reads as being helped up rather than as the car
+     * being taken away.
+     */
+    wallRecoverRate: 2.0,
+    /**
+     * Heading error, in degrees off the track tangent, before the recovery turn
+     * engages at all.
+     *
+     * 55 is above anything a drift produces -- the sustained slide angle is 32
+     * and the arc holds it there -- so leaning a drift on a barrier, which is a
+     * real technique on this game's bounce corridors, is untouched. Below this
+     * the player is pointing broadly down the road and needs no help.
+     */
+    wallRecoverAngle: 55,
     racerRadius: 1.9,
   },
 

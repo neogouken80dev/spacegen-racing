@@ -10,6 +10,14 @@ import { Track, SURFACE_GRIP, bridgeSolid } from './track'
 
 const DT = T.sim.dt
 
+/**
+ * Which way a wall hands the car back: +1 is down the circuit, which is the
+ * direction `TrackSample.tangent` points. Named rather than inlined because
+ * both wall branches read it and because it is a design decision, not a
+ * derivation -- see the long note at its use site in the barrier branch.
+ */
+const WALL_DIR = 1
+
 /** Absolute velocity ceiling, m/s. Pure safety net; see the clamp below. */
 const SPEED_CEILING = 120
 
@@ -1495,7 +1503,10 @@ export function stepVehicle(
         // is left essentially untouched.
         const tan = after.sample.tangent
         const along = planarDot(r.vel, tan)
-        const dir = along >= 0 ? 1 : -1
+        // DOWN THE TRACK, ALWAYS. See the note on `dir` in the barrier branch
+        // below: a bounce wall that fires a spun car back up the circuit is the
+        // same problem as a barrier that does, and the same answer.
+        const dir = WALL_DIR
         const newAlong = along + into * T.collision.bounceWallForward * dir
         const outward = into * T.collision.bounceWallRestitution
         let bvx = tan.x * newAlong + wallNormalX * outward
@@ -1573,7 +1584,29 @@ export function stepVehicle(
         const scrubMult = guarded ? 0 : (pab.scrubMult ?? 1)
         const impactShare = clamp01(severity / T.collision.hardImpactSpeed)
           * contactFade * scrubMult
-        const dir = along >= 0 ? 1 : -1
+        /**
+         * THE RECOVERY GOES THE WAY THE TRACK GOES, whatever the car was doing.
+         *
+         * `dir` used to be the sign of the car's own along-wall velocity, so a
+         * hit that had already spun the car -- exactly the hit worth helping --
+         * redirected it FURTHER up the circuit and then turned its nose to
+         * match. The player was handed a recovery that pointed at oncoming
+         * traffic and had to undo it before they could drive.
+         *
+         * `tan` is the track tangent, which points down the circuit, so a fixed
+         * +1 means both halves of the response -- the tangential redirect here
+         * and the nose deflect below -- push toward the racing direction.
+         *
+         * This deliberately overrides the earlier rule that the deflect follow
+         * the direction of TRAVEL so it could never spin a reversing player
+         * round. Reversing off a wall now gets turned back down the track. That
+         * was the call: the reversing player is rare and can simply let go,
+         * while every player who clouts a barrier mid-race is the common case
+         * and was being punished twice -- once by the wall, once by the
+         * recovery. It costs nothing in speed either way; the `wsp > spd` cap
+         * below is what stops a redirect ever becoming a push.
+         */
+        const dir = WALL_DIR
         // Convert part of the into-wall speed into travel ALONG the wall
         // instead of deleting it, then charge the impact against the total.
         const redirected = along + into * T.collision.wallRedirect * dir
@@ -1593,8 +1626,7 @@ export function stepVehicle(
         if (_grav) r.vel.y = wvy
 
         // Deflect: turn the nose along the barrier instead of letting the car
-        // sit against it driving in. Aligned to the direction of TRAVEL, so it
-        // never spins a reversing player round. See T.collision.wallDeflect.
+        // sit against it driving in. Aligned DOWN THE TRACK -- see `dir` above.
         {
           const slow01 = 1 - clamp01(spd / T.collision.deflectFullSpeed)
           const rate = T.collision.wallDeflect * (0.2 + 0.8 * slow01) * impactShare
@@ -1617,6 +1649,49 @@ export function stepVehicle(
             r.yaw += clamp(err, -step, step)
             if (r.yaw > Math.PI) r.yaw -= Math.PI * 2
             if (r.yaw < -Math.PI) r.yaw += Math.PI * 2
+          }
+        }
+        /**
+         * THE RECOVERY TURN.
+         *
+         * The deflect above is priced off the impact, so it has spent itself by
+         * the time the car has stopped moving toward the barrier -- measured, a
+         * car that went in at 95-170 degrees off the tangent was still 92-100
+         * degrees off it a second later on every chassis. That is the state a
+         * player is actually complaining about: not moving backwards so much as
+         * sitting broadside with no idea which way to point.
+         *
+         * This is priced off the situation instead. While the car is against a
+         * wall and genuinely facing the wrong way, its nose comes back toward
+         * the track direction at a fixed rate.
+         *
+         * Three things keep it from becoming an autopilot:
+         *   - the 55-degree gate is above any slide angle the drift produces
+         *     (32 sustained), so leaning a drift on a barrier is untouched;
+         *   - it fades out completely as the player steers, so anyone who has
+         *     taken over is never fought for the wheel;
+         *   - it turns the NOSE only. No velocity is added, and the car still
+         *     has to drive itself out.
+         */
+        {
+          const wantYaw = Math.atan2(tan.x, tan.z)
+          const off = angleDelta(r.yaw, wantYaw)
+          const handsOn = Math.min(1, Math.abs(eff.steer))
+          if (Math.abs(off) > T.collision.wallRecoverAngle * (Math.PI / 180)) {
+            const step = T.collision.wallRecoverRate * (1 - handsOn) * DT
+            if (_grav) {
+              const dot = clamp(r.fwd.x * tan.x + r.fwd.y * tan.y + r.fwd.z * tan.z, -1, 1)
+              const cx = r.fwd.y * tan.z - r.fwd.z * tan.y
+              const cy = r.fwd.z * tan.x - r.fwd.x * tan.z
+              const cz = r.fwd.x * tan.y - r.fwd.y * tan.x
+              const e = Math.atan2(cx * r.up.x + cy * r.up.y + cz * r.up.z, dot)
+              vrotAxis(r.fwd, r.up, clamp(e, -step, step))
+              r.yaw = Math.atan2(r.fwd.x, r.fwd.z)
+            } else {
+              r.yaw += clamp(off, -step, step)
+              if (r.yaw > Math.PI) r.yaw -= Math.PI * 2
+              if (r.yaw < -Math.PI) r.yaw += Math.PI * 2
+            }
           }
         }
         // A guarded impact does not break the drift either. Absorbing the speed

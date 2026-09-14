@@ -77,7 +77,17 @@ const readHud = () => page.evaluate(() => {
   if (!root) return { missing: true }
   const val = document.querySelector('.sg-score__value')
   const combo = document.querySelector('.sg-score__combo')
-  const ev = document.querySelector('.sg-score__line--event')
+  // THE LABEL, BY THE CLASS THE DOM ACTUALLY BUILDS.
+  //
+  // This used to read `.sg-score__line--event`, an element the rework deleted
+  // -- so querySelector returned null, `eventShown` was hard-false on every
+  // sample, and the probe reported "the second line never appeared" on every
+  // run regardless of what was on screen. A permanent failure is the same as no
+  // check at all: nobody reads the needle on a gauge that is always pegged.
+  const ev = document.querySelector('.sg-score__event')
+  // The big-number line, which is what the player is actually here to watch.
+  const line = document.querySelector('.sg-score__line')
+  const lb = line ? line.getBoundingClientRect() : null
   const cs = getComputedStyle(root)
   const b = root.getBoundingClientRect()
   const vw = document.documentElement.clientWidth
@@ -99,11 +109,21 @@ const readHud = () => page.evaluate(() => {
     text: val ? val.textContent : null,
     value: val ? parseInt((val.textContent || '0').replace(/\D/g, ''), 10) : -1,
     comboShown: combo ? !combo.hidden : false,
-    eventShown: ev ? !ev.hidden : false,
-    eventText: ev && !ev.hidden
-      ? (ev.querySelector('.sg-score__event')?.textContent ?? '') + ' ' +
-        (ev.querySelector('.sg-score__eventv')?.textContent ?? '')
-      : '',
+    eventShown: !!(ev && !ev.hidden && (ev.textContent || '').trim()),
+    eventText: ev ? (ev.textContent || '').trim() : '',
+    // THE NUMBER'S OWN BOX, measured separately from the widget's.
+    //
+    // This is the check that was missing, and its absence is exactly how the
+    // headline figure shipped invisible: `reset()` set `hidden` on the value
+    // line and nothing ever cleared it, so for a whole race the player saw the
+    // small caption and no number at all -- while `.sg-score__value`
+    // textContent kept updating, which is all this probe used to look at. A
+    // string in a detached box is not a number on screen.
+    lineW: lb ? Math.round(lb.width) : 0,
+    lineH: lb ? Math.round(lb.height) : 0,
+    lineHidden: line ? line.hidden : true,
+    valueFont: val ? Math.round(parseFloat(getComputedStyle(val).fontSize)) : 0,
+    mag: root.dataset.mag ?? null,
     rung: root.dataset.rung ?? null,
     hot: root.dataset.hot ?? null,
     // THE AWARD RECEIPTS ARE THE ONLY PROOF EVENTS ARRIVE.
@@ -144,6 +164,8 @@ await page.keyboard.down('ShiftLeft')
 const samples = []
 let sawCombo = false
 let sawEvent = false
+let sawNumberBox = false
+let peakMag = 0
 const eventTexts = new Set()
 let sawHot = false
 const popsSeen = new Set()
@@ -155,6 +177,8 @@ for (let i = 0; i < 400; i++) {
   const h = await readHud()
   samples.push({ t: +s.t.toFixed(2), tier: s.tier, side: s.side, v: h.value, combo: h.comboShown })
   if (h.comboShown) sawCombo = true
+  if (h.lineW > 0 && h.lineH > 0 && !h.lineHidden) sawNumberBox = true
+  if (h.mag && +h.mag > peakMag) peakMag = +h.mag
   if (h.eventShown) { sawEvent = true; if (h.eventText.trim()) eventTexts.add(h.eventText.trim()) }
   if (h.hot === '1') sawHot = true
   for (const p of h.pops || []) if (p) popsSeen.add(p.split('  ')[0])
@@ -162,7 +186,7 @@ for (let i = 0; i < 400; i++) {
   if (s.t - t0 > 22) break
   // One frame of the widget at full tilt, for a human to look at. Taken while
   // a combo is live rather than at rest, because at rest it is one grey zero.
-  if (h.comboShown && h.value > 800 && !shotTaken) {
+  if (h.comboShown && h.value > 1200 && !shotTaken) {
     shotTaken = true
     await page.screenshot({ path: new URL('../shots/score-hud.png', import.meta.url).pathname })
   }
@@ -181,13 +205,23 @@ console.log(`raced ${simSeconds}s of sim, ${driftFrames}/${samples.length} sampl
 console.log('peak score :', peak, ' combo shown:', sawCombo, ' event shown:', sawEvent, ' hot:', sawHot)
 console.log('award kinds seen:', [...popsSeen].join(', ') || '(none)')
 console.log('event lines  :', [...eventTexts].slice(0, 6).join(' | ') || '(none)')
+console.log('number box seen:', sawNumberBox, ' peak magnitude step:', peakMag)
 
 if (atStart.missing) errors.push('the score widget is not in the DOM at all')
 else {
-  if (atStart.w === 0 || atStart.h === 0) errors.push('the score widget has no box on screen')
+  // NOT a box check at rest. The widget is deliberately empty between events --
+  // "empty is the feature" -- so zero pixels before anything has happened is
+  // the correct answer. The box that has to exist is checked during the slide,
+  // below, which is when there is something to show.
   if (atStart.display === 'none') errors.push('the score widget is display:none during a race')
-  if (atStart.top > 0.30) errors.push(`the score sits at ${atStart.top} of the viewport, not near the top`)
-  if (atStart.top < 0.11) {
+  // THE STACK SITS AT 30%, BY DECISION, and this window is the decision rather
+  // than a guess. It was at 13% when the counter was the only thing in the
+  // middle; the shared centre stack -- counter over callout, one object -- put
+  // it here, and it was reviewed and kept there. The floor still matters: the
+  // tools cluster runs to y 0.075 and the crosswind strip to y 0.115, and the
+  // first attempt at "top centre" rendered underneath both of them.
+  if (atStart.top > 0.34) errors.push(`the score sits at ${atStart.top} of the viewport, too far down`)
+  if (atStart.top < 0.13) {
     errors.push(`the score starts at ${atStart.top} -- into the tools/crosswind band`)
   }
   // Centred to within 1% of the viewport width. It was asked for at top CENTRE
@@ -203,11 +237,19 @@ if (simSeconds < 8) {
   if (driftFrames === 0) errors.push('never actually drifted -- the drive script did not work')
   else {
     if (!sawCombo) errors.push('drifted, but the combo chip never appeared')
-    if (!sawEvent) errors.push('drifted, but the second line never appeared')
+    if (!sawNumberBox) {
+      errors.push('drifted, but the big number never occupied a box on screen')
+    }
+    if (!sawEvent) errors.push('drifted, but the caption line never appeared')
     else if (![...eventTexts].some((t) => /DRIFT/.test(t))) {
       errors.push(`the second line never named the slide: ${[...eventTexts].slice(0, 3).join(' | ')}`)
     }
     if (!sawHot) errors.push('drifted, but the counter never entered its hot state')
+    // The magnitude ladder is presentation with no other witness: nothing else
+    // in the repo can tell whether crossing a thousand looked like anything.
+    if (peak >= 1000 && peakMag === 0) {
+      errors.push(`banked ${peak} but the magnitude step never left 0`)
+    }
     // The one that actually proves the wiring. See the note in readHud.
     if (popsSeen.size === 0) {
       errors.push(
@@ -216,6 +258,48 @@ if (simSeconds < 8) {
       )
     }
   }
+}
+
+/**
+ * THE MAGNITUDE LADDER, DRIVEN RATHER THAN WAITED FOR.
+ *
+ * A scripted lap banks a few hundred points; the steps worth proving are at
+ * 1,000, 10,000 and 100,000, and waiting for an AI-free keyboard drift to reach
+ * six figures is not a test, it is a hope. So the widget is handed a synthetic
+ * state directly and read back in the SAME evaluate, before the next animation
+ * frame overwrites it with the real one. Still the real DOM, the real CSS and
+ * the real chase -- only the input is fabricated.
+ */
+const ladder = await page.evaluate(() => {
+  const hud = window.__GAME__ && window.__GAME__.scoreHud
+  if (!hud) return { reachable: false }
+  const root = document.querySelector('.sg-score')
+  const seen = []
+  const pops = new Set()
+  const state = (banked) => ({
+    total: banked, combo: 2, comboProgress: 0.5, chain: 0, chainLeft: 0,
+    drifting: true, driftRate: 4000, driftBanked: banked, driftTier: 2,
+    awards: [], rungs: [],
+  })
+  for (const target of [900, 4000, 40000, 400000]) {
+    // Several frames at a long dt so the chase actually lands on the target.
+    for (let i = 0; i < 12; i++) hud.update(state(target), 0.5)
+    seen.push({ target, mag: root.dataset.mag, text: document.querySelector('.sg-score__value').textContent })
+    if (root.dataset.magpop !== undefined) pops.add(root.dataset.magpop)
+  }
+  return { reachable: true, seen, popsFlipped: pops.size > 1,
+    hue: getComputedStyle(root).getPropertyValue('--sc').trim() }
+})
+if (!ladder.reachable) {
+  errors.push('could not reach the score HUD to drive the magnitude ladder')
+} else {
+  console.log('magnitude ladder:', ladder.seen.map((s) => `${s.text}->mag${s.mag}`).join('  '),
+    ' popped:', ladder.popsFlipped, ' hue:', ladder.hue)
+  const steps = ladder.seen.map((s) => +s.mag)
+  if (steps.join(',') !== '0,1,2,3') {
+    errors.push(`the magnitude ladder read ${steps.join(',')} where 0,1,2,3 was expected`)
+  }
+  if (!ladder.popsFlipped) errors.push('the magnitude stamp never restarted across three crossings')
 }
 
 console.log(`\nerrors: ${errors.length}`, errors.slice(0, 5))
