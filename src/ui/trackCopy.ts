@@ -131,6 +131,52 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
       'your corner model and the AI\'s disagree by the most. Then the rim, ' +
       'where an updraft pushes you at a barrier you are allowed to lean on.',
   },
+  abyssal: {
+    world: 'Submerged Transit Tube',
+    hook: 'The tube leaks, and where it leaks things grow.',
+    difficulty: 'Hard',
+    note:
+      'Nine hundred metres down, inside the glass, with the trench on the ' +
+      'other side of it. Three corners on this lap run over biofilm -- grip ' +
+      '0.30, lower than ice and less than a third of steel -- and every bloom ' +
+      'sits where the corner already wanted you slow, so it costs a tidy ' +
+      'driver almost nothing and takes everything off one who arrived hot. ' +
+      'Watch for the amber posts; everything alive down here is cyan, so amber ' +
+      'means exactly one thing. The Cathedral loop and the two-turn Descent ' +
+      'are geodesics and read as dead straight to the car -- hold the ' +
+      'throttle. Then the Breach, where the sea is coming in sideways and the ' +
+      'wall is the thing you lean on.',
+  },
+  halcyon: {
+    world: 'Tidal Coast',
+    hook: 'The fast one. Nothing here is trying to kill you.',
+    difficulty: 'Easy',
+    note:
+      'The roster had one Easy circuit and a new driver needs a second ' +
+      'opinion about what a corner feels like. Easy here is not fewer ' +
+      'corners -- the tightest is 50m, which is tighter than Centurion ' +
+      'Prime\'s. It is width: 23-26m of road across the tideline against ' +
+      '17-21 everywhere else, so a bad entry costs time instead of the lap. ' +
+      'No ice, no biofilm, no oil -- nothing on this circuit drops below dry ' +
+      'gravel. Where the barriers stop it is because the beach carries on. ' +
+      'The Pier loop and the Waterspout are pure spectacle and cannot spit ' +
+      'you off. What it keeps is speed: this is the fastest lap in the game.',
+  },
+  neonspire: {
+    world: 'Stacked Metropolis',
+    hook: 'Dry deck, grip 1.0, and the hardest lap in the game.',
+    difficulty: 'Hard',
+    note:
+      'Every other Hard circuit is hard because of a substance -- ice, ' +
+      'biofilm, vacuum. Take it away and they are wide and forgiving. This ' +
+      'one has no hostile surface at all. It is 15-18m half-width, walled on ' +
+      'both sides, through a 45m corner four times, and 12.5m at the Squeeze ' +
+      'where the road runs between two towers. It only works because contact ' +
+      'no longer ends a drift: leaning on a barrier through a corner this ' +
+      'tight is a line you can choose now. The maglev strips are the ' +
+      'compensation -- more boost road than any other circuit -- so the lap ' +
+      'alternates real top speed with hard braking and never gives you both.',
+  },
 }
 
 const UNRATED: TrackCopy = {

@@ -23,9 +23,12 @@ import { CRYOSTATIC } from './cryostatic'
 import { AETHERION } from './aetherion'
 import { HOLLOWCHOIR } from './hollowchoir'
 import { EMBERFALL } from './emberfall'
+import { ABYSSAL } from './abyssal'
+import { HALCYON } from './halcyon'
+import { NEONSPIRE } from './neonspire'
 
-export const TRACKS: TrackDef[] = [RUSTFALL, CRYOSTATIC, AETHERION, HOLLOWCHOIR, EMBERFALL]
+export const TRACKS: TrackDef[] = [RUSTFALL, CRYOSTATIC, AETHERION, HOLLOWCHOIR, EMBERFALL, ABYSSAL, HALCYON, NEONSPIRE]
 export const TRACKS_BY_ID: Record<string, TrackDef> = Object.fromEntries(
   TRACKS.map((t) => [t.id, t]),
 )
-export { RUSTFALL, CRYOSTATIC, AETHERION, HOLLOWCHOIR, EMBERFALL }
+export { RUSTFALL, CRYOSTATIC, AETHERION, HOLLOWCHOIR, EMBERFALL, ABYSSAL, HALCYON, NEONSPIRE }

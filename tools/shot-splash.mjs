@@ -44,7 +44,7 @@ const AIMU = num('aimup', 2.1)     // and how far above that point
 const FOV = num('fov', 58)
 const SPINS = num('spin', 0)       // extra yaw applied to the car, radians
 
-const NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar' }
+const NAMES = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar', abyssal: 'Meridian Deep', halcyon: 'Halcyon Bay', neonspire: 'Zhen-9' }
 const ROOT = new URL('../dist/', import.meta.url).pathname
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',

@@ -133,6 +133,18 @@ export const ATTRACT_SHOTS: Record<string, AttractShot> = {
     s: 120, lateral: -9.5, height: 2.3, yaw: 0, pitch: 0.045,
     fov: 58, push: 7, pushPeriod: 96,
   },
+  abyssal: {
+    s: 120, lateral: -9.5, height: 2.3, yaw: 0, pitch: 0.045,
+    fov: 58, push: 7, pushPeriod: 96,
+  },
+  halcyon: {
+    s: 120, lateral: -9.5, height: 2.3, yaw: 0, pitch: 0.045,
+    fov: 58, push: 7, pushPeriod: 96,
+  },
+  neonspire: {
+    s: 120, lateral: -9.5, height: 2.3, yaw: 0, pitch: 0.045,
+    fov: 58, push: 7, pushPeriod: 96,
+  },
 }
 
 /** The circuit the title screen runs, unless something overrides it. */

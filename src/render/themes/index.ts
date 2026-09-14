@@ -51,6 +51,9 @@ import { CRYOSTATIC_THEME } from './cryostatic'
 import { AETHERION_THEME } from './aetherion'
 import { HOLLOWCHOIR_THEME } from './hollowchoir'
 import { EMBERFALL_THEME } from './emberfall'
+import { ABYSSAL_THEME } from './abyssal'
+import { HALCYON_THEME } from './halcyon'
+import { NEONSPIRE_THEME } from './neonspire'
 
 const THEMES: Record<string, Theme> = {
   [RUSTFALL_THEME.id]: RUSTFALL_THEME,
@@ -58,6 +61,9 @@ const THEMES: Record<string, Theme> = {
   [AETHERION_THEME.id]: AETHERION_THEME,
   [HOLLOWCHOIR_THEME.id]: HOLLOWCHOIR_THEME,
   [EMBERFALL_THEME.id]: EMBERFALL_THEME,
+  [ABYSSAL_THEME.id]: ABYSSAL_THEME,
+  [HALCYON_THEME.id]: HALCYON_THEME,
+  [NEONSPIRE_THEME.id]: NEONSPIRE_THEME,
 }
 
 export function themeFor(trackId: string): Theme {

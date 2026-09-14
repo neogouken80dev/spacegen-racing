@@ -89,7 +89,24 @@ if (mean < 55 || mean > 75) problems.push(`mean lap ${mean.toFixed(2)}s is outsi
 // worse than anything that has ever shipped. The first version of this gate sat
 // at 25 and passed a circuit that was throwing the field off 16 times a race.
 if (respawns / SEEDS.length > 3) problems.push(`${(respawns / SEEDS.length).toFixed(1)} respawns a race -- the shipped circuits run 0.0-0.7`)
-if (chordMax / chordMin > 3.5) problems.push(`chord ratio ${(chordMax / chordMin).toFixed(2)} will spike curvature at the joins`)
+// CHORD RATIO IS A GATE FOR RING-AUTHORED TRACKS AND A WARNING FOR THE OTHERS.
+//
+// The four hand-authored circuits do not pass it and are not expected to:
+// Elkarim measures 4.21 and Namaresh 8.76, because both were written as literal
+// node arrays where a 105m straight meets a 12m arc. That is exactly the
+// spacing mismatch `content/tracks/ring.ts` exists to prevent, and it is also
+// why Namaresh's header spends two paragraphs on a 70m circle that measured in
+// the fifties. They are shipped, gated and art-locked; re-spacing them would
+// move every balance number in the repo to fix a problem their own comments
+// already document. So this reports for them and fails only for the tracks
+// built on the ring, which have no excuse.
+const RING_AUTHORED = new Set(['emberfall', 'abyssal', 'halcyon', 'neonspire'])
+const ratio = chordMax / chordMin
+if (ratio > 3.5) {
+  const msg = `chord ratio ${ratio.toFixed(2)} will spike curvature at the joins`
+  if (RING_AUTHORED.has(id)) problems.push(msg)
+  else console.log(`\n  NOTE (hand-authored, not gated): ${msg}`)
+}
 if (held < 12) problems.push(`only ${held.toFixed(0)}% of the lap reads as curved -- this is a flat-out circuit, not a racetrack`)
 if (problems.length) { console.log(`\nPROBLEMS:`); for (const p of problems) console.log(`  - ${p}`); process.exit(1) }
 console.log(`\n${DEF.name.toUpperCase()} IS RACEABLE`)

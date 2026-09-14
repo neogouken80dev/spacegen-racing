@@ -51,6 +51,7 @@ const TARGET = arg('target', 'auto')
 const NAMES = {
   rustfall: 'Elkarim', cryostatic: 'Frosthelm',
   aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar',
+  abyssal: 'Meridian Deep', halcyon: 'Halcyon Bay', neonspire: 'Zhen-9',
 }
 
 const browser = await chromium.launch({

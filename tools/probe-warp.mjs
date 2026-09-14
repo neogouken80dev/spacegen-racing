@@ -62,7 +62,7 @@ const clickText = async (labels) => {
 }
 await clickText(['PLAY NOW', 'PLAY', 'Play'])
 await page.waitForSelector('.sg-screen--track .sg-card--track', { state: 'visible', timeout: 20000 })
-const NAME = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar' }[trackId] ?? trackId
+const NAME = { rustfall: 'Elkarim', cryostatic: 'Frosthelm', aetherion: 'Namaresh', hollowchoir: 'Centurion Prime', emberfall: 'Ashkar', abyssal: 'Meridian Deep', halcyon: 'Halcyon Bay', neonspire: 'Zhen-9' }[trackId] ?? trackId
 await page.locator('.sg-screen--track .sg-card--track').filter({ hasText: NAME }).first().click()
 await page.waitForTimeout(1400)
 await page.locator('.sg-screen--track .sg-btn--start').click()
