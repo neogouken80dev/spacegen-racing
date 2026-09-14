@@ -1,5 +1,5 @@
 import type { TrackDef, TrackNode } from '../../sim/track'
-import { ring, envelope, inSpan, type Harm } from './ring'
+import { ring, envelope, inSpan, staggeredLoop, loopBias, loopSteps, type Harm } from './ring'
 
 /**
  * HALCYON BAY — Tidal Coast.
@@ -49,75 +49,105 @@ import { ring, envelope, inSpan, type Harm } from './ring'
  * circuit is the last place to re-learn it.
  */
 
+/**
+ * THE SHAPE: a CLOVER -- k=1 with a strong third harmonic, so the lap runs
+ * three lobes with no long straight anywhere. That is the right plan for a
+ * coast road, which follows headlands rather than cutting across them, and it
+ * is deliberately unlike its neighbours: Meridian Deep is a long trench with
+ * two hairpins, Zhen-9 a squared-off block, Ashkar a kidney. All four were
+ * originally drawn from one k1+k2+k3 parametrisation and came out as versions
+ * of the same shape -- reported as "they all share the same track map".
+ *
+ * 2654m in plan, tightest 81m, self-clearance 196m.
+ */
 const H: Harm[] = [
-  { k: 1, ax: 460, bx: 0, az: 0, bz: 377.2 },
-  { k: 2, ax: 60, bx: 90, az: 63, bz: -42 },
-  { k: 3, ax: 26, bx: 52, az: -31.2, bz: 15.6 },
+  { k: 1, ax: 380, bx: 0, az: 0, bz: 315.4 },
+  { k: 3, ax: 100, bx: 30, az: -75, bz: 35 },
 ]
 
 const SPACING = 26
 const RING = ring(H, SPACING)
 
+/**
+ * Beat map. TWO LOOPS AND NO SPIRAL, by design: the four circuits divide the
+ * set pieces between them rather than each carrying one of everything. Halcyon
+ * Bay is the LOOP track, Meridian Deep the spiral track, Zhen-9 one of each.
+ *
+ * Two loops is also the right count for an Easy circuit -- they are the most
+ * spectacular thing on the lap and neither can spit a new player off, so they
+ * are where a beginner gets to feel fast for free.
+ */
 const BEATS = {
   dunes: [0.12, 0.30] as [number, number],
-  duneJump: 0.22,
-  tideline: [0.34, 0.52] as [number, number],
-  pier: 0.58,
-  waterspout: [0.66, 0.78] as [number, number],
+  duneJump: 0.21,
+  tideline: [0.36, 0.54] as [number, number],
+  loops: [
+    { at: 0.62, r: 34, side: +1, tag: 'pier' },
+    { at: 0.82, r: 40, side: -1, tag: 'arch' },
+  ],
   breeze: [0.10, 0.32] as [number, number],
 }
 
-/** Low coastal relief: over the dunes, down to the flats, back up to the head. */
-function elevation(u: number): number {
-  return 11 * Math.sin(2 * Math.PI * (u - 0.02)) + 6 * Math.sin(4 * Math.PI * (u + 0.3)) + 14
-}
+const LOOP_STAGGER = 60
+const LOOP_BLEND = 0.055
 
-const LOOP_R = 36
-const LOOP_STEPS = 14
-const SPOUT_R = 25
-const SPOUT_TURNS = 2
+/** Low coastal relief. Floor of 6m: nothing sits below world zero. */
+function elevation(u: number): number {
+  return 12 * Math.sin(2 * Math.PI * (u - 0.02)) + 7 * Math.sin(4 * Math.PI * (u + 0.3)) + 22
+}
 
 function build(): TrackNode[] {
   const out: TrackNode[] = []
   const n = RING.length
-  const [wFrom, wTo] = BEATS.waterspout
 
   for (let i = 0; i < n; i++) {
     const p = RING[i]
     const u = p.u
     const y = elevation(u)
+    const fx = Math.sin(p.heading), fz = Math.cos(p.heading)
+    const rx = Math.cos(p.heading), rz = -Math.sin(p.heading)
 
-    // ---- THE WATERSPOUT. Radius ramps in and out over the outer 35%: at a
-    // constant radius a helix starts at its full angular rate and the road
-    // steps sideways as fast as it travels, which Ashkar measured as a phantom
-    // 22m corner at each mouth.
-    if (inSpan(u, wFrom, wTo)) {
-      const f = (u - wFrom) / (wTo - wFrom)
-      const th = 2 * Math.PI * SPOUT_TURNS * f
-      const rx = Math.cos(p.heading), rz = -Math.sin(p.heading)
-      const e = Math.max(0, Math.min(1, Math.min(f / 0.35, (1 - f) / 0.35)))
-      const rEff = SPOUT_R * e * e * (3 - 2 * e)
-      out.push({
-        p: [
-          r1(p.x + rEff * Math.sin(th) * rx),
-          r1(y + rEff - rEff * Math.cos(th)),
-          r1(p.z + rEff * Math.sin(th) * rz),
-        ],
-        w: 18,
-        up: [r3(-Math.sin(th) * rx), r3(Math.cos(th)), r3(-Math.sin(th) * rz)],
-        surface: 'tarmac',
-        boost: f > 0.40 && f < 0.62,
-        tag: f === 0 ? 'waterspout' : undefined,
-      })
+    // ---- THE LOOPS. Each hangs off one ring node, consumes no ring distance,
+    // and slides LOOP_STAGGER metres across the corridor between going up and
+    // coming down -- see `staggeredLoop` in ring.ts. Without that crossing a
+    // loop returns to its own entry point and the approach and the exit are the
+    // same piece of ground, which is what "it launches into itself" is.
+    const li = BEATS.loops.findIndex((L) => Math.abs(shortest(u - L.at)) < 0.5 / n)
+    if (li >= 0) {
+      const L = BEATS.loops[li]
+      const steps = loopSteps(L.r)
+      // Inclusive of f=1: just under 1 the road is still behind its exit
+      // station, and stopping short leaves a long jump to the next ring node.
+      for (let sIdx = 0; sIdx <= steps; sIdx++) {
+        const f = sIdx / steps
+        const o = staggeredLoop(f, L.r, LOOP_STAGGER, L.side)
+        const th = 2 * Math.PI * f
+        out.push({
+          p: [
+            r1(p.x + o.fwd * fx + o.lat * rx),
+            r1(y + o.up),
+            r1(p.z + o.fwd * fz + o.lat * rz),
+          ],
+          w: 19,
+          up: [r3(-Math.sin(th) * fx), r3(Math.cos(th)), r3(-Math.sin(th) * fz)],
+          surface: 'tarmac',
+          tag: sIdx === 0 ? L.tag
+            : sIdx === Math.round(steps / 2) ? `${L.tag}-apex`
+            : undefined,
+        })
+      }
       continue
     }
 
-    const node: TrackNode = { p: [r1(p.x), r1(y), r1(p.z)], w: r1(width(u, p.k)) }
+    const bias = loopBias(u, BEATS.loops, LOOP_STAGGER, LOOP_BLEND)
+    const node: TrackNode = {
+      p: [r1(p.x + bias * rx), r1(y), r1(p.z + bias * rz)],
+      w: r1(width(u, p.k)),
+    }
 
     // Dry sand over the dunes, wet packed sand along the tideline. Note what is
     // NOT here: no surface on this circuit drops below gravel's 0.70.
-    if (inSpan(u, BEATS.dunes[0], BEATS.dunes[1])) node.surface = 'gravel'
-    else node.surface = 'tarmac'
+    node.surface = inSpan(u, BEATS.dunes[0], BEATS.dunes[1]) ? 'gravel' : 'tarmac'
 
     const bank = clamp(-p.k * 900, -10, 10)
     if (Math.abs(bank) > 0.6) node.bank = r1(bank)
@@ -126,42 +156,35 @@ function build(): TrackNode[] {
     if (breeze > 0.02) { node.wind = r1(10 * breeze); node.bounce = true }
 
     if (Math.abs(u - BEATS.duneJump) < 0.012) { node.ramp = 28; node.boost = true; node.tag = 'dune-jump' }
-    // The beach continues past the tideline, so running wide there costs time
-    // on soft sand rather than a respawn. This is the only `open` on the lap.
+    // The beach continues past the tideline, so running wide there costs time on
+    // soft sand rather than a respawn. This is the only `open` on the lap.
     if (inSpan(u, BEATS.tideline[0], BEATS.tideline[1])) node.open = true
 
     if (Math.abs(u - BEATS.tideline[0]) < 0.005) node.tag = 'tideline'
     if (Math.abs(u - BEATS.dunes[0]) < 0.005) node.tag = 'dunes'
     if (u === 0) node.tag = 'start'
     out.push(node)
-
-    // ---- THE PIER. A loop around the head of the old pier. Advances one node
-    // spacing over the revolution so it comes down on the next node rather than
-    // folding back onto its own entry.
-    if (Math.abs(u - BEATS.pier) < 0.5 / n) {
-      const dx = Math.sin(p.heading), dz = Math.cos(p.heading)
-      for (let s = 1; s < LOOP_STEPS; s++) {
-        const th = (2 * Math.PI * s) / LOOP_STEPS
-        const fwd = LOOP_R * Math.sin(th) + SPACING * (th / (2 * Math.PI))
-        out.push({
-          p: [r1(p.x + fwd * dx), r1(y + LOOP_R - LOOP_R * Math.cos(th)), r1(p.z + fwd * dz)],
-          w: 18,
-          up: [r3(-Math.sin(th) * dx), r3(Math.cos(th)), r3(-Math.sin(th) * dz)],
-          surface: 'tarmac',
-          tag: s === LOOP_STEPS / 2 ? 'pier-apex' : s === 1 ? 'pier' : undefined,
-        })
-      }
-    }
   }
   return out
 }
 
-/** WIDE. See the note above: width is most of what makes this circuit Easy. */
+/**
+ * WIDE, and it only ever ADDS. Width is most of what makes this circuit Easy,
+ * and a width function built out of penalties has no floor you can reason about
+ * -- Ashkar stacked four of them into one 15.5m bend before this rule.
+ */
 function width(u: number, k: number): number {
-  let w = 24 - 3 * Math.min(1, Math.abs(k) * 80)
+  let w = 23
+  w += 2.5 * Math.min(1, Math.abs(k) * 80)
   if (inSpan(u, BEATS.tideline[0], BEATS.tideline[1])) w += 2.5
-  if (inSpan(u, BEATS.dunes[0], BEATS.dunes[1])) w -= 1.5
-  return clamp(w, 18, 27)
+  return clamp(w, 21, 28)
+}
+
+/** Shortest signed distance between two lap fractions, wrapping the seam. */
+function shortest(d: number): number {
+  if (d > 0.5) return d - 1
+  if (d < -0.5) return d + 1
+  return d
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))

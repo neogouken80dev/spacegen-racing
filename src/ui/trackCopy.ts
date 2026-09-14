@@ -137,15 +137,15 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
     difficulty: 'Hard',
     note:
       'Nine hundred metres down, inside the glass, with the trench on the ' +
-      'other side of it. Three corners on this lap run over biofilm -- grip ' +
-      '0.30, lower than ice and less than a third of steel -- and every bloom ' +
-      'sits where the corner already wanted you slow, so it costs a tidy ' +
-      'driver almost nothing and takes everything off one who arrived hot. ' +
-      'Watch for the amber posts; everything alive down here is cyan, so amber ' +
-      'means exactly one thing. The Cathedral loop and the two-turn Descent ' +
-      'are geodesics and read as dead straight to the car -- hold the ' +
-      'throttle. Then the Breach, where the sea is coming in sideways and the ' +
-      'wall is the thing you lean on.',
+      'other side of it. The plan is the trench: two hairpins and two very ' +
+      'long flanks, the fastest shape on the roster. Three corners run over ' +
+      'biofilm -- grip 0.30, lower than ice -- and every bloom sits where the ' +
+      'corner already wanted you slow, so it costs a tidy driver almost ' +
+      'nothing and takes everything off one who arrived hot. Watch the amber ' +
+      'posts; everything alive down here is cyan, so amber means one thing. ' +
+      'This is the SPIRAL circuit: one three-turn descent through the tube and ' +
+      'no loop anywhere. Then the Breach, where the sea comes in sideways and ' +
+      'the wall is the thing you lean on.',
   },
   halcyon: {
     world: 'Tidal Coast',
@@ -154,13 +154,13 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
     note:
       'The roster had one Easy circuit and a new driver needs a second ' +
       'opinion about what a corner feels like. Easy here is not fewer ' +
-      'corners -- the tightest is 50m, which is tighter than Centurion ' +
-      'Prime\'s. It is width: 23-26m of road across the tideline against ' +
-      '17-21 everywhere else, so a bad entry costs time instead of the lap. ' +
-      'No ice, no biofilm, no oil -- nothing on this circuit drops below dry ' +
-      'gravel. Where the barriers stop it is because the beach carries on. ' +
-      'The Pier loop and the Waterspout are pure spectacle and cannot spit ' +
-      'you off. What it keeps is speed: this is the fastest lap in the game.',
+      'corners: the lap runs three lobes with no long straight anywhere, ' +
+      'which is what a coast road does around headlands. It is width -- ' +
+      '21-28m of road against 14-21 on Zhen-9 -- so a bad entry costs time ' +
+      'instead of the lap. No ice, no biofilm, no oil; nothing drops below ' +
+      'dry gravel. Where the barriers stop it is because the beach carries ' +
+      'on. This is the LOOP circuit: the Pier and the Arch, both pure ' +
+      'spectacle, neither able to spit you off.',
   },
   neonspire: {
     world: 'Stacked Metropolis',
@@ -169,13 +169,15 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
     note:
       'Every other Hard circuit is hard because of a substance -- ice, ' +
       'biofilm, vacuum. Take it away and they are wide and forgiving. This ' +
-      'one has no hostile surface at all. It is 15-18m half-width, walled on ' +
-      'both sides, through a 45m corner four times, and 12.5m at the Squeeze ' +
-      'where the road runs between two towers. It only works because contact ' +
-      'no longer ends a drift: leaning on a barrier through a corner this ' +
-      'tight is a line you can choose now. The maglev strips are the ' +
-      'compensation -- more boost road than any other circuit -- so the lap ' +
-      'alternates real top speed with hard braking and never gives you both.',
+      'one has no hostile surface at all. It is a squared-off block: four ' +
+      'flat sides and four real corners, 14-21m of road, walled on both ' +
+      'sides, down to 14m at the Squeeze where the street runs between two ' +
+      'towers. It only works because contact no longer ends a drift -- ' +
+      'leaning on a barrier through a corner this tight is a line you can ' +
+      'choose now. The maglev strips are the compensation, so the lap ' +
+      'alternates real top speed with hard braking and never gives you both. ' +
+      'One loop and one spiral: the Holo Ring and the Spire, the only two ' +
+      'places on the lap you stop working.',
   },
 }
 

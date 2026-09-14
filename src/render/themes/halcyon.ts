@@ -151,14 +151,20 @@ function landmarks(ctx: ThemeContext): void {
   const { track, palette: pal, quality } = ctx
   bindSurfaceSpray(track, SPRAY)
 
-  /* ---- THE PIER. Same problem the Lava Tube and the Cathedral had: a loop
-   * with no boost strip through it has nothing lighting its far side. Here the
-   * answer is in fiction for free -- it is a pier, and piers have lamps. A ring
-   * of them concentric with the loop, plus two warm fills inside. ---- */
-  const iPier = ctx.tagSample('pier')
-  const iApex = ctx.tagSample('pier-apex')
-  if (iPier >= 0 && iApex >= 0) {
-    const a = track.samples[iPier], b = track.samples[iApex]
+  /* ---- THE LOOPS. Same problem the Lava Tube and the Cathedral had: a loop
+   * with no boost strip through it has nothing lighting its far side, and a
+   * headline set piece the player cannot see is not one. Here the answer is in
+   * fiction for free -- these are seafront structures, and seafront structures
+   * have lamps. A ring of them concentric with each loop, plus two warm fills
+   * inside the bore.
+   *
+   * TWO of them now: this circuit is the LOOP track in the roster's division of
+   * set pieces, so it carries the Pier and the Arch and no spiral at all. ---- */
+  for (const name of ['pier', 'arch']) {
+    const iLoop = ctx.tagSample(name)
+    const iApex = ctx.tagSample(`${name}-apex`)
+    if (iLoop < 0 || iApex < 0) continue
+    const a = track.samples[iLoop], b = track.samples[iApex]
     const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
     const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
     const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
@@ -169,7 +175,6 @@ function landmarks(ctx: ThemeContext): void {
     const N = 18
     for (let i = 0; i < N; i++) {
       const th = (Math.PI * 2 * i) / N
-      // The ring lies in the plane containing the road's heading and world up.
       const ox = Math.sin(th) * R, oy = -Math.cos(th) * R
       lamps.push(part(new THREE.SphereGeometry(0.7, 6, 5), LAMP, xf(fx * ox, oy, fz * ox)))
     }
@@ -182,14 +187,15 @@ function landmarks(ctx: ThemeContext): void {
     ctx.add(mesh)
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0xffc078, 1.7, loopR * 3.2, 1.8)
+        const L = new THREE.PointLight(0xffc078, 1.9, loopR * 3.6, 1.8)
         L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
         ctx.add(L)
       }
     }
+    const ph = name === 'arch' ? 2.3 : 0
     ctx.onUpdate((f: FrameInfo) => {
       // Filament lamps on a sea breeze: a small, slow flicker, never a strobe.
-      const g = 0.90 + 0.10 * Math.sin(f.time * 1.7) * Math.sin(f.time * 0.43)
+      const g = 0.90 + 0.10 * Math.sin(f.time * 1.7 + ph) * Math.sin(f.time * 0.43 + ph)
       mat.color.setScalar(g)
     })
   }
