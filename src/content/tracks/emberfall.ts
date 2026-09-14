@@ -1,417 +1,419 @@
 import type { TrackDef, TrackNode } from '../../sim/track'
-import { ring, envelope, inSpan, type Harm } from './ring'
+import { circuit, type Seg } from './circuit'
 
 /**
  * ASHKAR — Volcanic Shield.
  *
- * The fifth circuit, and the first authored from a harmonic ring rather than a
- * turtle (see the header of ring.ts for why the turtle kept demanding a
- * straight that ran 400 metres backwards).
+ * ===========================================================================
+ * REDESIGNED FROM A HARMONIC RING TO A NAMED CIRCUIT.
+ * ===========================================================================
  *
- * Difficulty: Medium. It sits between Namaresh and Elkarim on purpose -- the
- * roster needed a circuit whose difficulty comes from SURFACE and SIGHTLINES
- * rather than from a hazard you can be killed by. Nothing on Ashkar deletes a
- * lap. The ash beds cost you a tenth at a time.
+ * The previous Ashkar -- like Meridian Deep, Halcyon Bay and Zhen-9 -- was a
+ * sum of two or three harmonics: smooth everywhere, no straights, no braking
+ * zones, and a radius that wandered wherever the coefficients pushed it. The
+ * report that killed all four: "the overall oval or square-ish type design
+ * does not offer a lot of variety in driving experience... the few turns are
+ * far too sharp to allow smooth drifts and ends up causing the user to crash
+ * into the walls." This file replaces that ring with `circuit()`: a named
+ * sequence of straights and corners of CHOSEN radius, authored corner by
+ * corner the way a real shield-volcano road would be surveyed -- around the
+ * rim, down into a tube, back up over a spire.
+ *
+ * The physics that drove every radius below (grip 1.0 on tarmac and metal,
+ * 0.70 on the ash beds, corner speed = sqrt(1.07 * 34 * R)):
+ *
+ *   45-58m   43-47 m/s   hairpin, heavy braking -- at most one or two
+ *   58-80m   47-53 m/s   the corner a driver actually DRIFTS
+ *   80-110m  53-62 m/s   fast corner, a lift and a commitment
+ *  110-220m  flat out    sweeper -- still a corner to the AI's drift-hold
+ *                        gate (curvatureAt gate, R<222m)
+ *
+ * Thirteen corners land: 1 hairpin, 6 medium (the heart of the lap), 5 fast,
+ * 1 sweeper -- 85% of the lap in the 58-110m band the old ring rarely
+ * visited, with the single hairpin fed by the 159m start straight so there
+ * is exactly one corner on the circuit that demands a full stop.
  *
  * ---------------------------------------------------------------------------
- * 1. THE TWO SET PIECES ARE SET PIECES, AND THE ARITHMETIC SAYS SO.
+ * THE FEATURE MIX IS DIFFERENT FROM THE OTHER THREE REDESIGNS ON PURPOSE.
  *
- * The Lava Tube is a full vertical loop; the Corkscrew is two turns of helix
- * around the inside of a tube. Both are the headline images of the track and
- * NEITHER IS A CORNER, which is not a disappointment to be designed around but
- * a fact to design WITH.
+ * Zhen-9 got a street circuit's corner density. Ashkar gets the maximalist
+ * set-piece list, because a volcanic shield is the one planet in the roster
+ * built entirely from held terrain: TWO vertical loops, ONE corkscrew, ONE
+ * launch across an open fissure, and ONE enclosed tunnel bored through the
+ * basalt. `Track.curvatureAt` reads a loop's and a corkscrew's curvature
+ * about the surface normal, which for both is identically the axis they
+ * spiral around -- geodesic curvature zero, DEAD STRAIGHT to the AI (see
+ * `tools/probe-loop.ts` on the old ring: 0.0000 across 120m either side of a
+ * loop apex, against the 0.0045 drift-hold gate). Nothing brakes for them and
+ * nothing drifts in them, which is why they sit where the lap can afford to
+ * be flat out and let the ash beds and the tunnel corner do the lap's actual
+ * cornering work.
  *
- * `Track.curvatureAt` measures curvature about the SURFACE NORMAL on a gravity
- * track, which is the right thing to measure. A loop's curvature vector points
- * straight along that normal; so does a helix's. Their geodesic curvature is
- * therefore identically zero, and the sim reads both as DEAD STRAIGHT --
- * measured at 0.0000 across 120m either side of the loop apex (tools/probe
- * -loop.ts), against the AI's 0.0045 drift-hold gate. Nothing brakes for them.
- * Nothing drifts in them. Aetherion's rotunda cost three balance rounds to
- * exactly this arithmetic before anyone wrote it down.
+ * THE ASH BEDS ARE STILL THE TRACK. A quarter of the lap (24%) is gravel
+ * (grip 0.70) -- four corners and the straights that join them, wide, fast
+ * and banked, the same shape as Elkarim's gravel opened out into its own
+ * quarter of the lap rather than one pinch. Gravel is also where the AI's
+ * corner model and a drifting player's diverge furthest, which is where
+ * overtakes come from.
  *
- * So both are placed where the lap can AFFORD to be flat out, and the lap's
- * actual work is done by the ash beds and the last corner. The loop's job is to
- * be the thing you tell someone about; the ash beds' job is to decide the race.
+ * ---------------------------------------------------------------------------
+ * WHY A CORNER'S POSITION IN THE LAP MATTERS AS MUCH AS ITS RADIUS.
  *
- * 2. THE ASH BEDS ARE THE TRACK.
+ * `circuit()` closes a lap with the minimum-norm correction across every
+ * authored straight -- see its own header. That correction is not free: a
+ * corner sequence has a "natural" shape, and a straight asked to be far
+ * longer than its natural gap fights the correction, which pays for it by
+ * shrinking OTHER straights, sometimes past zero. The first full topology
+ * tried here put four gravel corners in a slowly-turning run (all four
+ * within 20-55 degrees of the same heading) and needed a uniform scale of
+ * 235x site size before every straight cleared the 40m floor -- workable
+ * arithmetically, unusable for a 55-75s lap. The fix was not a bigger scale;
+ * it was a heading sequence that actually spreads around the circle instead
+ * of idling near one direction for five corners in a row (see CORNERS below:
+ * only two of the thirteen turn the "wrong" way, both short jinks that keep
+ * the fast band honest rather than long detours). At site scale 1.0 the same
+ * feature list -- same two loops, same corkscrew, same fissure and tunnel --
+ * closes with every straight at least 56.5m, 41% clear of the floor; the
+ * lengths actually authored below are that pass scaled by 0.87 for lap time
+ * (see THE FULL SEGMENT LIST), which brings the shipped minimum to 43.8m,
+ * still 9% clear -- the tightest margin on the circuit, and it belongs to
+ * one of the two short straights bracing the Corkscrew, not to anything
+ * this pass touched.
  *
- * A third of the lap is gravel (grip 0.70). They are wide, fast and banked,
- * which makes them a drift section rather than a penalty box -- the same shape
- * as Elkarim's gravel, opened out. Gravel also means the AI's corner model and
- * the player's are furthest apart here, which is where overtakes come from.
+ * ---------------------------------------------------------------------------
+ * TWO THINGS `circuit()`'s `loop` SEGMENT DOES NOT DO FOR YOU.
  *
- * 3. THE UPDRAFT.
+ * 1. ITS OWN CLOSING NODE IS A DUPLICATE. `loop` samples f=0..1 INCLUSIVE, so
+ *    its last node lands exactly on the segment's true endpoint -- which is
+ *    also exactly where the next segment's own f=0 node is computed from.
+ *    Measured: a 0.0m chord at both loop exits, `chordMax/chordMin=Infinity`.
+ *    `dedupeCoincidentNodes` below removes the duplicate; it walks the whole
+ *    array rather than special-casing the loops' indices because the SAME
+ *    seam exists once more where the lap closes (last node onto the first).
  *
- * `wind` through the caldera rim, ramped in and out across 14% of the lap so it
- * never switches on at a sample boundary. The rim is BARRIERED, and that is a
- * measurement rather than a preference: run with the same gust over `open` road
- * and the field respawns 16.3 times a race against 0.0-0.7 on every shipped
- * circuit, all of it inside that one stretch. The wind now pushes you into a
- * bounce wall instead of off a cliff, which is a corner you can commit to --
- * especially since contact no longer ends a drift. Debris draws it (see
- * themes/emberfall.ts); a force the player cannot see is not weather, it is a
- * bug, and that lesson is already paid for.
+ * 2. A TIGHT LOOP CANNOT CARRY A WIDE STAGGER GENTLY -- AND FOR A WHILE THIS
+ *    FILE'S OWN LOOPS DIDN'T. The first pass ran both Cinder Loops small
+ *    (r=22, r=30) against `circuit.ts`'s OLD crossing formula, -stag/2 to
+ *    +stag/2, which shared the lateral debt between the loop's two mouths but
+ *    put a genuine half-stagger SIDEWAYS STEP right at the entry: the road
+ *    arrived on the racing line at lateral zero and the loop's first node was
+ *    already stag/2 to one side of it. Measured: a 39.9m chord into the mouth
+ *    against a ~26m neighbour -- a ratio over 11 from that join alone. This
+ *    file used to carry its own `easeLoopEntry` post-processing pass to walk
+ *    the approach nodes sideways with a hand-tuned smoothstep (blend=230m)
+ *    and paper over it.
  *
- * 4. WHAT IT DELIBERATELY DOES NOT HAVE.
+ *    That function is GONE, not because the bug it fixed stopped existing,
+ *    but because `circuit.ts` fixed it upstream instead: the crossing now
+ *    runs 0 -> stagger, so the loop begins exactly where the road already is
+ *    and a smoothstep holds the derivative at zero at BOTH mouths -- there is
+ *    no kink left for a track file to ease around, and re-applying the old
+ *    easing here would slide the approach toward a -stag/2 offset that no
+ *    longer exists, manufacturing the exact kink it used to fix.
  *
- * No `fragile`. A collapsing lava crust is the obvious gimmick and it is not
- * available honestly: `fragile` turns the surface into `T.hazard.crackedSurface`
- * which is a GLOBAL, and on this planet that global is ice. Shipping a lava
- * shelf that cracks into ice to reuse a mechanic would be a lie in the one
- * place the player is looking. Making the cracked surface per-track is a real
- * change to a determinism-gated system and belongs in its own pass, not
- * smuggled in behind a new planet.
+ *    What the mouth fix EXPOSED rather than caused: a small-radius loop still
+ *    cannot move a wide stagger across its own short arc length without the
+ *    crossing itself reading as a corner nobody authored -- the sideways
+ *    travel has to happen within 2*pi*r, and the smaller r is, the steeper
+ *    that ask. Measured across the ring-authored circuits after the mouth
+ *    fix landed: r=22 and r=30 loops BOTH still produced a phantom 15m
+ *    "corner", r=25 produced 26m, r=36 produced none. `circuit()` now throws
+ *    rather than ship that silently -- radius >= 32m, stagger <= 1.9 x
+ *    radius -- so both Cinder Loops here grew: r=34 (was 22, stagger 54) and
+ *    r=40 (was 30, stagger 58), taller and more dramatic (68m and 80m of
+ *    apex swing against the old 44m and 60m) rather than a compromise.
+ *    Combined with the dedupe, the circuit's worst chord ratio measures 2.87
+ *    and its tightest curvature reads 47m -- a little under the 55m hairpin,
+ *    not a number far below anything authored.
+ *
+ * These fixes do not touch `circuit.ts` beyond what its own guard now
+ * enforces: the dedupe operates on the `TrackNode[]` the builder returns,
+ * the same way every tag below does, because a single track's file cannot
+ * change the builder for everyone. Item 3 below is a different kind of fix
+ * -- not a workaround for something `circuit()` leaves undone, but a
+ * parameter this file got wrong the first time and a race actually caught.
+ *
+ * ---------------------------------------------------------------------------
+ * 3. WHAT THE CORKSCREW'S OWN CLIMB DID TO THE FIELD.
+ *
+ * `curvatureAt` reads a corkscrew as straight (see above), so nothing brakes
+ * for it -- which said nothing about whether the field could physically
+ * CLIMB it. The first version ran `r: 42, turns: 2, len: 280`, a helix whose
+ * own steepest slope (arctan(2*PI*r*turns/len)) is 62.1 degrees. Racing it
+ * with `tools/probe-newtrack.ts`'s own harness measured 6.0 respawns a
+ * race -- the shipped circuits run 0.0-0.7 -- and logging each racer's own
+ * position at the moment of respawn put every one of them within 6 metres of
+ * the same distance along the lap: partway up the climb a racer's altitude
+ * goes negative, ground contact never returns, and the stall watchdog
+ * (race.ts's `resolveStalls`) eventually respawns it.
+ * `turns` only has to be a whole number to leave the corkscrew upright --
+ * `th` at f=1 is `2*PI*turns`, a full circle for ANY integer, one included --
+ * so two turns bought nothing the number needed. One turn at the same r and
+ * len cuts the slope to 43.3 degrees and raced clean: 0.0 respawns across
+ * three seeds. The lesson generalises past this one set piece: `curvatureAt`
+ * being blind to a segment is not the same claim as a chassis being able to
+ * climb it, and the race harness is the only thing that actually checks the
+ * second one.
+ *
+ * ---------------------------------------------------------------------------
+ * IDENTITY, UNCHANGED.
+ *
+ * Difficulty: Medium. Nothing on Ashkar deletes a lap -- the ash beds cost a
+ * tenth of a second at a time, not a respawn. Basalt tarmac carries the rim;
+ * the two Cinder Loops and the tunnel that joins them run `metal`, the same
+ * surface as the Corkscrew, because all four are the same bored volcanic
+ * rock. No `fragile`: a collapsing lava crust is the obvious gimmick and it
+ * is not available honestly -- `fragile` turns a surface into
+ * `T.hazard.crackedSurface`, which is a GLOBAL, and on this planet that
+ * global is ice. Shipping a lava shelf that visibly cracks into ice to reuse
+ * a mechanic would be a lie in the one place the player is looking.
+ *
+ * WHAT IS GONE: the caldera-rim crosswind. It was never part of the required
+ * feature list for this pass (two loops, one corkscrew, one fissure, one
+ * tunnel), and the ring it rode on is gone with the ring. The lap's character
+ * now comes from the ash beds' width and bank plus the loops' and
+ * corkscrew's own elevation swing (16m to 122m over the lap), which is more
+ * of the track doing the work than a wind band ever was.
  * ---------------------------------------------------------------------------
  */
 
 /**
- * The ring. Searched rather than drawn (tools/probe-ring.ts): plan length
- * 3150m with radii from 64m to effectively straight, which puts the tightest
- * corner just inside Class B and leaves two stretches long enough to be read as
- * straights. k=2 puts the waist in at the ash beds; k=3 gives the rim its lobe.
+ * THE THIRTEEN CORNERS, in lap order. Each radius is picked from the band
+ * table above; each `bank` carries the SAME SIGN as `deg` (positive = right)
+ * -- `circuit()` does not infer one from the other, and every corner on every
+ * shipped `circuit()` track keeps this pairing, so a mismatched sign here
+ * would be the one corner on the planet that banks away from the turn.
  */
-const H: Harm[] = [
-  { k: 1, ax: 352, bx: 0, az: 0, bz: 281.6 },
-  { k: 2, ax: 0, bx: 56.3, az: 39.4, bz: 0 },
-  { k: 3, ax: 42.2, bx: 56.3, az: -33.8, bz: 25.4 },
+const CORNERS: (Seg & { t: 'corner' })[] = [
+  // C1 -- CALDERA HOOK. The lap's only hairpin, and the reason the start
+  // straight closes at 159m: a hairpin fed by anything shorter is a corner the AI
+  // arrives at still on the throttle. Widened (26 against the 21m base) for
+  // the same reason the old file widened its own tightest bend -- a driver
+  // who needs an alternate line through the lap's one full stop should have
+  // room to take it.
+  { t: 'corner', r: 55, deg: 45, bank: 10, w: 26, tag: 'caldera-hook' },
+  // C2 -- BASALT SWEEP. Medium band, opens the lap's second half of the
+  // opening straight into the run toward the fissure.
+  { t: 'corner', r: 65, deg: 35, bank: 8, tag: 'basalt-sweep' },
+  // C3-C5 -- THE ASH BEDS' OWN CORNERS. Landing off the fissure onto gravel,
+  // three medium/fast turns and one jink (C4, the lap's other sign change)
+  // keep this from reading as one long bend -- a third of a lap on 0.70 grip
+  // needs its own variety or it is just a skid pad.
+  { t: 'corner', r: 72, deg: 46, bank: 8, surface: 'gravel', w: 25, tag: 'ash-curve' },
+  { t: 'corner', r: 85, deg: 20, bank: 5, surface: 'gravel', w: 25, tag: 'ash-bend' },
+  { t: 'corner', r: 95, deg: -25, bank: -6, surface: 'gravel', w: 25, tag: 'ash-jink' },
+  { t: 'corner', r: 68, deg: 40, bank: 8, surface: 'gravel', w: 25, tag: 'ash-exit' },
+  // C6 -- TUBE BEND. The only corner inside the Lava Tube tunnel: fast band,
+  // so the tunnel reads as a held commitment through the rock rather than a
+  // second braking zone stacked on top of the ash beds' exit.
+  { t: 'corner', r: 100, deg: 45, bank: 7, surface: 'metal', w: 20, tag: 'tube-bend' },
+  // C7-C8 -- EMBER SWEEP / EMBER HOOK. Medium band, between the tunnel's
+  // first Cinder Loop and the second -- the technical heart of the lap the
+  // band table calls for, on ordinary basalt with nothing else going on.
+  { t: 'corner', r: 76, deg: 45, bank: 8, tag: 'ember-sweep' },
+  { t: 'corner', r: 62, deg: 38, bank: 8, tag: 'ember-hook' },
+  // C9 -- RIDGE JINK. The lap's third and last sign change, a short fast
+  // left between the second loop and the Corkscrew that keeps the run of
+  // right-handers from the tunnel to the final sweeper from reading as one
+  // uninterrupted curl.
+  { t: 'corner', r: 90, deg: -20, bank: -5, tag: 'ridge-jink' },
+  // C10-C11 -- RIDGE BEND / FLOW HOOK. Fast then medium, unwinding out of the
+  // Corkscrew's exit straight toward the lap's final approach.
+  { t: 'corner', r: 105, deg: 33, bank: 6, tag: 'ridge-bend' },
+  { t: 'corner', r: 60, deg: 30, bank: 8, tag: 'flow-hook' },
+  // C12 -- RIM SWEEPER. r=170m, the lap's one sweeper: flat out, closes the
+  // final 115m+ straight back onto the start.
+  { t: 'corner', r: 170, deg: 28, bank: 4, tag: 'rim-sweeper' },
+]
+{
+  const sum = CORNERS.reduce((a, c) => a + c.deg, 0)
+  if (Math.abs(sum) !== 360) throw new Error(`Ashkar: corner angles sum to ${sum}, not 360`)
+}
+
+/**
+ * THE FULL SEGMENT LIST. Straight lengths are AUTHORED, not final -- see the
+ * header above on why the closed values (logged by tools/probe-newtrack.ts)
+ * land at 43.8-206.5m rather than these numbers. Sized to close comfortably
+ * (9% clear of the 40m floor at the tightest) AND to land the lap near the
+ * middle of the 55-75s band once the two loops and the corkscrew's own
+ * travelled distance are added on top of the plan length -- the first pass
+ * used the straight, roomier lengths this comment used to cite and measured
+ * a 75.95s mean lap, over the ceiling; every length below is that pass
+ * scaled by 0.87. `toY` only appears where the elevation actually changes;
+ * every segment between keeps the last value, so the profile reads top to
+ * bottom as: climb off the grid, launch the fissure, plateau on the ash
+ * beds, dive into the tunnel, climb out through the loops, hold through the
+ * corkscrew, settle back to the grid's 30m.
+ */
+const segs: Seg[] = [
+  // Held above the 0.87 scale everything else took: a hairpin's braking zone
+  // is a hard 150m+ floor, not a soft one, so this alone was bumped back up
+  // (96 -> 116 authored) until its closed length cleared it with room to
+  // spare -- 159.3m, against the 137.6m the flat scale would have left.
+  { t: 'straight', len: 116, tag: 'start', w: 26 },
+  CORNERS[0],
+  { t: 'straight', len: 70 },
+  CORNERS[1],
+  { t: 'straight', len: 61 },
+  // THE FISSURE. A launch across an open crack in the shield, not a corner --
+  // `ramp`/`boost` on the first 18% and `open` road over the gap are set by
+  // `circuit()`'s own `jump` branch.
+  { t: 'jump', len: 110, launch: 26, gap: 45, tag: 'fissure', w: 24, toY: 36 },
+  // THE ASH BEDS. Tagged at its own first node; `ashbeds` is read directly by
+  // themes/emberfall.ts to place the gravel dressing.
+  { t: 'straight', len: 170, tag: 'ashbeds', surface: 'gravel', w: 25, toY: 44 },
+  CORNERS[2],
+  { t: 'straight', len: 117, surface: 'gravel', w: 25 },
+  CORNERS[3],
+  { t: 'straight', len: 113, surface: 'gravel', w: 25, toY: 48 },
+  CORNERS[4],
+  { t: 'straight', len: 109, surface: 'gravel', w: 25 },
+  CORNERS[5],
+  { t: 'straight', len: 96, surface: 'gravel', w: 24, toY: 44 },
+  // THE LAVA TUBE. An enclosed run of basalt tunnel -- `tunnel: true` is art
+  // metadata only (the sim has no tunnel concept), and it dives to y=16-22
+  // for it, well clear of the 6m floor. Authored at 100, not the 96 its
+  // gravel neighbour uses: this is the straight the closure correction
+  // squeezes hardest (to ~59-70m depending on the rest of the lap), and
+  // `walk()`'s own `steps = round(len/spacing)` rounds anything under 60m
+  // down to 2 samples -- one f=0..0.5 chord and one f=0.5..1.0-into-the-corner
+  // chord, each roughly HALF the closed length on its own. That was the
+  // circuit's actual worst joint (a 35.0m chord straight into the tube-bend
+  // corner, ratio 3.57 -- failing the <3.5 gate), not the loop mouths the
+  // rest of this file's post-processing targets. 87 authored closed at
+  // 58.7m, one metre under the 60m/3-step line; 100 authored clears it with
+  // room instead of sitting on the boundary, closing at 68.7m (3 steps, an
+  // ordinary ~23m chord). The circuit's worst ratio today is 2.87, and it
+  // belongs to the Cinder Loops' radius fix below, not to this joint.
+  { t: 'straight', len: 100, surface: 'metal', tunnel: true, w: 20, toY: 22 },
+  { ...CORNERS[6], tunnel: true },
+  { t: 'straight', len: 96, surface: 'metal', tunnel: true, w: 20, toY: 16 },
+  // CINDER LOOP ONE. Consumes no plan distance; its exit duplicate is fixed
+  // by the post-processing below. r=34 (not a smaller, tighter loop) because
+  // `circuit.ts` now refuses anything under 32m -- see the header's rewritten
+  // item 2 for why a tight loop cannot carry a wide stagger gently.
+  { t: 'loop', r: 34, side: 1, stagger: 54, surface: 'metal', w: 18, tag: 'loop1' },
+  { t: 'straight', len: 96, toY: 28 },
+  CORNERS[7],
+  { t: 'straight', len: 87, toY: 32 },
+  CORNERS[8],
+  { t: 'straight', len: 78, w: 19, toY: 34 },
+  // CINDER LOOP TWO. Larger and opposite-handed to the first (r=40 against
+  // 34, side=-1 against +1), so the two loops read as a pair rather than a
+  // repeat -- and comfortably inside the legal stagger band (52-76 at this
+  // radius).
+  { t: 'loop', r: 40, side: -1, stagger: 58, surface: 'metal', w: 19, tag: 'loop2' },
+  { t: 'straight', len: 70, toY: 36 },
+  CORNERS[9],
+  { t: 'straight', len: 74, toY: 38 },
+  // THE CORKSCREW. A single turn around a 42m bore. `turns` only has to be a
+  // whole number to leave upright -- `th` at f=1 is `2*PI*turns`, a multiple
+  // of a full circle for ANY integer, one included -- so two turns was never
+  // required for that; it was the first number tried, and it measured badly.
+  // At r=42, turns=2, len=280 the helix's own steepest climb is 62.1 degrees
+  // (arctan(2*PI*r*turns/len), the corkscrew's own slope), and a scripted
+  // race reproduced a racer falling off the tube there every time: altitude
+  // goes negative mid-climb, contact never comes back, and the stall
+  // watchdog eventually respawns it -- measured at 6.0 respawns a race, all
+  // seven of one race's respawns within 6 metres of the same s. Its own
+  // radius ramp is eased in `cyclone`'s own f-parametrisation (the outer 35%
+  // at each mouth), which is why this set piece needed neither the dedupe
+  // nor any mouth easing -- the CLIMB was the problem, not a kink. One turn
+  // at the same r and len cuts that to 43.3 degrees, which raced clean at
+  // 0.0 respawns a race across three seeds.
+  { t: 'cyclone', r: 42, turns: 1, len: 280, surface: 'metal', w: 30 },
+  { t: 'straight', len: 78, toY: 34 },
+  CORNERS[10],
+  { t: 'straight', len: 70, toY: 31 },
+  CORNERS[11],
+  { t: 'straight', len: 91, w: 24, toY: 30 },
+  CORNERS[12],
 ]
 
-const SPACING = 26
-const RING = ring(H, SPACING)
-/** Plan length of the ring, metres — the loops size their sampling off it. */
-const PLAN_LEN = RING.length * SPACING
-
-/** Lap-fraction beat map. Everything below reads off this and nothing else. */
-const BEATS = {
-  start: [0.95, 0.08] as [number, number],
-  fissure: 0.17,
-  ashBeds: [0.22, 0.40] as [number, number],
-  /**
-   * THE THREE LOOPS, escalating. Each spans a stretch of ring rather than
-   * hanging off one node -- see `loopAt` for why a loop that does not travel
-   * cannot help but drive through itself.
-   */
-  loops: [
-    { at: 0.44, r: 26, side: +1 },
-    { at: 0.525, r: 32, side: -1 },
-    { at: 0.615, r: 38, side: +1 },
-  ],
-  corkscrew: [0.74, 0.90] as [number, number],
-  updraft: [0.915, 0.985] as [number, number],
+const OPTS = {
+  spacing: 24,
+  start: [0, 30, 0] as [number, number, number],
+  heading: 0,
+  defaults: { w: 21, surface: 'tarmac' as const },
+  minStraight: 40,
 }
+const built = circuit(segs, OPTS)
 
 /**
- * Elevation, metres. A shield volcano: climb to the rim, drop into the vent.
- *
- * THE FLOOR IS 6m AND USED TO BE -5. The old profile bottomed out below the
- * world's own zero, which put the lap's tightest corner in a trench -- and that
- * corner was also the narrowest road on the circuit, because the updraft's
- * width penalty happened to land on it. Reported as "a very narrow portion with
- * a strange bend in it", which is exactly what three unrelated minima stacking
- * on one another looks like from the driver's seat.
+ * DEDUPE THE LOOPS' OWN CLOSING NODE. See the header's item 1: `loop` samples
+ * f=0..1 inclusive, so its last node coincides exactly with the next
+ * segment's first. This walks the whole array (not just the two loops)
+ * because the same seam recurs once more where the lap closes.
  */
-function elevation(u: number): number {
-  return (
-    16 * Math.sin(2 * Math.PI * (u - 0.05)) +
-    8 * Math.sin(4 * Math.PI * (u + 0.12)) +
-    30
-  )
-}
-
-/**
- * How far a loop steps SIDEWAYS between going up and coming down, metres.
- *
- * This is the whole fix for "it launches into itself". A loop-de-loop returns
- * to its own entry point by definition: the road climbs, inverts, and comes
- * back down onto the exact metre it left, so the up-leg and the down-leg occupy
- * the same space and the car drives through the piece of track it is about to
- * be on. Advancing the loop FORWARD does not fix it either -- at the apex a
- * loop is travelling backwards relative to the road, so a forward-only stagger
- * still folds through itself at the crossing.
- *
- * What separates the legs is lateral offset: the loop leans out of the racing
- * line on the way up and back through it on the way down, so the two passes sit
- * side by side. 62m against a ~38m road leaves 24m of daylight between them.
- *
- * The offset is enveloped so that its VALUE and its DERIVATIVE are both zero at
- * the mouths -- see `loopAt`. A stagger that merely starts at zero still hands
- * the entry a 50-degree kink.
- */
-const LOOP_STAGGER = 54
-const CORK_R = 52
-const CORK_TURNS = 2
-const CORK_W = 34
-
-/**
- * The ring at an arbitrary lap fraction, linearly between its baked points.
- *
- * The corkscrew needs this: at a 52m bore it cannot be sampled at the ring's
- * own 26m spacing without hopping 42m sideways between neighbours.
- */
-function ringAt(u: number): { x: number; z: number; heading: number } {
-  const n = RING.length
-  const t = (((u % 1) + 1) % 1) * n
-  const i = Math.floor(t) % n
-  const j = (i + 1) % n
-  const f = t - Math.floor(t)
-  const a = RING[i], b = RING[j]
-  // Headings interpolate on the shortest arc, or the seam flips the road.
-  let dh = b.heading - a.heading
-  while (dh > Math.PI) dh -= Math.PI * 2
-  while (dh < -Math.PI) dh += Math.PI * 2
-  return { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f, heading: a.heading + dh * f }
-}
-
-/**
- * A LOOP THAT CROSSES SIDEWAYS, so its entry and its exit are not the same road.
- *
- * WHAT "IT LAUNCHES INTO ITSELF" ACTUALLY IS. A circle traversed once does not
- * intersect itself -- the problem was never the loop. It was that a textbook
- * loop RETURNS TO ITS OWN ENTRY POINT, so the approach road and the exit road
- * occupy the same metre of ground, and the car flies up through the piece of
- * track it is about to land on.
- *
- * TWO FIXES WERE TRIED. Advancing the loop forward along the ring looks like
- * the obvious one and is wrong twice over: at the apex a loop travels BACKWARDS
- * relative to the road, so the ring's advance and the loop's own swing cancel
- * -- measured as a 1.6m step between nodes where the neighbours were 23m apart,
- * a chord ratio of 17, and an 11m-radius phantom corner the AI braked for. It
- * also needs the span to exceed the loop's circumference to work at all, which
- * for three loops is 40% of the lap.
- *
- * What works is LATERAL. The loop sits at one point on the ring, consumes no
- * distance, and slides `LOOP_STAGGER` metres across the road between going up
- * and coming down: in at the left of the corridor, out at the right. Entry and
- * exit are then 54m apart against a ~38m road, and every chord through the loop
- * comes out within a metre of every other because nothing is cancelling.
- *
- * The slide is a smoothstep, so its DERIVATIVE is zero at both mouths as well
- * as its value -- a linear crossing hands the entry a visible kink. It runs
- * -A/2 to +A/2 rather than 0 to A so the debt is shared: the approach eases one
- * way, the exit eases back, and neither has to swallow the whole 54m.
- */
-function loopAt(f: number, r: number, side: number): { fwd: number; up: number; lat: number } {
-  const th = 2 * Math.PI * f
-  const sm = f * f * (3 - 2 * f)
-  return {
-    fwd: r * Math.sin(th),
-    up: r * (1 - Math.cos(th)),
-    lat: side * LOOP_STAGGER * (sm - 0.5),
+function dedupeCoincidentNodes(nodes: TrackNode[]): TrackNode[] {
+  const EPS = 0.05
+  const out: TrackNode[] = [nodes[0]]
+  for (let i = 1; i < nodes.length; i++) {
+    const a = out[out.length - 1].p, b = nodes[i].p
+    if (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) > EPS) out.push(nodes[i])
   }
-}
-
-/**
- * The lateral lead-in and lead-out either side of each loop.
- *
- * A loop leaves the road half a stagger off the racing line, so the ring has to
- * absorb it: the approach drifts to -A/2 over `LOOP_BLEND` of the lap and the
- * exit comes back from +A/2 over the same. At 0.05 of a ~2500m ring that is
- * 125m to shed 27m, about 12 degrees -- a lane change, not a chicane.
- */
-const LOOP_BLEND = 0.05
-
-function loopBias(u: number): number {
-  let bias = 0
-  for (const L of BEATS.loops) {
-    let d = u - L.at
-    if (d > 0.5) d -= 1
-    if (d < -0.5) d += 1
-    if (d < 0 && d > -LOOP_BLEND) {
-      const t = 1 + d / LOOP_BLEND
-      bias += L.side * -0.5 * LOOP_STAGGER * (t * t * (3 - 2 * t))
-    } else if (d > 0 && d < LOOP_BLEND) {
-      const t = 1 - d / LOOP_BLEND
-      bias += L.side * 0.5 * LOOP_STAGGER * (t * t * (3 - 2 * t))
-    }
-  }
-  return bias
-}
-
-function build(): TrackNode[] {
-  const out: TrackNode[] = []
-  const n = RING.length
-  const corkFrom = BEATS.corkscrew[0], corkTo = BEATS.corkscrew[1]
-
-  for (let i = 0; i < n; i++) {
-    const p = RING[i]
-    const u = p.u
-    const y = elevation(u)
-    const fx = Math.sin(p.heading), fz = Math.cos(p.heading)
-    const rx = Math.cos(p.heading), rz = -Math.sin(p.heading)
-
-    // ---- THE THREE LOOPS. Each hangs off one ring node and consumes no ring
-    // distance; the lateral crossing is what separates its entry from its exit.
-    // See `loopAt` for why forward advance was tried first and does not work.
-    const li = BEATS.loops.findIndex((L) => Math.abs(shortest(u - L.at)) < 0.5 / n)
-    if (li >= 0) {
-      const L = BEATS.loops[li]
-      // Sampled to match the RING's chord, not to be as smooth as possible.
-      // A section sampled far finer than its neighbours is its own kind of
-      // spacing mismatch -- the bake's Catmull-Rom weights a node against its
-      // neighbours regardless of distance, so 8m nodes meeting 26m ones spike
-      // curvature exactly like 100m ones do. 26 degrees of arc between nodes
-      // costs 4mm of circularity on a 38m loop, which is nothing.
-      const steps = Math.max(14, Math.round((2 * Math.PI * L.r) / 18))
-      // INCLUSIVE of f=1, and that closing node matters. At f slightly under 1
-      // the road is still 16m BEHIND its exit station (the forward term is
-      // returning from -R), so stopping at steps-1 left a 42m jump to the next
-      // ring node against a 12m loop chord. The f=1 node sits at the same
-      // longitudinal station as the entry, half a stagger across the road --
-      // which is the whole point of the loop, and is also where the lead-out
-      // ramp expects to start.
-      for (let sIdx = 0; sIdx <= steps; sIdx++) {
-        const f = sIdx / steps
-        const o = loopAt(f, L.r, L.side)
-        const th = 2 * Math.PI * f
-        out.push({
-          p: [
-            r1(p.x + o.fwd * fx + o.lat * rx),
-            r1(y + o.up),
-            r1(p.z + o.fwd * fz + o.lat * rz),
-          ],
-          w: 19,
-          // Up points at the loop's centre: world-up at the mouths, world-DOWN
-          // at the apex, which is what inverts the car. `stick` defaults to 1
-          // wherever up leaves +Y, so a racer that gets light over the top
-          // falls back toward the road rather than out of the loop.
-          up: [r3(-Math.sin(th) * fx), r3(Math.cos(th)), r3(-Math.sin(th) * fz)],
-          surface: 'metal',
-          tag: sIdx === 0 ? `loop${li + 1}`
-            : sIdx === Math.round(steps / 2) ? `loop${li + 1}-apex`
-            : undefined,
-        })
-      }
-      continue
-    }
-
-    // ---- THE CORKSCREW. The ring supplies the AXIS; the road spirals around
-    // the inside of it. Two full turns, so it leaves upright -- a half-turn
-    // would hand the next node a 180-degree up-vector flip and the bake would
-    // (correctly) refuse it.
-    //
-    // THE BORE AND THE ROAD BOTH DOUBLED (26 -> 52m, 17 -> 34m half-width). At
-    // the old size the spiral read as a pipe you were threaded through rather
-    // than a place you drove; at 52m the barrel is wide enough that the far
-    // wall is scenery instead of a ceiling.
-    //
-    // AND IT SAMPLES ITSELF, at ~12m, instead of riding the ring's 26m nodes.
-    // Doubling the bore doubled the distance the road travels per degree of
-    // sweep: at ring spacing the spiral was stepping 48 degrees at a time round
-    // a 52m barrel, which is a 42m lateral hop between neighbours -- measured as
-    // a 53.9m chord against an 8m one elsewhere, and an 18m phantom corner. The
-    // sweep did not change; the resolution had to.
-    if (inSpan(u, corkFrom, corkTo)) {
-      const prevU = RING[(i - 1 + n) % n].u
-      if (inSpan(prevU, corkFrom, corkTo)) continue
-      const span = corkTo - corkFrom
-      const spanLen = span * PLAN_LEN
-      // Stepped along the AXIS, not along the arc. Sizing by arc length gives
-      // 6m chords at the mouths (where the radius ramp is near zero and the
-      // road is barely moving sideways) against 26m on the ring either side --
-      // the mismatch this whole file keeps paying for. Axis stepping puts the
-      // mouths at 13m and the full-bore middle at ~25m, which straddles the
-      // ring instead of undercutting it.
-      const steps = Math.max(24, Math.round(spanLen / 13))
-      for (let sIdx = 0; sIdx < steps; sIdx++) {
-        const f = sIdx / steps
-        const uu = corkFrom + span * f
-        const rp = ringAt(uu)
-        const crx = Math.cos(rp.heading), crz = -Math.sin(rp.heading)
-        const th = 2 * Math.PI * CORK_TURNS * f
-        // THE SPIRAL RADIUS RAMPS IN AND OUT, and this is not styling. At a
-        // constant radius the helix starts at its full ANGULAR rate on its very
-        // first node, so the road steps sideways almost as fast as it moves
-        // forward -- a 45-degree kink at each mouth, which the sim read as a
-        // 22m-radius corner in the middle of what is supposed to be a flat-out
-        // set piece. Nothing in the roster can hold 22m.
-        const rawEnv = Math.max(0, Math.min(1, Math.min(f / 0.35, (1 - f) / 0.35)))
-        const rEff = CORK_R * rawEnv * rawEnv * (3 - 2 * rawEnv)
-        out.push({
-          p: [
-            r1(rp.x + rEff * Math.sin(th) * crx),
-            r1(elevation(uu) + rEff - rEff * Math.cos(th)),
-            r1(rp.z + rEff * Math.sin(th) * crz),
-          ],
-          w: CORK_W,
-          up: [r3(-Math.sin(th) * crx), r3(Math.cos(th)), r3(-Math.sin(th) * crz)],
-          surface: 'metal',
-          boost: f > 0.42 && f < 0.58,
-          tag: sIdx === 0 ? 'corkscrew' : undefined,
-        })
-      }
-      continue
-    }
-
-    // ---- ORDINARY ROAD.
-    const onAsh = inSpan(u, BEATS.ashBeds[0], BEATS.ashBeds[1])
-    const gustNow = envelope(u, BEATS.updraft[0], BEATS.updraft[1], 0.30)
-    const bias = loopBias(u)
-    const node: TrackNode = {
-      p: [r1(p.x + bias * rx), r1(y), r1(p.z + bias * rz)],
-      w: r1(width(u, p.k)),
-    }
-    if (onAsh) node.surface = 'gravel'
-    // Bank INTO the corner, scaled by how tight it actually is. `bank` and not
-    // `up`: this is level ground that leans, not anti-gravity architecture, and
-    // a banked node with world-up keeps plain world gravity on a jump.
-    const bank = clamp(-p.k * 1150, -13, 13)
-    if (Math.abs(bank) > 0.6) node.bank = r1(bank)
-    // THE UPDRAFT KEEPS ITS WALLS. The first draft made the crosswind and the
-    // drop the same beat -- wind over `open` road, so being blown wide meant
-    // falling off the rim. Measured: 16.3 respawns a race against 0.0-0.7 on
-    // every shipped circuit, and all 49 of them inside this one stretch. That
-    // is not difficulty, it is a section the field cannot survive.
-    //
-    // The wind stays and the edge gets barriers. Being blown into a wall you
-    // bounce off is a beat; being blown off a cliff is a loading screen.
-    if (gustNow > 0.02) { node.wind = r1(13 * gustNow); node.bounce = true }
-    if (Math.abs(u - BEATS.fissure) < 0.012) { node.ramp = 30; node.boost = true; node.tag = 'fissure' }
-    if (inSpan(u, BEATS.fissure + 0.012, BEATS.fissure + 0.05)) node.open = true
-    if (Math.abs(u - BEATS.ashBeds[0]) < 0.005) node.tag = 'ashbeds'
-    if (u === 0) node.tag = 'start'
-    out.push(node)
-  }
+  const a = out[out.length - 1].p, b = out[0].p
+  if (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) <= EPS) out.pop()
   return out
 }
 
+const nodes = dedupeCoincidentNodes(built.nodes)
+
+/** Cumulative 3-D distance along `nodes`, node 0 at 0. Used only to locate
+ *  the node nearest an authored tag's `marks` distance -- see below. */
+function cumulativeDistance(ns: TrackNode[]): number[] {
+  const cum = [0]
+  for (let i = 1; i < ns.length; i++) {
+    const a = ns[i - 1].p, b = ns[i].p
+    cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+  }
+  return cum
+}
+const cum = cumulativeDistance(nodes)
+function nodeNear(dist: number): number {
+  let best = 0, bestGap = Infinity
+  for (let i = 0; i < cum.length; i++) {
+    const gap = Math.abs(cum[i] - dist)
+    if (gap < bestGap) { bestGap = gap; best = i }
+  }
+  return best
+}
+
 /**
- * Road half-width.
- *
- * NOTHING SUBTRACTS ANY MORE, and the floor went 15 -> 18.5. The old version
- * took 4m off for curvature and another 1.5m across the updraft, and those two
- * penalties landed on the same stretch as the ring's tightest corner and the
- * elevation profile's minimum. Four independent "slightly worse here" terms
- * stacked into one 15.5m-wide 55m-radius bend in a trench -- reported as "a
- * very narrow portion with a strange bend in it".
- *
- * The lesson generalises past this track: a width function built out of
- * subtractions has no floor you can reason about, because the penalties do not
- * know about each other. This one ADDS to a base, so the narrowest the circuit
- * can be is the base, and the base is a number somebody chose.
- *
- * The tightest corner also gets a WIDENING rather than a pinch. A tight bend is
- * where a driver most needs room to take a different line, and pinching it is
- * the one thing guaranteed to make a corner feel arbitrary.
+ * THE REQUIRED TAGS. `circuit()` only ever records where a tagged segment
+ * STARTS (`built.marks`, a plan distance) -- it never writes `TrackNode.tag`
+ * itself, so every tag the art theme reads (`environment.ts`'s `tagSample`,
+ * `themes/emberfall.ts`'s prop clusters and Cinder Loop rings) has to be
+ * placed on an actual node here.
  */
-function width(u: number, k: number): number {
-  let w = 20
-  w += 3.5 * Math.min(1, Math.abs(k) * 90)
-  if (inSpan(u, BEATS.ashBeds[0], BEATS.ashBeds[1])) w += 3.5
-  if (inSpan(u, BEATS.start[0], BEATS.start[1])) w += 2
-  return clamp(w, 18.5, 26)
-}
+nodes[0].tag = 'start'
+nodes[nodeNear(built.marks['fissure'])].tag = 'fissure'
+nodes[nodeNear(built.marks['ashbeds'])].tag = 'ashbeds'
+const iLoop1 = nodeNear(built.marks['loop1'])
+nodes[iLoop1].tag = 'loop1'
+const iLoop2 = nodeNear(built.marks['loop2'])
+nodes[iLoop2].tag = 'loop2'
 
-/** Shortest signed distance between two lap fractions, wrapping the seam. */
-function shortest(d: number): number {
-  if (d > 0.5) return d - 1
-  if (d < -0.5) return d + 1
-  return d
+/**
+ * EACH LOOP'S APEX. The loop emits `steps+1` nodes (see circuit.ts's own
+ * `loop` branch); its highest point is somewhere in that run, not
+ * necessarily its midpoint once the stagger is accounted for, so this finds
+ * the true maximum rather than assuming it.
+ */
+function tagApex(loopStart: number, r: number, name: string): void {
+  const steps = Math.max(14, Math.round((2 * Math.PI * r) / 18))
+  let apexI = loopStart, apexY = -Infinity
+  for (let d = 0; d <= steps + 1 && loopStart + d < nodes.length; d++) {
+    const y = nodes[loopStart + d].p[1]
+    if (y > apexY) { apexY = y; apexI = loopStart + d }
+  }
+  nodes[apexI].tag = name
 }
+tagApex(iLoop1, 34, 'loop1-apex')
+tagApex(iLoop2, 40, 'loop2-apex')
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-const r1 = (v: number) => Math.round(v * 10) / 10
-const r3 = (v: number) => Math.round(v * 1000) / 1000
+/** Lap fraction where a tagged segment starts. */
+const frac = (tag: string) => built.marks[tag] / built.length
 
 export const EMBERFALL: TrackDef = {
   id: 'emberfall',
@@ -426,23 +428,24 @@ export const EMBERFALL: TrackDef = {
   ambientIntensity: 0.85,
   sunDirection: [-0.35, 0.55, -0.75],
   palette: { a: 0x2b211f, b: 0x6e3a24, c: 0xa8502a, accent: 0xff6a18 },
-  nodes: build(),
+  nodes,
   // Rows sit ON the driven line and at or above the 2.4m box mesh, for the
-  // reason the other four circuits all record: `stepAI` has no item-seeking
-  // term, so a row taken off the line is a row the AI never touches.
+  // reason the other redesigned circuits all record: `stepAI` has no
+  // item-seeking term, so a row taken off the line is a row the AI never
+  // touches.
   itemBoxRows: [
-    { at: 0.10, count: 5, spread: 4.4 },
-    { at: 0.30, count: 5, spread: 4.6 },
-    { at: 0.46, count: 4, spread: 4.0 },
-    { at: 0.74, count: 5, spread: 4.4 },
-    { at: 0.88, count: 5, spread: 4.2 },
+    { at: (frac('start') + frac('caldera-hook')) / 2, count: 5, spread: 4.2 },
+    { at: (frac('ashbeds') + frac('ash-bend')) / 2, count: 5, spread: 4.4 },
+    { at: frac('loop1') + 0.015, count: 4, spread: 4.0 },
+    { at: frac('loop2') + 0.02, count: 5, spread: 4.2 },
+    { at: (frac('ridge-bend') + frac('flow-hook')) / 2, count: 4, spread: 3.8 },
   ],
   chargeRuns: [
-    { from: 0.03, to: 0.08, count: 6, lateral: -5 },
-    { from: 0.26, to: 0.33, count: 8, lateral: 5 },
-    { from: 0.36, to: 0.41, count: 6, lateral: -6 },
-    { from: 0.53, to: 0.58, count: 6, lateral: 0 },
-    { from: 0.78, to: 0.85, count: 7, lateral: -5 },
+    { from: frac('start') + 0.005, to: frac('caldera-hook') - 0.015, count: 6, lateral: -5 },
+    { from: frac('ashbeds') + 0.005, to: frac('ash-curve') - 0.01, count: 7, lateral: 5 },
+    { from: frac('ash-exit') + 0.01, to: frac('tube-bend') - 0.01, count: 5, lateral: 0 },
+    { from: frac('loop2') + 0.015, to: frac('ridge-jink') - 0.015, count: 6, lateral: -5 },
+    { from: frac('flow-hook') + 0.015, to: frac('rim-sweeper') - 0.02, count: 7, lateral: 5 },
   ],
   laps: 3,
 }
