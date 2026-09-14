@@ -1070,6 +1070,42 @@ export class ChaseCamera {
       if (this._cinePos.y < floor) this._cinePos.y = floor
     }
 
+    /**
+     * ONE CHOKE POINT FOR "STAY OVER THE ROAD", at the end, after everything.
+     *
+     * The solve above clamps `cx`/`cz` before the handoff blend, and the blend
+     * then lerps from the chase rig's last pose -- which is clamped to nothing,
+     * because during a race the camera is allowed anywhere. So the clamp was
+     * only ever true at the end of the blend, and a car that crosses the line
+     * wide dragged the camera through the barrier for the first half-second of
+     * the ceremony. Measured on Elkarim after the 25% widening: 1.02 of the
+     * half-width against a barrier at 1.0.
+     *
+     * Clamping the FINAL position covers every path into this rig -- solve,
+     * blend, reduced motion -- instead of the one that happened to be looked
+     * at. Twice, because moving the point along the surface changes which
+     * sample is nearest and therefore which width applies; it converges at
+     * once.
+     */
+    {
+      const fp = track.project(this._cinePos, r.splineS)
+      const fhw = Math.max(2, fp.sample.width * CER.lateralMargin)
+      if (Math.abs(fp.lateral) > fhw) {
+        const fs = track.surfacePoint(fp.s, clamp(fp.lateral, -fhw, fhw))
+        // Pulled, not snapped -- see ceremony.edgePullRate.
+        const dx = fs.x - this._cinePos.x
+        const dz = fs.z - this._cinePos.z
+        const d = Math.hypot(dx, dz)
+        const step = Math.min(d, CER.edgePullRate * dt)
+        if (d > 1e-4) {
+          this._cinePos.x += (dx / d) * step
+          this._cinePos.z += (dz / d) * step
+        }
+        const fl = fs.y + CER.groundClearance
+        if (this._cinePos.y < fl) this._cinePos.y = fl
+      }
+    }
+
     this.pos.copy(this._cinePos)
     this.look.copy(this._cineLook)
     this.fov = this.handoffFov + (CER.fov - this.handoffFov) * k

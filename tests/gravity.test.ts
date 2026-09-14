@@ -386,7 +386,15 @@ describe('the AI', () => {
     //           makes in three laps, not the barrier-leaning it does in every
     //           corner. The sustained nose correction that rides along is
     //           faded out with speed and cannot touch a car that is cornering.
-    expect(avg).toBeCloseTo(55.91, 2)
+    //   55.15s  Elkarim widened 25% and a drift now survives a barrier.
+    //           FASTER by 0.76s and both halves push that way: a wider road is
+    //           a straighter line through every corner, and a slide that is no
+    //           longer cancelled by clipping a wall keeps its boost payout.
+    //           `drift.airGrace` 0.25 -> 0.45 rides along and is the smallest
+    //           of the three. Lap floor is 55s and this is 55.15 -- close
+    //           enough that the next thing to make this track faster has to
+    //           lengthen it or slow the field, not shave it again.
+    expect(avg).toBeCloseTo(55.15, 2)
   })
 })
 

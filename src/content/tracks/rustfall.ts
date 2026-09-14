@@ -21,11 +21,11 @@ export const RUSTFALL: TrackDef = {
   palette: { a: 0xa8481f, b: 0xd9a441, c: 0x4a4038, accent: 0x35e0ff },
   laps: 3,
   nodes: [
-    { p: [0, 0, 0], w: 19.5, surface: 'tarmac', tag: 'start' },
-    { p: [0, 0, 105], w: 19.5, surface: 'tarmac', ramp: 32, tag: 'ramp-main' },
-    { p: [0, 1.5, 210], w: 19.5, surface: 'tarmac' },
-    { p: [0, 3, 315], w: 18.75, surface: 'gravel' },
-    { p: [0, 3.6, 378.8], w: 18.75, surface: 'gravel' },
+    { p: [0, 0, 0], w: 24.375, surface: 'tarmac', tag: 'start' },
+    { p: [0, 0, 105], w: 24.375, surface: 'tarmac', ramp: 32, tag: 'ramp-main' },
+    { p: [0, 1.5, 210], w: 24.375, surface: 'tarmac' },
+    { p: [0, 3, 315], w: 23.438, surface: 'gravel' },
+    { p: [0, 3.6, 378.8], w: 23.438, surface: 'gravel' },
     // THE OIL SLICK WAS TRIED HERE AND PUT BACK. Recorded because the result
     // is the finding, not the change.
     //
@@ -63,7 +63,7 @@ export const RUSTFALL: TrackDef = {
     // re-measured is the 131-degree heading error that broke the field when
     // the slick was moved to the braking zone; if anyone tries that again,
     // measure it again rather than trusting the number above.
-    { p: [0, 4, 415], w: 18, surface: 'tarmac', tag: 'straight-end' },
+    { p: [0, 4, 415], w: 22.5, surface: 'tarmac', tag: 'straight-end' },
     // OPENED OUT: THE TWO 32m HAIRPINS ARE NOW 64-66m SWEEPS.
     //
     // Measured with the swept-angle instrument described below, authored ->
@@ -116,16 +116,16 @@ export const RUSTFALL: TrackDef = {
     // instead window length / heading change over 30m -- stable against ripple,
     // and the same quantity Track.curvatureAt hands the AI when it picks a
     // corner speed. tools/plot-track.ts carries the working.
-    { p: [-9.4, 3.75, 450], w: 18, bank: -6, surface: 'tarmac' },
-    { p: [-35, 3.5, 475.6], w: 18, bank: -10, surface: 'tarmac' },
-    { p: [-70, 3.25, 485], w: 18, bank: -11, surface: 'tarmac', tag: 'hairpin' },
-    { p: [-105, 3, 475.6], w: 18, bank: -10, surface: 'tarmac' },
-    { p: [-130.6, 2.75, 450], w: 18, bank: -6, surface: 'tarmac' },
-    { p: [-140, 2.5, 415], w: 18.75, bank: -2, surface: 'tarmac' },
-    { p: [-140, 2.2, 378.8], w: 18, surface: 'tarmac', tag: 'crane-drop' },
-    { p: [-140, 1, 285], w: 18, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
-    { p: [-142, 0, 220], w: 18.75, surface: 'tarmac' },
-    { p: [-154, 0, 150], w: 19.5, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
+    { p: [-9.4, 3.75, 450], w: 22.5, bank: -6, surface: 'tarmac' },
+    { p: [-35, 3.5, 475.6], w: 22.5, bank: -10, surface: 'tarmac' },
+    { p: [-70, 3.25, 485], w: 22.5, bank: -11, surface: 'tarmac', tag: 'hairpin' },
+    { p: [-105, 3, 475.6], w: 22.5, bank: -10, surface: 'tarmac' },
+    { p: [-130.6, 2.75, 450], w: 22.5, bank: -6, surface: 'tarmac' },
+    { p: [-140, 2.5, 415], w: 23.438, bank: -2, surface: 'tarmac' },
+    { p: [-140, 2.2, 378.8], w: 22.5, surface: 'tarmac', tag: 'crane-drop' },
+    { p: [-140, 1, 285], w: 22.5, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
+    { p: [-142, 0, 220], w: 23.438, surface: 'tarmac' },
+    { p: [-154, 0, 150], w: 24.375, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
     // THIS NODE IS A RIGID 50m SHIFT OF THE AUTHORED ONE AND MUST STAY THAT
     // WAY. The most expensive finding of the reshape is recorded here.
     //
@@ -149,15 +149,15 @@ export const RUSTFALL: TrackDef = {
     // on a circuit with an unbarriered section, a small change to the LINE
     // hundreds of metres upstream is a large change to where cars are when they
     // reach it. Curvature plots will not show this. Only racing the field will.
-    { p: [-190, 1, 96], w: 19.5, bank: 14, surface: 'metal' },
-    { p: [-242, 2, 66], w: 19.5, bank: 14, surface: 'metal' },
-    { p: [-300, 2.5, 62], w: 19.5, bank: 12, surface: 'metal' },
-    { p: [-356, 3, 86], w: 19.5, bank: 9, surface: 'metal' },
-    { p: [-396, 4, 132], w: 18.75, bank: 5, surface: 'metal' },
-    { p: [-412, 6, 190], w: 18, boost: true, ramp: 34, surface: 'metal', tag: 'ramp-chasm' },
-    { p: [-416, 9, 232], w: 16.5, open: true, surface: 'metal' },
-    { p: [-418, 5, 300], w: 18, open: true, surface: 'gravel', tag: 'landing' },
-    { p: [-418, 3, 352], w: 18.75, surface: 'oil' },
+    { p: [-190, 1, 96], w: 24.375, bank: 14, surface: 'metal' },
+    { p: [-242, 2, 66], w: 24.375, bank: 14, surface: 'metal' },
+    { p: [-300, 2.5, 62], w: 24.375, bank: 12, surface: 'metal' },
+    { p: [-356, 3, 86], w: 24.375, bank: 9, surface: 'metal' },
+    { p: [-396, 4, 132], w: 23.438, bank: 5, surface: 'metal' },
+    { p: [-412, 6, 190], w: 22.5, boost: true, ramp: 34, surface: 'metal', tag: 'ramp-chasm' },
+    { p: [-416, 9, 232], w: 20.625, open: true, surface: 'metal' },
+    { p: [-418, 5, 300], w: 22.5, open: true, surface: 'gravel', tag: 'landing' },
+    { p: [-418, 3, 352], w: 23.438, surface: 'oil' },
     // GRAVEL AT THE CARGO RING -- where Rustfall's low-grip work ended up, and
     // the extent is a measurement, not a taste.
     //
@@ -195,15 +195,15 @@ export const RUSTFALL: TrackDef = {
     // touch either the floor or these corners has to re-measure rather than
     // assume. Lead retention was re-measured over 2000 races and holds at
     // 46.0%, inside the 45-55% band.
-    { p: [-406, 2, 404], w: 12.75, bounce: true, surface: 'tarmac', tag: 'bounce' },
-    { p: [-380, 1.5, 444], w: 12, bounce: true, surface: 'tarmac' },
-    { p: [-342, 1, 470], w: 12, bounce: true, surface: 'tarmac' },
-    { p: [-300, 1, 480], w: 12.75, bounce: true, surface: 'tarmac' },
-    { p: [-260, 1, 468], w: 15, surface: 'tarmac' },
-    { p: [-226, 1.5, 436], w: 16.5, bank: 22, surface: 'tarmac', tag: 'ring' },
-    { p: [-208, 3.5, 392], w: 16.5, bank: 34, surface: 'metal' },
-    { p: [-210, 5.5, 344], w: 16.5, bank: 34, surface: 'metal' },
-    { p: [-240.4, 6, 309.9], w: 16.5, bank: 18, surface: 'metal' },
+    { p: [-406, 2, 404], w: 15.938, bounce: true, surface: 'tarmac', tag: 'bounce' },
+    { p: [-380, 1.5, 444], w: 15, bounce: true, surface: 'tarmac' },
+    { p: [-342, 1, 470], w: 15, bounce: true, surface: 'tarmac' },
+    { p: [-300, 1, 480], w: 15.938, bounce: true, surface: 'tarmac' },
+    { p: [-260, 1, 468], w: 18.75, surface: 'tarmac' },
+    { p: [-226, 1.5, 436], w: 20.625, bank: 22, surface: 'tarmac', tag: 'ring' },
+    { p: [-208, 3.5, 392], w: 20.625, bank: 34, surface: 'metal' },
+    { p: [-210, 5.5, 344], w: 20.625, bank: 34, surface: 'metal' },
+    { p: [-240.4, 6, 309.9], w: 20.625, bank: 18, surface: 'metal' },
     // THE "ESSES" WAS NEVER AN S, and that is why it was pinched.
     //
     // Its authored headings fall monotonically -- 243, 242, 193, 151, 113, 85
@@ -214,18 +214,18 @@ export const RUSTFALL: TrackDef = {
     // design docs both say "esses home"; the shape is what changed.
     //
     // The bank now follows the turn instead of flipping sign mid-corner.
-    { p: [-283.9, 5, 288.2], w: 18, bank: 6, surface: 'metal', tag: 'esses' },
-    { p: [-317.5, 3.5, 253], w: 18, bank: -10, surface: 'tarmac' },
-    { p: [-321.1, 3.4, 204.4], w: 18, bank: -12, surface: 'tarmac' },
-    { p: [-293, 5, 164.7], w: 18, bank: -10, surface: 'metal' },
-    { p: [-246, 8, 152], w: 18.75, bank: 10, surface: 'metal', tag: 'flyover' },
+    { p: [-283.9, 5, 288.2], w: 22.5, bank: 6, surface: 'metal', tag: 'esses' },
+    { p: [-317.5, 3.5, 253], w: 22.5, bank: -10, surface: 'tarmac' },
+    { p: [-321.1, 3.4, 204.4], w: 22.5, bank: -12, surface: 'tarmac' },
+    { p: [-293, 5, 164.7], w: 22.5, bank: -10, surface: 'metal' },
+    { p: [-246, 8, 152], w: 23.438, bank: 10, surface: 'metal', tag: 'flyover' },
     // The return leg crosses back over the sweeper-T4 entry, so it climbs onto
     // a flyover. Plan separation alone was 18m against 26m of combined width,
     // which folded the ribbon through itself and made Track.project ambiguous.
-    { p: [-201.6, 9.8, 146.3], w: 19.5, bank: -6, surface: 'metal' },
-    { p: [-163.2, 11.5, 123.4], w: 19.5, bank: -6, surface: 'metal', tag: 'flyover-cross' },
-    { p: [-137.2, 7.3, 86.9], w: 19.5, bank: -6, surface: 'metal', ramp: 24, tag: 'ramp-descent' },
-    { p: [-128, 3, 43.1], w: 19.5, bank: -2, surface: 'metal' },
+    { p: [-201.6, 9.8, 146.3], w: 24.375, bank: -6, surface: 'metal' },
+    { p: [-163.2, 11.5, 123.4], w: 24.375, bank: -6, surface: 'metal', tag: 'flyover-cross' },
+    { p: [-137.2, 7.3, 86.9], w: 24.375, bank: -6, surface: 'metal', ramp: 24, tag: 'ramp-descent' },
+    { p: [-128, 3, 43.1], w: 24.375, bank: -2, surface: 'metal' },
     // FINAL CORNER, rebuilt for the 50% width pass and reopened here.
     //
     // The authored version was a squashed oval that ran a 19.7m radius against
@@ -250,18 +250,18 @@ export const RUSTFALL: TrackDef = {
     // moved Bulwark's respawns 3.88 -> 3.79 a race, i.e. it was NOT what was
     // throwing the field off the circuit (see the sweeper node, above). It is
     // fixed because it is wrong, not because it was the bug.
-    { p: [-128, 0, 0], w: 19.5, surface: 'tarmac', tag: 'final-corner' },
-    { p: [-128, 0, -25], w: 19.5, bank: -3, surface: 'tarmac' },
-    { p: [-128, 0, -50], w: 19.5, bank: -6, surface: 'tarmac' },
-    { p: [-123.1, 0, -74.5], w: 18.75, bank: -9, surface: 'tarmac' },
-    { p: [-109.3, 0, -95.3], w: 18.75, bank: -12, surface: 'tarmac' },
-    { p: [-88.5, 0, -109.1], w: 18.75, bank: -14, surface: 'tarmac' },
-    { p: [-64, 0, -114], w: 18.75, bank: -15, surface: 'tarmac' },
-    { p: [-39.5, 0, -109.1], w: 18.75, bank: -14, surface: 'tarmac' },
-    { p: [-18.7, 0, -95.3], w: 18.75, bank: -12, surface: 'tarmac' },
-    { p: [-4.9, 0, -74.5], w: 18.75, bank: -9, surface: 'tarmac' },
-    { p: [0, 0, -50], w: 19.5, bank: -4, surface: 'tarmac', boost: true, tag: 'home-boost' },
-    { p: [0, 0, -25], w: 19.5, bank: -3, surface: 'tarmac' },
+    { p: [-128, 0, 0], w: 24.375, surface: 'tarmac', tag: 'final-corner' },
+    { p: [-128, 0, -25], w: 24.375, bank: -3, surface: 'tarmac' },
+    { p: [-128, 0, -50], w: 24.375, bank: -6, surface: 'tarmac' },
+    { p: [-123.1, 0, -74.5], w: 23.438, bank: -9, surface: 'tarmac' },
+    { p: [-109.3, 0, -95.3], w: 23.438, bank: -12, surface: 'tarmac' },
+    { p: [-88.5, 0, -109.1], w: 23.438, bank: -14, surface: 'tarmac' },
+    { p: [-64, 0, -114], w: 23.438, bank: -15, surface: 'tarmac' },
+    { p: [-39.5, 0, -109.1], w: 23.438, bank: -14, surface: 'tarmac' },
+    { p: [-18.7, 0, -95.3], w: 23.438, bank: -12, surface: 'tarmac' },
+    { p: [-4.9, 0, -74.5], w: 23.438, bank: -9, surface: 'tarmac' },
+    { p: [0, 0, -50], w: 24.375, bank: -4, surface: 'tarmac', boost: true, tag: 'home-boost' },
+    { p: [0, 0, -25], w: 24.375, bank: -3, surface: 'tarmac' },
   ],
   // ITEM BOX ROWS: MEASURED, A FIX BUILT, AND THE FIX DELIBERATELY NOT SHIPPED.
   //

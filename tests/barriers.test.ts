@@ -221,7 +221,23 @@ describe('a barrier charges for the impact, not for the slide', () => {
     // with room to spare; Rustfall at a 10% margin would NOT have -- 193 slips
     // under 195 -- so its budget is 185 instead, keeping the job the header
     // assigns it. A re-baselined budget that cannot fail is not a test.
-    for (const [def, budget] of [[RUSTFALL, 185], [AETHERION, 146]] as const) {
+    /**
+     * REBASED FOR "A DRIFT SURVIVES A BARRIER", and the rise is the feature.
+     *
+     * `drift.collisionCancelSpeed` went 8.0 -> 26.0 so that clipping a wall
+     * mid-slide no longer ends the slide -- asked for directly, and explicitly
+     * including the speed cost: "even though it will slow down the speed of the
+     * drift". A car that keeps drifting through a contact stays sideways
+     * against the barrier instead of straightening out of it, so it spends
+     * longer scraping and the number this test adds up necessarily goes up.
+     *
+     * Measured, on the same fixed laps: Rustfall 185 -> 196, Aetherion 146 ->
+     * 171 at its worst across runs. The budgets move to 215 and 195, which
+     * still leaves the job the header describes intact -- these are three times
+     * what a clean lap loses, so a barrier that started eating laps whole would
+     * run past them just as it always would.
+     */
+    for (const [def, budget] of [[RUSTFALL, 215], [AETHERION, 195]] as const) {
       const track = new Track(def)
       const race = new Race(track, {
         seed: 7, totalLaps: 2, racerCount: 1, trackId: def.id,

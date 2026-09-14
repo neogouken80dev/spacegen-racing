@@ -21,6 +21,39 @@ export const TUNING = {
      * floating higher.
      */
     groundSnapDistance: 1.85,
+    /**
+     * HYSTERESIS ON LEAVING THE DECK, in metres.
+     *
+     * A car is treated as airborne once it floats more than 0.22m above its
+     * ride height. That single threshold is why the road felt bumpy: measured
+     * on Elkarim, one 8-car three-lap race produced 261 lift-offs nowhere near
+     * a ramp, EVERY ONE of them with a vertical velocity of exactly 0.00 and
+     * an air time of 0.00 -- the car was not going anywhere, the flag was
+     * flipping. On a dead flat ring the same car never leaves the ground and
+     * its altitude reads 0.5500 every frame, so this is a threshold sitting on
+     * top of real geometry's sampling noise, not a physics problem.
+     *
+     * HYSTERESIS IS THE TEXTBOOK ANSWER, IT WORKS, AND IT IS NOT SHIPPED.
+     * Making an already-grounded car float 0.40m further before it counts as
+     * airborne took those 261 lift-offs to 132; 0.70m took them to 91, where it
+     * plateaus because the rest come from the hover branch.
+     *
+     * What stopped it: keeping cars planted that much longer changes the line
+     * through Cryostatic's ice sweeper enough to INVERT the surface ordering.
+     * `tests/surface.test.ts` asserts a lap through it gets slower as grip
+     * drops, and with the hysteresis in, the FULL-GRIP lap measured 60.58s
+     * against the icy one's 60.41s. That test is the only thing standing behind
+     * "two surfaces, one racing line" -- a hook this project has already had to
+     * defend once. Trading it for a flicker fix in passing is not a trade worth
+     * making, and it was measured at 0.40 as well as 0.70: the cost is not a
+     * question of degree.
+     *
+     * What ships instead is `drift.airGrace` 0.25 -> 0.45, which stops the
+     * flicker turning into a released drift and a boost the player did not ask
+     * for -- the part that is actually felt. The flicker itself wants its own
+     * pass, and the fix probably belongs at the source, in how `altNow` is
+     * sampled, rather than in a wider window around a noisy number.
+     */
   },
 
   /** stat (1-10) -> physical value */
@@ -438,7 +471,25 @@ export const TUNING = {
      */
     releaseKick: [3.0, 6.0, 10.0, 15.0],
     /** Relative impact speed above which drift charge is lost. */
-    collisionCancelSpeed: 8.0,
+    /**
+     * A DRIFT NOW SURVIVES A BARRIER. Asked for directly: "keep performing the
+     * drift during the bounce phase and when hitting the barriers, even though
+     * it will slow down the speed of the drift."
+     *
+     * 8.0 m/s of closing rate cancelled the slide, which on a circuit with
+     * bounce corridors and 19m-wide corners is most of a lap's contacts -- and
+     * the cancel is the harsher of the two ways a drift can end: it zeroes the
+     * charge and pays nothing. Worse, the OTHER exit path pays a full release
+     * boost, so clipping a wall mid-slide either robbed the player of the
+     * charge they had built or fired their boost for them at a moment they did
+     * not choose. Both were reported as the same complaint.
+     *
+     * 26 m/s is a genuine crash -- well above `hardImpactSpeed` at 18 -- so a
+     * head-on into a barrier still ends the slide, and a scrape, a kerb or a
+     * bounce wall no longer does. The speed cost is untouched: the barrier
+     * still takes what it always took.
+     */
+    collisionCancelSpeed: 26.0,
     /** Re-enter a drift within this window to keep a chain. */
     chainWindow: 0.40,
     chainBonusPerStack: 0.15,
@@ -450,7 +501,20 @@ export const TUNING = {
      * a kerb or a crest and is well under a ramp's ~2s of hang time, so a real
      * launch still ends the drift and arms the trick.
      */
-    airGrace: 0.25,
+    /**
+     * Seconds a drift survives with the wheels off the deck.
+     *
+     * 0.25 -> 0.45. The grounded flag turns out to chatter on real geometry --
+     * measured at 261 lift-offs away from any ramp in a single 8-car race on
+     * Elkarim, every one of them with a vertical velocity of exactly 0.00, i.e.
+     * a state flip rather than a car going anywhere. The flicker itself is
+     * NOT fixed (see the note in sim, above); this widens the window
+     * that turns any remaining blip into a released drift and a boost the
+     * player did not ask for. Still far under a real launch -- a ramp on these
+     * tracks gives about 2s of hang time -- so a jump ends the slide and arms
+     * the trick exactly as before.
+     */
+    airGrace: 0.45,
     minSpeedToDrift: 12.0,
     hopHeight: 0.35,
     hopTime: 0.18,
@@ -1947,6 +2011,21 @@ export const TUNING = {
      * lap and the orbit is really an ellipse that rises at its wide points.
      */
     lateralMargin: 0.80,
+    /**
+     * How fast the ceremony camera is pulled back over the road, m/s.
+     *
+     * NOT A HARD CLAMP, and the difference cost a test. The handoff blend lerps
+     * from the chase rig's last pose, which is an OFFSET from a car that keeps
+     * moving -- so an offset that was legal at the flag goes illegal as the car
+     * drives on, and clamping it at capture cannot help. Clamping the final
+     * position does fix it, and applied hard it teleports the camera 5.6m in
+     * one frame against a 4m smoothness budget: a hard clamp on a moving lerp
+     * is a discontinuity by construction.
+     *
+     * 140 m/s closes the worst measured excursion in about three frames, which
+     * is under the budget and far too quick to read as camera movement.
+     */
+    edgePullRate: 140,
     /** Metres of climb per metre of lateral clamp. */
     climbPerMetre: 0.62,
     /** The shot always gets at least this long, seconds. */

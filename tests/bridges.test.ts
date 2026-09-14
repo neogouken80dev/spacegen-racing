@@ -591,6 +591,12 @@ describe('the flat tracks cannot reach any of this', () => {
     //             to the shared sim and every track that has a barrier feels
     //             it; it is expected to move, and a hash that did not would
     //             mean neither change had reached the collision path.
-    expect(race.hash()).toBe('c2749a03')
+    //   7ce2dd33  Elkarim's widths went up 25% and a drift survives a barrier
+    //             (`drift.collisionCancelSpeed` 8.0 -> 26.0, `drift.airGrace`
+    //             0.25 -> 0.45). Both were asked for. The geometry change alone
+    //             would move this, since the baseline is pinned to a race on
+    //             this circuit, and the drift changes are shared-sim and move
+    //             the other three as well.
+    expect(race.hash()).toBe('7ce2dd33')
   })
 })

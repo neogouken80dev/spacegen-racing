@@ -301,7 +301,16 @@ function landmarks(ctx: ThemeContext): void {
     // The bore is sized off the ribbon it hoops: it has to clear the road, the
     // 3 m barrier and the 4.5 m the ring centre is lifted, by a constant margin
     // so the hoop keeps framing rather than growing into a halo.
-    const R = smp.width + 13.5
+    //
+    // MEASURED FROM THE CORRIDOR, NOT FROM THE BARE WIDTH, which is the rule
+    // the rest of this file already follows and the one place that had been
+    // missed. `smp.width + 13.5` looks like it scales, and it does -- but it
+    // scales against the centreline half-width while the thing it has to clear
+    // is the corridor, which is that width times `offTrack.edgeTolerance`. The
+    // gap between the two is 10% of the width, so it grew with every width
+    // pass until it ran out: at the 25% widening the hoop measured 0.22m inside
+    // the road it is meant to frame.
+    const R = ctx.corridor(smp.width) + 11
     const ringParts: THREE.BufferGeometry[] = [
       part(new THREE.TorusGeometry(R, 2.2, 6, 26), pal.c, xf(0, 0, 0)),
       part(new THREE.TorusGeometry(R - 3.5, 0.7, 4, 20), pal.a, xf(0, 0, 0)),
