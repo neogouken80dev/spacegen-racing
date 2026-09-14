@@ -367,7 +367,15 @@ describe('the AI', () => {
     //           The inversion fix is deliberately NOT in this commit: it is a
     //           second change to the same mechanic, and bundling it would make
     //           the feel change unattributable. Balance was re-run and holds.
-    expect(avg).toBeCloseTo(56.85, 2)
+    //   56.10s  Elkarim was reshaped: its two 32m hairpins and its 33m "esses"
+    //           became 64-72m arcs, and the lap grew 2479.6 -> 2625.6m. FASTER
+    //           by 0.75s despite being 146m longer, which is the whole point of
+    //           the change -- a corner's speed limit goes as the square root of
+    //           its radius, so doubling the radius of the three slowest corners
+    //           buys more than the extra distance costs. This line measures the
+    //           TRACK now, not the sim: nothing in vehicle.ts, ai.ts or the
+    //           tuning table moved, and the other three circuits are untouched.
+    expect(avg).toBeCloseTo(56.10, 2)
   })
 })
 

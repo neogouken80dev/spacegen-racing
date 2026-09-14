@@ -39,7 +39,7 @@ export const SPEED_CEILING = 120
  * they still match the real tracks, so the copy cannot drift silently.
  */
 export const TRACK_LENGTH: Record<string, number> = {
-  rustfall: 2479.6,
+  rustfall: 2625.6,
   cryostatic: 2892.0,
   aetherion: 3212.5,
   hollowchoir: 3255.2,

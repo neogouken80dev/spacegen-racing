@@ -25,6 +25,7 @@ export const RUSTFALL: TrackDef = {
     { p: [0, 0, 105], w: 19.5, surface: 'tarmac', ramp: 32, tag: 'ramp-main' },
     { p: [0, 1.5, 210], w: 19.5, surface: 'tarmac' },
     { p: [0, 3, 315], w: 18.75, surface: 'gravel' },
+    { p: [0, 3.6, 378.8], w: 18.75, surface: 'gravel' },
     // THE OIL SLICK WAS TRIED HERE AND PUT BACK. Recorded because the result
     // is the finding, not the change.
     //
@@ -53,24 +54,110 @@ export const RUSTFALL: TrackDef = {
     // a flat-out Class A. So the low-grip work went to gravel in the bounce
     // corridor instead (see beat 6 below), and the crane-drop oil stays as what
     // it has always been: an art beat, and 0.00s a lap.
-    { p: [0, 4, 415], w: 18, surface: 'gravel', tag: 'straight-end' },
-    { p: [-14, 4, 468], w: 16.5, bank: 4, surface: 'tarmac' },
-    { p: [-44, 3.5, 486], w: 15.75, bank: 9, surface: 'tarmac', tag: 'hairpin' },
-    { p: [-74, 3, 468], w: 15.75, bank: 9, surface: 'tarmac' },
-    { p: [-88, 2.5, 424], w: 16.5, bank: 4, surface: 'tarmac' },
-    { p: [-90, 2, 350], w: 18, surface: 'tarmac', tag: 'crane-drop' },
-    { p: [-90, 1, 285], w: 18, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
-    { p: [-92, 0, 220], w: 18.75, surface: 'tarmac' },
-    { p: [-104, 0, 150], w: 19.5, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
-    { p: [-140, 1, 96], w: 19.5, bank: 14, surface: 'metal' },
-    { p: [-192, 2, 66], w: 19.5, bank: 14, surface: 'metal' },
-    { p: [-250, 2.5, 62], w: 19.5, bank: 12, surface: 'metal' },
-    { p: [-306, 3, 86], w: 19.5, bank: 9, surface: 'metal' },
-    { p: [-346, 4, 132], w: 18.75, bank: 5, surface: 'metal' },
-    { p: [-362, 6, 190], w: 18, boost: true, ramp: 34, surface: 'metal', tag: 'ramp-chasm' },
-    { p: [-366, 9, 232], w: 16.5, open: true, surface: 'metal' },
-    { p: [-368, 5, 300], w: 18, open: true, surface: 'gravel', tag: 'landing' },
-    { p: [-368, 3, 352], w: 18.75, surface: 'oil' },
+    //
+    // RE-READ AFTER THE RESHAPE. The geometry this was measured against is
+    // gone: the hairpin it names is now 65m rather than 32m and the whole lap
+    // is 146m longer. The conclusion survives, and was re-measured -- the
+    // longest sustained run of 140-260m radius anywhere on this circuit is
+    // 51m, so there is still no corner an oil slick could bind. What was NOT
+    // re-measured is the 131-degree heading error that broke the field when
+    // the slick was moved to the braking zone; if anyone tries that again,
+    // measure it again rather than trusting the number above.
+    { p: [0, 4, 415], w: 18, surface: 'tarmac', tag: 'straight-end' },
+    // OPENED OUT: THE TWO 32m HAIRPINS ARE NOW 64-66m SWEEPS.
+    //
+    // Measured with the swept-angle instrument described below, authored ->
+    // now: hairpin 32.2 -> 65.5m, final corner 31.8 -> 63.5m, the "esses" hook
+    // 40.3 -> 57.3m, and the tightest radius ANYWHERE on the lap 31.8 -> 56.9m.
+    // The distribution moves with them: p1 33 -> 60m, p5 41 -> 66m. Lap length
+    // 2479.6 -> 2625.6m, and the lap got FASTER anyway (56.85 -> 56.10s in the
+    // fixed-seed race tests/gravity.test.ts pins), because corner speed goes as
+    // the square root of radius and doubling the three slowest corners buys
+    // more than 146m of extra road costs.
+    //
+    // WHY SEPARATION IS THE ONLY LEVER. Each of these is a 180 between two
+    // parallel legs, and for that shape the largest radius available is HALF
+    // THE LEG SEPARATION. Splaying the entry, over-rotating into a teardrop, a
+    // compound curve -- each was worked through and each buys LESS lateral per
+    // metre of radius than a plain semicircle, because the lateral travel of an
+    // arc turning psi is R(1 - cos psi) and psi = 180 is where that peaks.
+    //
+    // The only free direction is +x: the start straight is this track's whole
+    // right-hand boundary and there is nothing beyond it, while the left-hand
+    // legs are hemmed in -- the hairpin's exit by the cargo ring at x=-208, the
+    // final corner's approach by the sweeper at x=-190. So the left block moved
+    // 50m further out and the straight stayed on the origin, widening the
+    // hairpin 90 -> 140m and the final corner 64 -> 128m for nothing.
+    //
+    // THE OTHER HALF OF THE FIX IS NODE SPACING, and it is the half that is not
+    // obvious. Track.catmull is UNIFORM Catmull-Rom: the tangent at a node is
+    // (next - prev) / 2 however far apart those neighbours are, and every
+    // segment is walked over t in [0,1] whatever its length. Where a long
+    // straight meets a short arc chord, the tangent is far longer than the
+    // segment it has to cover, the curve overshoots and the curvature spikes.
+    // That is why the authored hairpin measured 32m inside a 45m envelope, and
+    // why the first cut of this reshape -- a mathematically exact 70m circle --
+    // still measured in the fifties when entered off a 100m straight segment.
+    //
+    // The rule that fixes it: THE SEGMENT EITHER SIDE OF AN ARC MATCHES THAT
+    // ARC'S CHORD. Hence the nodes at z=378.8 on both legs of the hairpin and
+    // at z=-25 on both legs of the final corner, which otherwise look
+    // arbitrary. Nodes further out on a straight can sit anywhere, because
+    // uniform Catmull-Rom through collinear points is still a straight line;
+    // only a junction node has a neighbourhood that bends.
+    //
+    // AND THE INSTRUMENT WAS WRONG FIRST. Menger curvature over three points
+    // 12m apart is the obvious way to measure a radius and it is unusable at
+    // this scale: the baked centreline carries ~0.1m of ripple, the sagitta of
+    // a 24m chord on a 70m radius is 1.0m, so a tenth of a metre of noise moves
+    // the circumradius ten percent. Against a centreline whose every sample sat
+    // 69.9-70.0m from a known centre it reported 55-75m and called a true 70m
+    // arc a 55m corner. Every radius quoted in this file's new comments is
+    // instead window length / heading change over 30m -- stable against ripple,
+    // and the same quantity Track.curvatureAt hands the AI when it picks a
+    // corner speed. tools/plot-track.ts carries the working.
+    { p: [-9.4, 3.75, 450], w: 18, bank: -6, surface: 'tarmac' },
+    { p: [-35, 3.5, 475.6], w: 18, bank: -10, surface: 'tarmac' },
+    { p: [-70, 3.25, 485], w: 18, bank: -11, surface: 'tarmac', tag: 'hairpin' },
+    { p: [-105, 3, 475.6], w: 18, bank: -10, surface: 'tarmac' },
+    { p: [-130.6, 2.75, 450], w: 18, bank: -6, surface: 'tarmac' },
+    { p: [-140, 2.5, 415], w: 18.75, bank: -2, surface: 'tarmac' },
+    { p: [-140, 2.2, 378.8], w: 18, surface: 'tarmac', tag: 'crane-drop' },
+    { p: [-140, 1, 285], w: 18, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
+    { p: [-142, 0, 220], w: 18.75, surface: 'tarmac' },
+    { p: [-154, 0, 150], w: 19.5, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
+    // THIS NODE IS A RIGID 50m SHIFT OF THE AUTHORED ONE AND MUST STAY THAT
+    // WAY. The most expensive finding of the reshape is recorded here.
+    //
+    // An earlier cut nudged it 6m further out, to x=-196, to buy margin against
+    // the return leg on the flyover above. Six metres, on one node, on a
+    // section nobody was asked to change. It QUADRUPLED the field's respawns --
+    // 78 -> 331 over 30 fixed races -- and every one of the new ones landed
+    // 400m downstream, in the open chasm section at s=1300-1400, where there
+    // are no barriers and a car that is 10% further out at launch simply leaves
+    // the map. Bulwark went from 0.56 to 3.88 respawns a race and its win share
+    // from 22% to 5%; Dray-9 from 21% to 3%. Putting the node back put the
+    // whole balance gate back, and better than it started: at 2000 races every
+    // chassis now sits inside the 12-30% band, which the authored track did not
+    // manage (Vector-7 read 8.0% at n=200 before this pass).
+    //
+    // The margin it was buying came from the return leg instead -- that leg
+    // exits at x=-128 rather than -135, which costs the final corner 7m of
+    // radius and is worth it.
+    //
+    // The general lesson, which is the reason this is a comment and not a diff:
+    // on a circuit with an unbarriered section, a small change to the LINE
+    // hundreds of metres upstream is a large change to where cars are when they
+    // reach it. Curvature plots will not show this. Only racing the field will.
+    { p: [-190, 1, 96], w: 19.5, bank: 14, surface: 'metal' },
+    { p: [-242, 2, 66], w: 19.5, bank: 14, surface: 'metal' },
+    { p: [-300, 2.5, 62], w: 19.5, bank: 12, surface: 'metal' },
+    { p: [-356, 3, 86], w: 19.5, bank: 9, surface: 'metal' },
+    { p: [-396, 4, 132], w: 18.75, bank: 5, surface: 'metal' },
+    { p: [-412, 6, 190], w: 18, boost: true, ramp: 34, surface: 'metal', tag: 'ramp-chasm' },
+    { p: [-416, 9, 232], w: 16.5, open: true, surface: 'metal' },
+    { p: [-418, 5, 300], w: 18, open: true, surface: 'gravel', tag: 'landing' },
+    { p: [-418, 3, 352], w: 18.75, surface: 'oil' },
     // GRAVEL AT THE CARGO RING -- where Rustfall's low-grip work ended up, and
     // the extent is a measurement, not a taste.
     //
@@ -97,47 +184,84 @@ export const RUSTFALL: TrackDef = {
     // The two 34-degree ring nodes stay METAL, and that one is an art call:
     // loose stone does not sit on a 34-degree bank, and that pair is the
     // wall-ride the beat is named for. Grit belongs on the floor either side.
-    { p: [-356, 2, 404], w: 12.75, bounce: true, surface: 'tarmac', tag: 'bounce' },
-    { p: [-330, 1.5, 444], w: 12, bounce: true, surface: 'tarmac' },
-    { p: [-292, 1, 470], w: 12, bounce: true, surface: 'tarmac' },
-    { p: [-250, 1, 480], w: 12.75, bounce: true, surface: 'tarmac' },
-    { p: [-210, 1, 468], w: 15, surface: 'tarmac' },
-    { p: [-176, 1.5, 436], w: 16.5, bank: 22, surface: 'tarmac', tag: 'ring' },
-    { p: [-158, 3.5, 392], w: 16.5, bank: 34, surface: 'metal' },
-    { p: [-160, 5.5, 344], w: 16.5, bank: 34, surface: 'metal' },
-    { p: [-182, 6, 306], w: 16.5, bank: 22, surface: 'metal' },
-    { p: [-218, 5, 288], w: 18, bank: 8, surface: 'metal' },
-    { p: [-256, 4, 268], w: 18, bank: -8, surface: 'tarmac', tag: 'esses' },
-    { p: [-268, 3, 216], w: 18, bank: -12, surface: 'tarmac' },
+    //
+    // RE-READ AFTER THE RESHAPE, and one number here has moved a long way. The
+    // ring approach and the ring itself now measure R=131m and R=74m (they
+    // were 93m and 48m), because the reshape widened the whole left-hand block
+    // and the ring sits inside it. Gravel therefore binds less than it did:
+    // the surface tax fell 0.645 -> 0.274s a lap, against the 0.25s floor in
+    // tests/track.test.ts. That still passes and the layer is still not
+    // decorative, but the margin is now thin enough that the next person to
+    // touch either the floor or these corners has to re-measure rather than
+    // assume. Lead retention was re-measured over 2000 races and holds at
+    // 46.0%, inside the 45-55% band.
+    { p: [-406, 2, 404], w: 12.75, bounce: true, surface: 'tarmac', tag: 'bounce' },
+    { p: [-380, 1.5, 444], w: 12, bounce: true, surface: 'tarmac' },
+    { p: [-342, 1, 470], w: 12, bounce: true, surface: 'tarmac' },
+    { p: [-300, 1, 480], w: 12.75, bounce: true, surface: 'tarmac' },
+    { p: [-260, 1, 468], w: 15, surface: 'tarmac' },
+    { p: [-226, 1.5, 436], w: 16.5, bank: 22, surface: 'tarmac', tag: 'ring' },
+    { p: [-208, 3.5, 392], w: 16.5, bank: 34, surface: 'metal' },
+    { p: [-210, 5.5, 344], w: 16.5, bank: 34, surface: 'metal' },
+    { p: [-240.4, 6, 309.9], w: 16.5, bank: 18, surface: 'metal' },
+    // THE "ESSES" WAS NEVER AN S, and that is why it was pinched.
+    //
+    // Its authored headings fall monotonically -- 243, 242, 193, 151, 113, 85
+    // degrees -- so it is one continuous 158-degree hook, i.e. a third hairpin
+    // wearing the wrong name. Drawn as a hook it takes a 72m constant radius
+    // between the same entry and exit it always had, against the 30.8m the
+    // squashed version measured. The tag stays because the render theme and the
+    // design docs both say "esses home"; the shape is what changed.
+    //
+    // The bank now follows the turn instead of flipping sign mid-corner.
+    { p: [-283.9, 5, 288.2], w: 18, bank: 6, surface: 'metal', tag: 'esses' },
+    { p: [-317.5, 3.5, 253], w: 18, bank: -10, surface: 'tarmac' },
+    { p: [-321.1, 3.4, 204.4], w: 18, bank: -12, surface: 'tarmac' },
+    { p: [-293, 5, 164.7], w: 18, bank: -10, surface: 'metal' },
+    { p: [-246, 8, 152], w: 18.75, bank: 10, surface: 'metal', tag: 'flyover' },
     // The return leg crosses back over the sweeper-T4 entry, so it climbs onto
     // a flyover. Plan separation alone was 18m against 26m of combined width,
     // which folded the ribbon through itself and made Track.project ambiguous.
-    { p: [-244, 5, 172], w: 18, bank: 10, surface: 'metal' },
-    { p: [-196, 8, 152], w: 18.75, bank: 10, surface: 'metal', tag: 'flyover' },
-    { p: [-146, 10, 156], w: 19.5, bank: 4, surface: 'metal' },
-    { p: [-104, 10, 132], w: 19.5, bank: -6, surface: 'metal', tag: 'flyover-cross' },
-    { p: [-80, 5, 88], w: 19.5, bank: -8, surface: 'metal', ramp: 24, tag: 'ramp-descent' },
-    { p: [-70, 1.5, 40], w: 19.5, bank: -4, surface: 'tarmac' },
-    // FINAL CORNER, rebuilt for the 50% width pass.
+    { p: [-201.6, 9.8, 146.3], w: 19.5, bank: -6, surface: 'metal' },
+    { p: [-163.2, 11.5, 123.4], w: 19.5, bank: -6, surface: 'metal', tag: 'flyover-cross' },
+    { p: [-137.2, 7.3, 86.9], w: 19.5, bank: -6, surface: 'metal', ramp: 24, tag: 'ramp-descent' },
+    { p: [-128, 3, 43.1], w: 19.5, bank: -2, surface: 'metal' },
+    // FINAL CORNER, rebuilt for the 50% width pass and reopened here.
     //
     // The authored version was a squashed oval that ran a 19.7m radius against
     // an 18m half-width, so the inside edge folded through itself -- the ribbon
     // self-intersection the geometry test guards. Deepening it was not enough:
     // the curvature was concentrated at the apex, so opening the loop just moved
-    // the pinch to the exit.
+    // the pinch to the exit. Laying it out as an actual semicircle fixed that
+    // and took it to a nominal 32m, which is where it sat until this pass.
     //
-    // It is now laid out as an actual semicircle: centre (-32, -40), radius 32,
-    // which is the widest 180 given the 64m separation between the two legs
-    // (x = -64 inbound, x = 0 outbound). Constant radius means the curvature is
-    // spread evenly instead of spiking, and 32 against an 18m half-width leaves
-    // 14m of margin -- room for the next width pass, if there is one.
-    { p: [-64, 0, 0], w: 18.75, bank: 6, surface: 'tarmac', tag: 'final-corner' },
-    { p: [-64, 0, -40], w: 18, bank: 12, surface: 'tarmac' },
-    { p: [-57.6, 0, -59.3], w: 18, bank: 14, surface: 'tarmac' },
-    { p: [-40.8, 0, -70.8], w: 18, bank: 14, surface: 'tarmac' },
-    { p: [-20.5, 0, -69.9], w: 18, bank: 14, surface: 'tarmac' },
-    { p: [-4.9, 0, -57.0], w: 18.75, bank: 10, surface: 'tarmac' },
-    { p: [0, 0, -40], w: 19.5, bank: 4, boost: true, surface: 'tarmac', tag: 'home-boost' },
+    // What a semicircle could not fix was the 64m between its two legs. The
+    // approach now runs straight down x=-128 instead of pinching in to -64, so
+    // the loop is centred (-64, -50) at radius 64 -- double the old one, and
+    // still 54m of margin against the 19.5m half-width. It reaches z=-114 to do
+    // it, into ground nothing else on this track uses.
+    //
+    // THE BANK IS NEGATIVE NOW, AND THE OLD SIGN WAS A BUG. Track bakes +bank
+    // as the RIGHT edge rising, and both of this track's 180s turn toward -psi,
+    // which needs the left edge up. The authored hairpin and final corner were
+    // banked 11 and 15 degrees OFF CAMBER. At a 32m radius nobody arrived
+    // faster than ~34 m/s and it did not show; at 64m the corner speed is ~48
+    // and it would. Measured honestly, though: flipping the sign on its own
+    // moved Bulwark's respawns 3.88 -> 3.79 a race, i.e. it was NOT what was
+    // throwing the field off the circuit (see the sweeper node, above). It is
+    // fixed because it is wrong, not because it was the bug.
+    { p: [-128, 0, 0], w: 19.5, surface: 'tarmac', tag: 'final-corner' },
+    { p: [-128, 0, -25], w: 19.5, bank: -3, surface: 'tarmac' },
+    { p: [-128, 0, -50], w: 19.5, bank: -6, surface: 'tarmac' },
+    { p: [-123.1, 0, -74.5], w: 18.75, bank: -9, surface: 'tarmac' },
+    { p: [-109.3, 0, -95.3], w: 18.75, bank: -12, surface: 'tarmac' },
+    { p: [-88.5, 0, -109.1], w: 18.75, bank: -14, surface: 'tarmac' },
+    { p: [-64, 0, -114], w: 18.75, bank: -15, surface: 'tarmac' },
+    { p: [-39.5, 0, -109.1], w: 18.75, bank: -14, surface: 'tarmac' },
+    { p: [-18.7, 0, -95.3], w: 18.75, bank: -12, surface: 'tarmac' },
+    { p: [-4.9, 0, -74.5], w: 18.75, bank: -9, surface: 'tarmac' },
+    { p: [0, 0, -50], w: 19.5, bank: -4, surface: 'tarmac', boost: true, tag: 'home-boost' },
+    { p: [0, 0, -25], w: 19.5, bank: -3, surface: 'tarmac' },
   ],
   // ITEM BOX ROWS: MEASURED, A FIX BUILT, AND THE FIX DELIBERATELY NOT SHIPPED.
   //
@@ -168,6 +292,15 @@ export const RUSTFALL: TrackDef = {
   // field on `itemBoxRows` in src/sim/track.ts -- which `chargeRuns` already
   // has -- so a row can be offset rather than only narrowed. Both are outside
   // the track content. Recorded as an open failure rather than papered over.
+  //
+  // THE NORMALISED POSITIONS SURVIVED THE RESHAPE AND WERE RE-CHECKED, not
+  // assumed: the lap grew 2479.6 -> 2625.6m, so every `at` and `from`/`to`
+  // slid. Re-measured, the five rows now sit on the main straight, the
+  // hairpin exit, the chasm approach, the cargo ring and the flyover return,
+  // and the six charge runs still bracket the straight, the hairpin, the
+  // sweeper, the bounce corridor, the esses hook and the final corner. Spread
+  // and width still satisfy the geometry test. The finding above is unchanged
+  // and still unfixable from this file.
   itemBoxRows: [
     { at: 0.10, count: 5, spread: 4.4 },
     { at: 0.27, count: 5, spread: 4.2 },

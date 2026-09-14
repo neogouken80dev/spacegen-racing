@@ -577,6 +577,14 @@ describe('the flat tracks cannot reach any of this', () => {
     //             release, and the AI releases drifts constantly. It is not
     //             separable from the arc change by inspection, so it is not
     //             claimed to be.
-    expect(race.hash()).toBe('42272a00')
+    //   c38e0c6c  Elkarim's geometry was reshaped -- gradual bends in place of
+    //             its two hairpins, asked for directly. This is the one entry
+    //             in this list that is NOT a change to the shared sim: not a
+    //             line of vehicle.ts, ai.ts or tuning moved, and the other
+    //             three circuits hash exactly as before. The baseline is
+    //             pinned to a race ON Rustfall, so moving Rustfall moves it,
+    //             and a hash that did not move would mean the new node table
+    //             had not reached the sim at all.
+    expect(race.hash()).toBe('c38e0c6c')
   })
 })
