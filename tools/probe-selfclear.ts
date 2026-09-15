@@ -54,15 +54,26 @@ const ACROSS = [-1, -0.5, 0, 0.5, 1]
 /**
  * How close two pieces of road may come before they are the same ground.
  *
- * 2.0m, NOT "enough room to drive between". Elkarim has two entirely different
- * parts of its lap -- 1290m apart along the circuit -- running alongside each
- * other with 3.9m between their edges, which is an ordinary circuit layout with
- * a barrier down the middle and nothing anyone drives through. Gating at 4.5m
- * failed that, and a gate that fails correct shipped tracks gets switched off.
+ * 2.0m, NOT "enough room to drive between". Elkarim's flyover passes over the
+ * sweeper it crosses -- 1290m apart along the circuit -- with 3.9m between the
+ * two ribbons. Gating at 4.5m failed that, and a gate that fails a correct
+ * shipped track gets switched off.
  *
  * The defect this exists to catch is surfaces INTERPENETRATING: the staggered
  * loops measure 9.1m, and the same loops with their stagger removed measure
  * 0.1m. There is no ambiguity to split at 2m.
+ *
+ * THAT 3.9m IS ALSO THIS FILE'S LIMIT, AND IT IS NOT A THRESHOLD PROBLEM.
+ * Measured as `trackMesh.ts` actually builds it, the same Elkarim pair has
+ * 3.01m of headroom over a road with a 3.0m barrier standing on it: the
+ * bridge's deck plate and the barrier's cap are inside one another by a quarter
+ * of a metre. So 3.9m is simultaneously the reason 4.5m was rejected and a
+ * place where the track really does clip itself, and no number here can be both.
+ * A ribbon is not the built world -- it has no barrier, no skirt and no soffit
+ * -- so this file cannot see that class of defect at any setting.
+ * `tools/probe-solidclear.ts` measures the solid instead and is directional;
+ * this one stays because it is cheap, needs no renderer, and catches the
+ * centreline defect it was built for. Keep both.
  */
 const CLEARANCE = 2.0
 /** Samples closer than this along the lap are neighbours, not a conflict. */

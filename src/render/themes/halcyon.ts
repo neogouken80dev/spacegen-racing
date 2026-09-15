@@ -43,7 +43,7 @@
  */
 import * as THREE from 'three'
 import {
-  bindSurfaceSpray, merge, mulberry32, part, xf,
+  bindSurfaceSpray, loopHoop, merge, mulberry32, part, xf,
   type FrameInfo, type Palette, type PropSpec, type SurfaceSprayTable,
   type TerrainPoint, type Theme, type ThemeContext,
 } from './kit'
@@ -159,36 +159,50 @@ function landmarks(ctx: ThemeContext): void {
    * inside the bore.
    *
    * TWO of them now: this circuit is the LOOP track in the roster's division of
-   * set pieces, so it carries the Pier and the Arch and no spiral at all. ---- */
+   * set pieces, so it carries the Pier and the Arch and no spiral at all.
+   *
+   * Measured today, `src/content/tracks/halcyon.ts` emits only `pier` -- the
+   * `arch` pair is gone -- so `loopHoop` returns null for it and the second
+   * pass costs nothing. Left in the list rather than deleted: the loop it names
+   * is this circuit's own identity, and a layout that puts it back should get
+   * its lamps back without an art change. ---- */
+  const LAMP_R = 0.7
   for (const name of ['pier', 'arch']) {
-    const iLoop = ctx.tagSample(name)
-    const iApex = ctx.tagSample(`${name}-apex`)
-    if (iLoop < 0 || iApex < 0) continue
-    const a = track.samples[iLoop], b = track.samples[iApex]
-    const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
-    const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
-    const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
-    const fx = a.tangent.x / tl, fz = a.tangent.z / tl
-    const R = loopR + ctx.corridor(a.width) + 3.0
+    // Centre, radius and the clear sweep all come off the ribbon: see
+    // `loopHoop` in kit.ts. The lamps used to ride a hand-written
+    // `loopR + corridor(width) + 3.0`, which on the Pier is a 63.1 m circle
+    // round a loop whose road reaches 37.7 m in this plane -- 25 m of slack
+    // that hung the lower lamps through the feed road, 8.74 m inside the edge
+    // and 4.72 m up, 51 m before the loop's mouth. A lamp is not a torus and
+    // it made no difference: the radius was the bug, not the shape. Measured:
+    // 16 lamps on a 40.4 m hoop over 328 degrees.
+    const hoop = loopHoop(ctx, name, `${name}-apex`, { tube: LAMP_R, clear: 2.0 })
+    if (!hoop) continue
     // Lamps as a ring of small spheres in one merged mesh: 18 lamps, one draw.
+    // Spaced over the CLEAR sweep rather than the full circle, so the run ends
+    // either side of the road instead of walking through it -- which is where a
+    // seafront lamp run ends anyway, at the foot of the structure carrying it.
     const lamps: THREE.BufferGeometry[] = []
-    const N = 18
+    const N = Math.max(4, Math.round(18 * (hoop.sweep / (Math.PI * 2))))
     for (let i = 0; i < N; i++) {
-      const th = (Math.PI * 2 * i) / N
-      const ox = Math.sin(th) * R, oy = -Math.cos(th) * R
-      lamps.push(part(new THREE.SphereGeometry(0.7, 6, 5), LAMP, xf(fx * ox, oy, fz * ox)))
+      const [ox, oy, oz] = hoop.offset(hoop.from + (hoop.sweep * i) / (N - 1))
+      lamps.push(part(new THREE.SphereGeometry(LAMP_R, 6, 5), LAMP, xf(ox, oy, oz)))
     }
     const geo = merge(lamps)
     ctx.own(geo)
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: true })
     ctx.own(mat)
     const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(cx, cy, cz)
+    mesh.name = `landmark-${name}-lamps`
+    mesh.position.set(hoop.cx, hoop.cy, hoop.cz)
     ctx.add(mesh)
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0xffc078, 1.9, loopR * 3.6, 1.8)
-        L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
+        const L = new THREE.PointLight(0xffc078, 1.9, hoop.loopR * 3.6, 1.8)
+        L.position.set(
+          hoop.cx + hoop.fx * k * hoop.loopR * 0.55, hoop.cy,
+          hoop.cz + hoop.fz * k * hoop.loopR * 0.55,
+        )
         ctx.add(L)
       }
     }

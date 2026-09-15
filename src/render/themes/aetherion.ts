@@ -694,10 +694,50 @@ interface SectionPoint { lat: number; up: number; col: number }
  * winding is not decorative: `normal` is `right x tangent`, so a profile edge
  * running in -lat produces a face pointing along +normal, and one listed the
  * other way round gives a shell you can only see from inside.
+ *
+ * ---------------------------------------------------------------------------
+ * A SECTION IS ALSO HANDED `roll`, AND A SHELL THAT SPANS THE ROAD NEEDS IT.
+ *
+ * "Hangs along -normal, so it can never enter the corridor" is true AT a ring
+ * and false BETWEEN two of them. The strip between rings is a pair of
+ * triangles, and a triangle's diagonal runs from one ring's LOW edge to the
+ * next ring's HIGH edge: where the ribbon has rolled in between, that diagonal
+ * crosses the centreline above the average of the two, which is above the
+ * deck. The excursion is exactly a quarter of the lateral span the diagonal
+ * crosses times how far the cross-section rolled:
+ *
+ *     rise = 0.25 * (lat_b - lat_a) * (right_next - right_here) . normal
+ *
+ * The rotunda's drum spans the whole road at `up: -0.45`, so its diagonal
+ * crosses 2W = 46 m of a ribbon rolling 0.063 per 6 m ring step -- 0.72 m of
+ * rise through a 0.45 m lid, and `probe-intrude.ts` found it: `landmark-rotunda
+ * 17.90m inside the edge at s=969m, 0.28m above the road`, dead on the
+ * centreline at the drum's mouth. It is worth being precise that this is NOT a
+ * stride artefact that goes away at higher quality: the rise is proportional to
+ * the roll per step, so it is 0.28 m at the `high` stride of 4 and 0.98 m at
+ * the `low` stride of 8, and both are in the road.
+ *
+ * `SweepRing` carries the three measurements a section needs to sink itself by
+ * the exact amount: the roll, the centreline's own sagitta between rings, and
+ * the neighbouring samples -- the last because a section whose width GROWS
+ * between rings has a diagonal spanning `W_here + W_next`, not `2 * W_here`,
+ * and the rotunda's wings grow from 0 to 23 m across the sweep. All three are
+ * zero or irrelevant on level road of constant width, which is every other
+ * sweep in this file.
+ * ---------------------------------------------------------------------------
  */
+interface SweepRing {
+  /** Worst roll out of this ring's plane over the two neighbouring rings. */
+  roll: number
+  /** Worst rise of a centreline chord to a neighbouring ring over the deck. */
+  lift: number
+  /** The neighbouring ring samples, for a section whose width varies. */
+  near: [TrackSample, TrackSample]
+}
+
 function sweepRibbon(
   ctx: ThemeContext, iFrom: number, iTo: number, stride: number,
-  section: (smp: TrackSample, u: number) => SectionPoint[],
+  section: (smp: TrackSample, u: number, ring: SweepRing) => SectionPoint[],
 ): THREE.BufferGeometry {
   const { track } = ctx
   const m = track.samples.length
@@ -709,10 +749,34 @@ function sweepRibbon(
   const c = new THREE.Color()
   let P = 0
 
+  /** How far `b`'s lateral axis has rolled out of `a`'s road plane. */
+  const rollBetween = (a: TrackSample, b: TrackSample): number => Math.abs(
+    (b.right.x - a.right.x) * a.normal.x +
+    (b.right.y - a.right.y) * a.normal.y +
+    (b.right.z - a.right.z) * a.normal.z,
+  )
+  /** How far the chord a-to-b rides over the deck halfway between them. */
+  const liftBetween = (ia: number, ib: number): number => {
+    const a = track.samples[ia], b = track.samples[ib]
+    const mid = track.samples[(ia + Math.round((((ib - ia) % m + m) % m) / 2)) % m]
+    return Math.max(0,
+      ((a.pos.x + b.pos.x) / 2 - mid.pos.x) * mid.normal.x +
+      ((a.pos.y + b.pos.y) / 2 - mid.pos.y) * mid.normal.y +
+      ((a.pos.z + b.pos.z) / 2 - mid.pos.z) * mid.normal.z)
+  }
+  const ringIdx = (r: number): number =>
+    (iFrom + Math.round((Math.min(rings, Math.max(0, r)) / rings) * span)) % m
+
   for (let r = 0; r <= rings; r++) {
     const u = r / rings
-    const smp = track.samples[(iFrom + Math.round(u * span)) % m]
-    const sec = section(smp, u)
+    const i = ringIdx(r), iN = ringIdx(r + 1), iP = ringIdx(r - 1)
+    const smp = track.samples[i]
+    const near: [TrackSample, TrackSample] = [track.samples[iP], track.samples[iN]]
+    const sec = section(smp, u, {
+      roll: Math.max(rollBetween(smp, near[0]), rollBetween(smp, near[1])),
+      lift: Math.max(liftBetween(iP, i), liftBetween(i, iN)),
+      near,
+    })
     P = sec.length
     for (let j = 0; j < P; j++) {
       const sp = sec[j]
@@ -1308,16 +1372,21 @@ function landmarks(ctx: ThemeContext): void {
 
     for (const [a, b] of cuts) {
       if (b - a < 6) continue
-      stone.push(sweepRibbon(ctx, a, b, 9, (smp) => {
+      // The soffit's top edge spans the whole road too, so it takes the same
+      // measured sink as the drum -- see `sweepRibbon`. It clears today on 3.4 m
+      // of depth against a causeway that barely rolls; it is written this way so
+      // it still clears if the causeway ever gets banked.
+      stone.push(sweepRibbon(ctx, a, b, 9, (smp, _u, ring) => {
         const L = ctx.corridor(smp.width) + PAD
+        const d = 0.5 * L * ring.roll + ring.lift
         return [
-          { lat: -L, up: -3.4, col: STONE_DUSK },
-          { lat: -L * 0.97, up: -7.2, col: STONE_DEEP },
-          { lat: -L * 0.54, up: -10.2, col: STONE_DEEP },
-          { lat: 0, up: -11.4, col: STONE_DEEP },
-          { lat: L * 0.54, up: -10.2, col: STONE_DEEP },
-          { lat: L * 0.97, up: -7.2, col: STONE_DEEP },
-          { lat: L, up: -3.4, col: STONE_DUSK },
+          { lat: -L, up: -3.4 - d, col: STONE_DUSK },
+          { lat: -L * 0.97, up: -7.2 - d, col: STONE_DEEP },
+          { lat: -L * 0.54, up: -10.2 - d, col: STONE_DEEP },
+          { lat: 0, up: -11.4 - d, col: STONE_DEEP },
+          { lat: L * 0.54, up: -10.2 - d, col: STONE_DEEP },
+          { lat: L * 0.97, up: -7.2 - d, col: STONE_DEEP },
+          { lat: L, up: -3.4 - d, col: STONE_DUSK },
         ]
       }))
     }
@@ -1586,19 +1655,46 @@ function landmarks(ctx: ThemeContext): void {
     const wingAt = (smp: TrackSample): number =>
       ctx.corridor(smp.width) + PAD + WING * rollOf(smp) * rollOf(smp)
 
+    /**
+     * HOW FAR THE WHOLE SECTION SINKS AT THIS RING.
+     *
+     * The drum's section spans the entire road -- it is a slab BEHIND the deck,
+     * 2W wide -- so its ring-to-ring diagonal crosses 2W of a rolling ribbon
+     * and rises `0.25 * 2W * roll` above where it was authored. See the note on
+     * `sweepRibbon`. Measured along this sweep: 0.72-1.23 m at the `high`
+     * stride of 4 and 1.51-2.29 m at the `low` stride of 8, against a lid
+     * authored 0.45 m down -- which is why the road had masonry 0.28 m over it
+     * at the mouth.
+     *
+     * Both the stringcourses and the shell take the SHELL's drop rather than
+     * their own smaller one, so the 0.15 m of relief between them -- the whole
+     * reason the courses read as courses -- survives the sink unchanged.
+     *
+     * The arm is the WIDEST of this ring and its two neighbours, because the
+     * wings grow from 0 to 23 m across the sweep and the diagonal spans
+     * `W_here + W_next`. On the first cut, which used this ring's own width,
+     * the `low` tier still came within 0.115 m of the deck at s=1057m, where
+     * the wing grows fastest; with the neighbours' width and the centreline's
+     * own sagitta in, every tier clears by more than half a metre.
+     */
+    const sink = (smp: TrackSample, ring: SweepRing): number =>
+      0.5 * Math.max(wingAt(smp), wingAt(ring.near[0]), wingAt(ring.near[1])) * ring.roll
+      + ring.lift
+
     const drumParts: THREE.BufferGeometry[] = [
-      sweepRibbon(ctx, iRot, iRotOut, stride, (smp) => {
+      sweepRibbon(ctx, iRot, iRotOut, stride, (smp, _u, ring) => {
         const W = wingAt(smp)
+        const d = sink(smp, ring)
         // The drum's inner face is the DARK value on this planet, for the
         // reason Cryostatic's cavern roof is: two warm lamps on the axis are
         // the only light in here, and a light source only reads as one against
         // something darker than it. At STONE the whole drum came back as a
         // flat mid-brown field with a lit barrier on it.
         return [
-          { lat: -W, up: -0.45, col: STONE_DUSK },
-          { lat: -W, up: -6.0, col: STONE_DEEP },
-          { lat: W, up: -6.0, col: STONE_DEEP },
-          { lat: W, up: -0.45, col: STONE_DUSK },
+          { lat: -W, up: -0.45 - d, col: STONE_DUSK },
+          { lat: -W, up: -6.0 - d, col: STONE_DEEP },
+          { lat: W, up: -6.0 - d, col: STONE_DEEP },
+          { lat: W, up: -0.45 - d, col: STONE_DUSK },
         ]
       }),
     ]
@@ -1607,15 +1703,16 @@ function landmarks(ctx: ThemeContext): void {
     // horizontal courses the drum is laid in, and they are the thing that
     // stops 90 m of masonry reading as one flat sheet with a road on it.
     for (const side of [-1, 1]) {
-      drumParts.push(sweepRibbon(ctx, iRot, iRotOut, stride, (smp) => {
+      drumParts.push(sweepRibbon(ctx, iRot, iRotOut, stride, (smp, _u, ring) => {
         const L = ctx.corridor(smp.width) + PAD
+        const d = sink(smp, ring)
         const a = side * (L + 0.8), b = side * (L + 8.5)
         const lo = Math.min(a, b), hi = Math.max(a, b)
         return [
-          { lat: lo, up: -0.30, col: STONE_LIT },
-          { lat: lo, up: -2.6, col: STONE_DUSK },
-          { lat: hi, up: -2.6, col: STONE_DUSK },
-          { lat: hi, up: -0.30, col: STONE_LIT },
+          { lat: lo, up: -0.30 - d, col: STONE_LIT },
+          { lat: lo, up: -2.6 - d, col: STONE_DUSK },
+          { lat: hi, up: -2.6 - d, col: STONE_DUSK },
+          { lat: hi, up: -0.30 - d, col: STONE_LIT },
         ]
       }))
     }

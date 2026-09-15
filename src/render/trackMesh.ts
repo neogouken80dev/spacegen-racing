@@ -1686,6 +1686,17 @@ function placeUpright(
  * the sky straight through the deck. The plate meets the skirts exactly where
  * `emitWall` puts their feet, so the deck closes into a box rather than a
  * sandwich with a slot down each side.
+ *
+ * TWO POINTS ACROSS IS ENOUGH, and that is worth writing down because it was
+ * measured the hard way. `probe-solidclear` reported the plate bulging 0.40 m
+ * up through its own road where Meridian Deep comes off a 65-degree banked
+ * corner straight onto a viaduct (s=2184 m, `wallFoot` running 5.11 m to 0.97 m
+ * over six metres of arc). Five points across were fitted to that number and
+ * took it to zero — and so did two, once the probe stopped reading a point near
+ * the far end of a sample band in the NEAR sample's frame. On a 9-degree twist
+ * per band at 18.5 m of lateral that is 2.9 m of phantom height; the plate had
+ * never left the deck. The +12% of track triangles the extra rows cost bought
+ * nothing, so they are not here.
  */
 function emitSoffit(
   track: Track, i0: number, count: number, via: Float64Array,
@@ -1852,14 +1863,35 @@ function buildViaductPiers(
         const lz = smp.pos.z + oz * side * legLat
         // THE LEG STOPS UNDER THE CROSS-HEAD AT ITS OWN LATERAL, NOT UNDER THE
         // CENTRELINE. The legs are upright while the deck they carry is banked,
-        // so the underside above a leg is `right.y * legLat` off the centreline
-        // height — down on the low side, up on the high one. Taking the
-        // centreline and dropping a flat 1.35 m worked while legLat was under
-        // 6 m; the 50% width pass took it to 9 m, which on the flyover's
-        // 10-degree bank is 1.55 m of drop, and the low leg came up through its
-        // own deck by 0.2 m. This is the same mistake the terrain height field
-        // used to make, in the same frame, for the same reason.
-        const headY = smp.pos.y + smp.right.y * side * legLat + smp.normal.y * -1.35
+        // so the underside above a leg is well off the centreline height — down
+        // on the low side, up on the high one. Taking the centreline and
+        // dropping a flat 1.35 m worked while legLat was under 6 m; the 50%
+        // width pass took it to 9 m, which on the flyover's 10-degree bank is
+        // 1.55 m of drop, and the low leg came up through its own deck by 0.2 m.
+        // This is the same mistake the terrain height field used to make, in the
+        // same frame, for the same reason.
+        //
+        // AND `legLat` IS THE WRONG LATERAL TO ASK WITH. It is a PLAN offset —
+        // the legs straddle the deck in plan so they stand upright under a
+        // banked deck — while `right` is the BANKED axis, so the deck above a
+        // leg is `right.y * legLat / hl` off the centreline, not
+        // `right.y * legLat`. The two agree only on the flat, and `hl` is
+        // exactly the cosine of the bank. Namaresh's rotunda approach rolls 32
+        // degrees (hl 0.85): there the low leg stopped 0.74 m too high and put
+        // its cap and marker lamp 0.54 m up THROUGH its own road, at s=1167 m.
+        // No gate could see it — `legsClearOtherTrack` asks whether a leg lands
+        // on somebody ELSE's road, and this is a leg coming up through its own —
+        // until tools/probe-solidclear.ts started measuring the substructure.
+        // It is the only one on the roster: nothing else banks that hard under
+        // a viaduct, and the error goes as (1/cos(bank) - 1).
+        //
+        // The leg's AXIS lateral, not the outer corner of its box: the head is
+        // where the cross-head's centre is, and stopping short of that to clear
+        // the box's low corner would open daylight under the head on the high
+        // side, which is what the 1.35 m tuck exists to prevent. The corner
+        // clears anyway -- at 32 degrees it sits 0.46 m under the deck.
+        const latB = legLat / hl
+        const headY = smp.pos.y + smp.right.y * side * latB + smp.normal.y * -1.35
         const h = Math.max(2, headY - footY)
         placeUpright(parts, new THREE.BoxGeometry(1.15, h, 1.15), lx, footY + h / 2, lz, yaw, pal.c)
         placeUpright(parts, new THREE.BoxGeometry(0.30, h - 1.2, 1.55), lx + ox * side * 0.66,
@@ -2093,6 +2125,54 @@ function wallFoot(smp: Track['samples'][number], via: number): number {
   return onGround + (VIA_FOOT - onGround) * via
 }
 
+/**
+ * THE BARRIER'S CROSS-SECTION, AS BUILT.
+ *
+ * Four corners in the sample's own banked frame, as (lateral, up) offsets from
+ * the ROAD EDGE — lateral positive OUTBOARD, up along the surface normal:
+ * base, top inner, cap outer, skirt bottom. `emitWall` builds exactly these
+ * four points and nothing else, so this IS the wall.
+ *
+ * It is exported because a gate that asks "does one part of the lap's solid
+ * stand in another part's road" has to know the shape of that solid, and the
+ * shape is not the ribbon: it is the ribbon plus 3 m of leaning barrier and a
+ * skirt that hangs metres below the edge. `tools/probe-solidclear.ts` expands
+ * every sample through this function rather than through a copy of WALL_H /
+ * WALL_LEAN / WALL_CAP, because a copy would go stale the first time anyone
+ * tuned the barrier and the gate would then be measuring a wall the game does
+ * not build.
+ */
+export function wallProfile(
+  smp: Track['samples'][number], via: number,
+): [number, number][] {
+  return [
+    [0, 0],
+    [-WALL_LEAN, WALL_H],
+    [WALL_CAP, WALL_H],
+    [WALL_CAP + 0.12, -wallFoot(smp, via)],
+  ]
+}
+
+/**
+ * The drop-off edge on an `open` sample, same convention as `wallProfile`.
+ *
+ * Outward and DOWN only: an open edge puts nothing above its own road, which
+ * is why an open section can never be the thing standing in someone else's
+ * airspace from above — only from below, through a deck it passes under.
+ */
+export function lipProfile(): [number, number][] {
+  return [
+    [0, 0],
+    [LIP_OUT, -0.30],
+    [LIP_OUT + 0.35, -LIP_DROP],
+  ]
+}
+
+/** Per-sample viaduct weight, as the wall skirt reads it. See `wallProfile`. */
+export function viaductWeight(track: Track): Float64Array {
+  return viaductWeights(track).via
+}
+
 function emitWall(
   b: ChunkBuilder,
   sa: Track['samples'][number], sb: Track['samples'][number],
@@ -2108,17 +2188,14 @@ function emitWall(
     const ez = smp.pos.z + smp.right.z * side * smp.width
     const rx = smp.right.x * side, ry = smp.right.y * side, rz = smp.right.z * side
     const nx = smp.normal.x, ny = smp.normal.y, nz = smp.normal.z
-    // The outer skirt runs from the cap all the way down past the graded
-    // verge, so the barrier is solid from both sides at every bank angle.
-    const foot = wallFoot(smp, via)
-    pts.push([
-      ex, ey, ez,                                                                       // base
-      ex - rx * WALL_LEAN + nx * WALL_H, ey - ry * WALL_LEAN + ny * WALL_H, ez - rz * WALL_LEAN + nz * WALL_H, // top inner
-      ex + rx * WALL_CAP + nx * WALL_H, ey + ry * WALL_CAP + ny * WALL_H, ez + rz * WALL_CAP + nz * WALL_H,    // cap outer
-      ex + rx * (WALL_CAP + 0.12) - nx * foot,                                          // skirt bottom
-      ey + ry * (WALL_CAP + 0.12) - ny * foot,
-      ez + rz * (WALL_CAP + 0.12) - nz * foot,
-    ])
+    // base / top inner / cap outer / skirt bottom. The outer skirt runs from
+    // the cap all the way down past the graded verge, so the barrier is solid
+    // from both sides at every bank angle.
+    const row: number[] = []
+    for (const [lat, up] of wallProfile(smp, via)) {
+      row.push(ex + rx * lat + nx * up, ey + ry * lat + ny * up, ez + rz * lat + nz * up)
+    }
+    pts.push(row)
   }
 
   // Lifted off near-black: the barrier now carries most of its detail as
@@ -2193,13 +2270,11 @@ function emitLip(
     const ez = smp.pos.z + smp.right.z * side * smp.width
     const rx = smp.right.x * side, ry = smp.right.y * side, rz = smp.right.z * side
     const nx = smp.normal.x, ny = smp.normal.y, nz = smp.normal.z
-    pts.push([
-      ex, ey, ez,
-      ex + rx * LIP_OUT - nx * 0.30, ey + ry * LIP_OUT - ny * 0.30, ez + rz * LIP_OUT - nz * 0.30,
-      ex + rx * (LIP_OUT + 0.35) - nx * LIP_DROP,
-      ey + ry * (LIP_OUT + 0.35) - ny * LIP_DROP,
-      ez + rz * (LIP_OUT + 0.35) - nz * LIP_DROP,
-    ])
+    const row: number[] = []
+    for (const [lat, up] of lipProfile()) {
+      row.push(ex + rx * lat + nx * up, ey + ry * lat + ny * up, ez + rz * lat + nz * up)
+    }
+    pts.push(row)
   }
 
   const tint = 0.85 + 0.25 * hash2(seed, side + 31)

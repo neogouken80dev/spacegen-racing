@@ -47,7 +47,7 @@
  */
 import * as THREE from 'three'
 import {
-  bindSurfaceSpray, merge, mulberry32, part, xf,
+  bindSurfaceSpray, loopHoop, merge, mulberry32, part, xf,
   type FrameInfo, type Palette, type PropSpec, type SurfaceSprayTable,
   type TerrainPoint, type Theme, type ThemeContext,
 } from './kit'
@@ -243,6 +243,67 @@ function ashSpires(ctx: ThemeContext, push: (m: THREE.Matrix4, tint: THREE.Color
   }
 }
 
+/* ---------------------------------------------------------------- caldera */
+
+/** Base radius of the cinder cone. Also what has to clear the road. */
+const CALDERA_BASE_R = 210
+/** Plan gap the base circle keeps from the protected corridor, metres. */
+const CALDERA_CLEAR = 25
+/** How far out the search is willing to walk before giving up, metres. */
+const CALDERA_MAX = 900
+
+/**
+ * WHERE THE CINDER CONE STANDS, measured rather than written down.
+ *
+ * See the long note at the caldera block in `landmarks` for what this replaces
+ * and why. Two questions, both answered off the ribbon:
+ *
+ *   WHICH CORNER   the tightest one in the first 500 m after `start`. The
+ *                  layout calls its first corner the CALDERA HOOK and makes it
+ *                  the tightest thing on the lap (r=50 against nothing else
+ *                  under 60), so "tightest, early" picks it out without this
+ *                  file needing a tag the tracks do not carry. Measured on the
+ *                  current lap: s=247m, r=50m.
+ *
+ *   HOW FAR OUT    the first distance along that corner's own lateral at which
+ *                  `clearOfTrack` says a CALDERA_BASE_R + CALDERA_CLEAR
+ *                  footprint has left the lap. Both sides are walked and the
+ *                  nearer wins, because the side that runs out of racetrack
+ *                  first IS the outside of the corner. Measured: 270 m west
+ *                  against 1150 m east, base clearing the road by 30 m.
+ *
+ * Null when nothing inside CALDERA_MAX clears -- a planet with no room for its
+ * own mountain gets no mountain, rather than one parked on the racing line.
+ */
+function calderaSite(ctx: ThemeContext): { x: number; z: number } | null {
+  const { track } = ctx
+  const m = track.samples.length
+  const i0 = ctx.tagSample('start')
+  if (i0 < 0) return null
+  const span = Math.round(500 / (track.length / m))
+  let bestK = 0, iHook = -1
+  for (let d = 0; d < span; d++) {
+    const i = (i0 + d) % m
+    const k = Math.abs(track.curvatureAt((i / m) * track.length, 20))
+    if (k > bestK) { bestK = k; iHook = i }
+  }
+  if (iHook < 0) return null
+  const smp = track.samples[iHook]
+  const hl = Math.hypot(smp.right.x, smp.right.z) || 1
+  let out: { x: number; z: number } | null = null
+  let best = Infinity
+  for (const side of [1, -1]) {
+    const ox = (smp.right.x / hl) * side, oz = (smp.right.z / hl) * side
+    for (let d = 120; d < best && d <= CALDERA_MAX; d += 5) {
+      const x = smp.pos.x + ox * d, z = smp.pos.z + oz * d
+      if (!ctx.clearOfTrack(x, z, CALDERA_BASE_R + CALDERA_CLEAR)) continue
+      best = d; out = { x, z }
+      break
+    }
+  }
+  return out
+}
+
 /* -------------------------------------------------------------- landmarks */
 
 function landmarks(ctx: ThemeContext): void {
@@ -251,24 +312,56 @@ function landmarks(ctx: ThemeContext): void {
   const m = track.samples.length
 
   /* ---- THE CALDERA. The landmark the whole planet is named for: a cinder
-   * cone on the skyline, venting, placed off the outside of the ash beds where
-   * it sits in frame through the longest corner on the lap.
+   * cone on the skyline, venting, standing on the outside of the corner the
+   * layout names after it.
    *
    * It is ONE merged mesh at a fixed spot rather than an instanced prop,
    * because its whole job is to be in a particular place relative to a
    * particular corner. A cone that wanders is scenery; a cone you can brake
-   * against is a landmark. ---- */
-  const iAsh = ctx.tagSample('ashbeds')
-  if (iAsh >= 0) {
-    const smp = track.samples[iAsh]
-    const tl = Math.hypot(smp.tangent.x, smp.tangent.z) || 1
-    const ox = smp.tangent.z / tl, oz = -smp.tangent.x / tl
-    const D = 420
-    const cx = smp.pos.x + ox * D, cz = smp.pos.z + oz * D
+   * against is a landmark.
+   *
+   * -------------------------------------------------------------------------
+   * IT USED TO BE THE PASSTHROUGH WALL, and it was reported from play as one:
+   * "this strange passthrough wall ... do not have any tracks that clip into
+   * the track". It was anchored 420 m off the `ashbeds` bearing, which put its
+   * axis at (365, 0) -- and the road at (495, 130) is 184 m from there, inside
+   * a 210 m base. The lap ran INSIDE the cone for 2526 m of its 4482, and
+   * because the cone is `openEnded` you see straight through it except where
+   * the deck crosses its shell, which is a rock face lying across the road.
+   * `probe-intrude.ts`: 6.89 m inside the edge at s=1740m, 3.62 m above it.
+   *
+   * TWO THINGS WERE WRONG AND ONLY ONE OF THEM WAS THE NUMBER.
+   *
+   * 1. THE DISTANCE WAS WRITTEN DOWN. 420 was measured against a lap that has
+   *    since been rebuilt at a much larger scale, and nothing re-measured it.
+   *    Pushing it to 840 on the same bearing does clear every road point by
+   *    25 m -- and puts a landmark 840 m from the corner it exists to frame,
+   *    which is a different way of not having one. So the distance is MEASURED
+   *    now: walk outward until `clearOfTrack` says the base has left the lap,
+   *    and stop at the first place it does. That is the closest the cone can
+   *    stand, and it re-measures itself the next time the layout moves.
+   *
+   * 2. THE ANCHOR WAS THE WRONG CORNER. `src/content/tracks/emberfall.ts`
+   *    calls its first corner the CALDERA HOOK -- r=50, off the 235 m start
+   *    straight, the tightest thing anybody authored on the lap -- so the
+   *    mountain the planet is named for belongs on the outside of it, not off
+   *    the ash beds 600 m later. That corner carries no tag of its own and the
+   *    tag list is another worker's file, so it is found the way the layout
+   *    describes it: the tightest corner in the first 500 m after `start`.
+   *    Measured, that lands at s=247m, r=50m -- the hook, to the metre.
+   *
+   * WHICH SIDE IS THE OUTSIDE is not written down either. Both are walked and
+   * the one that runs out of racetrack first wins, which is what "outside of
+   * a corner" means. Measured here: 270 m to the west, against 1150 m to the
+   * east, and the cone's base clears the road by 30 m.
+   * ------------------------------------------------------------------------- */
+  const site = calderaSite(ctx)
+  if (site) {
+    const { x: cx, z: cz } = site
     const g = ctx.ground(cx, cz)
     const parts: THREE.BufferGeometry[] = []
     const s = Math.max(9, ctx.seg)
-    parts.push(part(new THREE.ConeGeometry(210, 190, s, 2, true), BASALT, xf(0, 95, 0)))
+    parts.push(part(new THREE.ConeGeometry(CALDERA_BASE_R, 190, s, 2, true), BASALT, xf(0, 95, 0)))
     parts.push(part(new THREE.ConeGeometry(96, 70, s, 1, true), SCORIA, xf(0, 205, 0)))
     // The vent: a shallow bowl of light, small against a 190m cone.
     parts.push(part(new THREE.CylinderGeometry(54, 42, 6, s), LAVA, xf(0, 228, 0)))
@@ -280,6 +373,7 @@ function landmarks(ctx: ThemeContext): void {
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.94, metalness: 0.04 })
     ctx.own(mat)
     const mesh = new THREE.Mesh(geo, mat)
+    mesh.name = 'landmark-caldera'
     mesh.position.set(cx, g.y - 12, cz)
     mesh.frustumCulled = true
     ctx.add(mesh)
@@ -335,37 +429,50 @@ function landmarks(ctx: ThemeContext): void {
    * it had nothing lighting it at all. A headline set piece the player cannot
    * see is not a set piece.
    *
-   * So each of the three loops gets a seam of molten rock concentric with it,
+   * So each loop the layout tags gets a seam of molten rock concentric with it,
    * plus two warm point lights inside the bore. The ring is emissive and does
    * no lighting work by itself (that is what the bloom pass sees); the two
    * lights are what actually puts the road surface back in the frame. Geometry
    * is derived from each loop's own two tags rather than from the track's
    * constants -- the art layer reads content, it never imports it. ---- */
+  const SEAM_TUBE = 1.1
   for (let li = 1; li <= 3; li++) {
-    const iTube = ctx.tagSample(`loop${li}`)
-    const iApex = ctx.tagSample(`loop${li}-apex`)
-    if (iTube < 0 || iApex < 0) continue
-    const a = track.samples[iTube], b = track.samples[iApex]
-    const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
-    const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
-    const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
-    const fx = a.tangent.x / tl, fz = a.tangent.z / tl
-    const seg = Math.max(16, ctx.seg * 2)
-    const ringGeo = new THREE.TorusGeometry(loopR + ctx.corridor(a.width) + 3.5, 1.1, 5, seg)
+    // Radius and sweep both come off the ribbon -- see `loopHoop` in kit.ts for
+    // what the hand-written `loopR + corridor(width) + 3.5` was getting wrong
+    // and how far into the road it put this seam. Measured: Cinder One is a
+    // 38.5 m hoop over 325 degrees and Cinder Two a 44.7 m hoop over 326,
+    // against 59.3 m and 66.3 m full circles that crossed their own feed roads
+    // 10.01 m and 6.38 m inside the edge, 50-60 m before each loop's mouth.
+    // The layout currently tags two; `loopHoop` answers null for a third.
+    const hoop = loopHoop(ctx, `loop${li}`, `loop${li}-apex`, { tube: SEAM_TUBE, clear: 2.0 })
+    if (!hoop) continue
+    // Same arc-length per segment the full circle had, so the seam does not get
+    // chunkier just because it is no longer closed.
+    const seg = Math.max(12, Math.round(ctx.seg * 2 * (hoop.sweep / (Math.PI * 2))))
+    const ringGeo = new THREE.TorusGeometry(hoop.radius, SEAM_TUBE, 5, seg, hoop.sweep)
+    // A torus sweeps from its own +X; swing the whole geometry round to where
+    // the clear window starts.
+    ringGeo.rotateZ(hoop.from)
     ctx.own(ringGeo)
     const ringMat = new THREE.MeshBasicMaterial({ color: LAVA, fog: true })
     ctx.own(ringMat)
     const ringMesh = new THREE.Mesh(ringGeo, ringMat)
-    ringMesh.position.set(cx, cy, cz)
+    // Named, because `probe-intrude.ts` reported this as `child#13
+    // MeshBasicMaterial` and that is not something anyone can go and look at.
+    ringMesh.name = `loop-seam-${li}`
+    ringMesh.position.set(hoop.cx, hoop.cy, hoop.cz)
     // The torus lies in its own XY plane; stand it up and swing it to face
     // along the road, so it is concentric with the loop rather than crossing it.
-    ringMesh.rotation.y = Math.atan2(fx, fz) + Math.PI / 2
+    ringMesh.rotation.y = hoop.rotY
     ctx.add(ringMesh)
 
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0xff7a2a, 3.0, loopR * 4.2, 1.6)
-        L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
+        const L = new THREE.PointLight(0xff7a2a, 3.0, hoop.loopR * 4.2, 1.6)
+        L.position.set(
+          hoop.cx + hoop.fx * k * hoop.loopR * 0.55, hoop.cy,
+          hoop.cz + hoop.fz * k * hoop.loopR * 0.55,
+        )
         ctx.add(L)
       }
     }

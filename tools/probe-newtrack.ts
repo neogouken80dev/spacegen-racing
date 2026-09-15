@@ -77,13 +77,35 @@ for (const seed of SEEDS) {
 }
 laps.sort((a, b) => a - b)
 const mean = laps.reduce((a, b) => a + b, 0) / Math.max(1, laps.length)
+/**
+ * THE LAP BAND IS A PRODUCT DECISION, AND IT MOVED.
+ *
+ * It was 55-75s, which is where a three-lap arcade race lands at roughly three
+ * and a half minutes. On 2026-09-15 Vince changed the trade explicitly: shown
+ * that Ashkar's plan sketch priced out at ~4500m and ~95s and that matching the
+ * drawing meant breaking the band, he chose the drawing -- "match the overall
+ * shape, and keep the longer distance. i dont mind if its longer" -- and asked
+ * for Meridian Deep, Zhen-9 and Ashkar all to be rebuilt at their sketches'
+ * true proportions.
+ *
+ * So the ceiling is 105s. That is not "the gate was inconvenient"; it is the
+ * gate being told the correct number by the person who owns it. What the gate
+ * still protects is the two things nobody chose: a lap so short it is a skid
+ * pad, and a lap so long the three-lap race stops being an arcade race. At 105s
+ * a race is about five and a half minutes, which is the practical ceiling
+ * before `laps` should come down to 2 for the long circuits -- if a lap ever
+ * needs to exceed this, change `laps`, do not widen this again.
+ */
+const LAP_MIN = 55
+const LAP_MAX = 105
+
 console.log(`\n  races: ${finished}/${8 * SEEDS.length} racers finished`)
-console.log(`  lap time: best ${laps[0]?.toFixed(2)}s  mean ${mean.toFixed(2)}s  worst ${laps[laps.length - 1]?.toFixed(2)}s   (design band 55-75s)`)
+console.log(`  lap time: best ${laps[0]?.toFixed(2)}s  mean ${mean.toFixed(2)}s  worst ${laps[laps.length - 1]?.toFixed(2)}s   (design band ${LAP_MIN}-${LAP_MAX}s)`)
 console.log(`  respawns ${(respawns / SEEDS.length).toFixed(1)}/race   off-track ${(100 * offTrack / Math.max(1, frames * 8)).toFixed(1)}% of racer-frames`)
 
 const problems: string[] = []
 if (finished !== 8 * SEEDS.length) problems.push(`only ${finished}/${8 * SEEDS.length} racers finished`)
-if (mean < 55 || mean > 75) problems.push(`mean lap ${mean.toFixed(2)}s is outside the 55-75s design band`)
+if (mean < LAP_MIN || mean > LAP_MAX) problems.push(`mean lap ${mean.toFixed(2)}s is outside the ${LAP_MIN}-${LAP_MAX}s design band`)
 // CALIBRATED, not guessed. The four shipped circuits measure 0.0, 0.0, 0.3 and
 // 0.7 respawns a race through this same harness, so 3 is already several times
 // worse than anything that has ever shipped. The first version of this gate sat

@@ -43,7 +43,7 @@
  */
 import * as THREE from 'three'
 import {
-  bindSurfaceSpray, merge, mulberry32, part, xf,
+  bindSurfaceSpray, loopHoop, merge, mulberry32, part, xf,
   type FrameInfo, type Palette, type PropSpec, type SurfaceSprayTable,
   type TerrainPoint, type Theme, type ThemeContext,
 } from './kit'
@@ -137,26 +137,33 @@ function landmarks(ctx: ThemeContext): void {
    * not one. Here it is an advertising hoop, so the light has a reason to be
    * there, and it CYCLES hue -- the only colour-animated thing in the game, and
    * it is allowed because it is a hoarding. ---- */
-  const iRing = ctx.tagSample('holoring')
-  const iApex = ctx.tagSample('holoring-apex')
-  if (iRing >= 0 && iApex >= 0) {
-    const a = track.samples[iRing], b = track.samples[iApex]
-    const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
-    const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
-    const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
-    const fx = a.tangent.x / tl, fz = a.tangent.z / tl
-    const geo = new THREE.TorusGeometry(loopR + ctx.corridor(a.width) + 3.4, 1.5, 6, Math.max(18, ctx.seg * 2))
+  const HOOP_TUBE = 1.5
+  // Radius and sweep are measured off the ribbon: see `loopHoop` in kit.ts.
+  // The hand-written `loopR + corridor(width) + 3.4` built a 58.1 m circle
+  // round a loop whose road only reaches 35.2 m in this plane, and the 23 m of
+  // slack hung the hoop's lower arc through the feed road 6.88 m inside the
+  // edge, 45 m before the loop's mouth. Measured: a 38.7 m hoop over 322
+  // degrees, with the gap where the road drives in.
+  const hoop = loopHoop(ctx, 'holoring', 'holoring-apex', { tube: HOOP_TUBE, clear: 2.0 })
+  if (hoop) {
+    const seg = Math.max(14, Math.round(ctx.seg * 2 * (hoop.sweep / (Math.PI * 2))))
+    const geo = new THREE.TorusGeometry(hoop.radius, HOOP_TUBE, 6, seg, hoop.sweep)
+    geo.rotateZ(hoop.from)
     ctx.own(geo)
     const mat = new THREE.MeshBasicMaterial({ color: NEON_PINK, fog: true })
     ctx.own(mat)
     const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(cx, cy, cz)
-    mesh.rotation.y = Math.atan2(fx, fz) + Math.PI / 2
+    mesh.name = 'landmark-holoring'
+    mesh.position.set(hoop.cx, hoop.cy, hoop.cz)
+    mesh.rotation.y = hoop.rotY
     ctx.add(mesh)
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0xff5ab4, 2.3, loopR * 3.4, 1.7)
-        L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
+        const L = new THREE.PointLight(0xff5ab4, 2.3, hoop.loopR * 3.4, 1.7)
+        L.position.set(
+          hoop.cx + hoop.fx * k * hoop.loopR * 0.55, hoop.cy,
+          hoop.cz + hoop.fz * k * hoop.loopR * 0.55,
+        )
         ctx.add(L)
       }
     }

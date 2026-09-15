@@ -1,4 +1,4 @@
-import type { TrackDef } from '../../sim/track'
+import type { TrackDef, TrackNode } from '../../sim/track'
 import { circuit, type Seg } from './circuit'
 
 /**
@@ -12,473 +12,729 @@ import { circuit, type Seg } from './circuit'
  * decided on GRIP FALLING AWAY UNDER YOU, which is a different and less
  * forgiving thing.
  *
- * ---------------------------------------------------------------------------
- * 0. THIS IS A REWRITE, NOT A RETUNE, AND HERE IS WHY.
+ * ===========================================================================
+ * 0. THIS PASS IS THE SKETCH PASS. WHAT IT KEPT AND WHAT IT REDREW.
+ * ===========================================================================
  *
- * The previous Meridian Deep was drawn from a k1+k2 harmonic ring, same as
- * Emberfall, Halcyon Bay and Ashkar (now Zhen-9) -- one long ellipse with a
- * second harmonic to taper the ends into something that read, on paper, as
- * "two hairpin ends and two very long flanks." Player feedback on the whole
- * family of four was blunt: "the overall oval or square-ish type design does
- * not offer a lot of variety... the few turns are far too sharp to allow
- * smooth drifts." Measured, that track had a median radius of 113-140m (flat
- * out) and a single 45m corner sprung on the driver with no warning. That is
- * not a difficulty problem, it is a STRUCTURE problem -- a sum of harmonics has
- * no braking zones and no chosen radii, it has whatever the coefficients imply
- * -- and no amount of re-tuning grip or width fixes a structural problem.
+ * The circuit below still uses `circuit.ts` -- a straight, a braking zone, a
+ * corner of a CHOSEN radius, an exit, repeat -- for the reasons the previous
+ * rewrite recorded and which are still true (a harmonic ring has no braking
+ * zones and no chosen radii; four circuits built that way measured a median
+ * radius of 113-140m and played as "the overall oval or square-ish type design
+ * does not offer a lot of variety"). What changed is the PLAN SHAPE, and it
+ * changed because Vince supplied a two-panel before/after sketch
+ * (`/home/claude/sketches/meridian-deep-sketch.png`): keep the zigzag on the
+ * left flank, replace the flat run along the top with a big WAVE, add a
+ * descent down the right, and drive a large S-CURVE through the bottom middle
+ * where the old lap just swept round. "The revised plan wanders; the old one is
+ * a kidney."
  *
- * So this is authored on `circuit.ts` instead: a straight, a braking zone, a
- * corner of a CHOSEN radius, an exit, repeat. Corner speed at this grip model
- * (`T.grip.lateralAccel` 34, roster gripCoeff ~1.07) is sqrt(1.07*34*R)
- * against a roster top speed of 59-64 m/s:
- *
- *      50m   42.7 m/s   67% of top     hairpin, heavy braking
- *      65m   48.6 m/s   77%            medium -- the corner you actually drift
- *      90m   57.2 m/s   90%            fast -- a lift and a commitment
- *     150m   73.9 m/s  >100%           sweeper, flat out, still reads as a
- *                                      corner to the AI (gate R<222m)
- *
- * Twelve corners below, radii from 50m to 160m, most of them in the 58-110m
- * band that is the heart of a lap: two hairpins, three medium biofilm corners
- * (part 1), one esses complex and three standalone counter-curves (part 4 --
- * this is the pass that gave the lap real directional variety), a set-piece
- * spiral, and the breach. Every one of them is a chosen number with a reason
- * next to it, not a Fourier coefficient.
+ * Asked directly whether to shrink the drawing to protect the 55-75s lap band
+ * or to build it at full size: "match the overall shape, and keep the longer
+ * distance. i dont mind if its longer." The band in `tools/probe-newtrack.ts`
+ * is now 55-105s and this lap spends a good part of the new room. See the
+ * measured table at `CIRCUIT` below for exactly how much.
  *
  * ---------------------------------------------------------------------------
- * 1. THE BIOFILM IS THE TRACK.
+ * THE SKETCH, MEASURED, BECAUSE EYEBALLING IT WOULD HAVE BEEN WRONG TWICE.
  *
- * `oil` is grip 0.30 -- lower than ice (0.45) and less than a third of tarmac
- * (0.95, this track's own default). Elkarim has a little of it and it is a
- * hazard you avoid. Here it is a FEATURE of the route: the tube leaks, and
- * where it leaks things grow, so a bloom patch sits on the racing line through
- * three of the lap's corners rather than off it.
+ * Both panels are drawn in the projection `tools/plot-track.ts` uses (which is
+ * the minimap's: it negates u AND v, so a right-hand corner draws
+ * counter-clockwise on the page -- the lap below is a net +360 RIGHT-hand lap
+ * and it plots anticlockwise, same as the shipped one). Chamfer-fitting the
+ * shipped circuit's own baked centreline onto the LEFT panel pins the drawing
+ * at 2.157 m per sketch pixel, and lands the fit's origin within 0.3px of the
+ * drawn start/finish bar -- so the calibration is not a guess, it is the
+ * drawing telling you where its own start line is. The right panel is the left
+ * panel translated by exactly +607px and nothing else, so both panels share one
+ * coordinate frame and a feature can be looked up in either.
  *
- * Every bloom corner is authored as TWO consecutive `corner` segments at the
- * SAME radius and the SAME bank -- metal, then oil -- so the geometry is one
- * continuous arc and only the surface changes underfoot. That gives the
- * patch a real ramp rather than a step (Track.ts snaps `surface` at the
- * midpoint between nodes, so at this file's 18m spacing the transition reads
- * as a fade across one node gap, not a wall you hit mid-corner) without
- * needing a second interpolated field. An earlier draft used three pieces
- * (metal/oil/metal, a ramp out as well as in) and it is why that draft does
- * not survive: three pieces at these degree budgets put at least one arc
- * under 20m, which is well below what a corner segment needs to avoid the
- * chord-ratio problem documented at `CIRCUIT` below. Two pieces is what a
- * ~40-44 degree corner can afford; the fade-out on exit still happens, it
- * just happens at the boundary with the next segment instead of inside this
- * one.
+ * At that scale:
  *
- * AND CRUCIALLY every one of the three blooms sits on a corner radius of
- * 62-66m -- medium band, already 47-49 m/s before the oil touches it, well
- * under the 58-70m ceiling this circuit was briefed to hit. 0.30 grip is
- * survivable at that speed and is not survivable at the 76+ m/s this
- * circuit's sweepers and counter-curve entries run flat out. So a bloom
- * PUNISHES a driver who carried hairpin speed or fast-corner speed into a
- * corner that only wanted medium speed, and COSTS A TIDY DRIVER ALMOST
- * NOTHING -- the same asymmetry Elkarim measured for its own oil at 0.108s a
- * lap when it sat somewhere with no corner slow enough to bind it. Here it is
- * placed exactly where it binds.
+ *   left panel traced      3381m raw / 3214m smoothed   (shipped plan: 3151m)
+ *   right panel traced     4093m raw / 3890m smoothed
  *
- * 2. THE SPIRAL IS THE SET PIECE, AND IT IS ALONE.
+ * The +2% bias the left panel shows against a lap whose real length is known is
+ * the skeleton staircase, so the right panel's TRUE length is about 3800m of
+ * plan -- 21% more road than the shipped circuit, drawn inside the SAME
+ * bounding box (both panels' road boxes are 534px wide and within three pixels
+ * of the same height: 534x424 and 534x427). That
+ * is the whole design brief in one sentence: same site, half again as much
+ * wandering.
  *
- * The four circuits now divide the set pieces between them rather than each
- * carrying one of everything: Halcyon Bay takes the loops, Zhen-9 one of each,
- * and Meridian Deep is the SPIRAL track -- one continuous three-turn corkscrew
- * and nothing else set-piece-shaped. NO LOOP on this circuit, by design, so
- * this file never emits a `cathedral` / `cathedral-apex` tag pair; the theme's
- * `landmarks()` looks for both and skips the whole dome-lighting rig cleanly
- * when either is missing, which is exactly what we want here.
+ * WHAT THE DRAWING IS ACCURATE ABOUT, AND WHAT IT IS NOT. Segmenting the LEFT
+ * panel and comparing each run against the shipped file's own authored numbers:
+ * the drawn TURN ANGLES are right to a couple of degrees everywhere (drawn
+ * +23.2 for the authored +24 of ESSES-IN, +58.5 for HAIRPIN-1's +58, +36.7 for
+ * BLOOM-C's +40, -16.5 for COUNTER-2's -20), and the drawn RADII are inflated
+ * about two-fold on anything short, because the 40m curvature window that reads
+ * them cannot see inside a 25m arc. So this pass takes the angles from the
+ * drawing and CHOOSES the radii, which is also what puts real hairpins and real
+ * sweepers back in a picture whose every corner reads as "about 110m".
+ *
+ * WHICH THIRDS OF THE LAP ARE UNTOUCHED. Comparing the two traces directly,
+ * the new line sits within 12m of the old one for s 0..462, s 1410..2760 and
+ * s 3672..3875 of the drawn lap -- so roughly 2000m of the 3875m is the shipped
+ * circuit, redrawn on top of itself, and the two inserts are the WAVE (+150m,
+ * replacing the top run) and the S (+554m, replacing the bottom-middle sweep).
+ * Every corner in those preserved spans below is carried over at its shipped
+ * radius and degrees, marked `[kept]`, and the three straight-line features
+ * that live in them -- the three biofilm blooms, the spiral, the Breach --
+ * are in the same place on the map they were.
+ *
+ * THE ZIGZAG ON THE LEFT FLANK IS THE SPIRAL, AND THIS IS WORTH STATING
+ * LOUDLY, because the brief calls it "the zigzag esses complex" and a reader
+ * who goes looking for an esses complex in the old file will find a 3-piece
+ * +24/-20/+18 wiggle at the TOP RIGHT and preserve the wrong thing. It is not
+ * that. Measured on the shipped baked centreline, the box the zigzag occupies
+ * (u -1020..-870, v -200..+150) is baked s 1708..2260, which is plan s
+ * 1613..2013 -- the `cyclone`. Its helix swings +/-30m sideways three times
+ * over a 400m axis and that is what draws as four sharp reversals in plan.
+ * Preserving the zigzag therefore means preserving the CORKSCREW, at the same
+ * radius, the same turns, the same axis length and the same place, which is
+ * what `spiral` below does.
+ *
+ * ---------------------------------------------------------------------------
+ * HOW THE SEGMENT LIST WAS SOLVED, AND WHY NOT BY HAND.
+ *
+ * `circuit()` shuts a lap with the minimum-norm correction across every
+ * straight, and that correction is only invisible if the authored lap nearly
+ * closes on its own. With 30 corners and 1126 degrees of total steering -- the
+ * shipped circuit has 17 and 500 -- hand-guessing 31 straight lengths that both
+ * close AND land on a drawing is not a thing a person does in an afternoon. So
+ * the straights (and, in an earlier stage, the free corners' degrees) were
+ * SOLVED: a Levenberg-Marquardt fit of the plan walk against the traced
+ * drawing, with the preserved features pinned to the stations their world
+ * positions project onto, a 48-point lap-fraction term to stop the fit
+ * shrinking the lap inside the target, and the closure residual weighted hard
+ * enough to be an equality in practice. It converges at gap 0.0000m and scale
+ * 1.000, so `circuit()`'s own correction moves no straight by more than 0.31m
+ * and the numbers below are, to a third of a metre, the numbers the builder
+ * emits. Tightest straight after correction: 43.7m, 9% clear of the 40m floor.
+ *
+ * TWO THINGS THAT FIT PASS LEARNED THE HARD WAY.
+ *
+ * 1. LET THE RADII FLOAT AND THEY ALL COLLAPSE TO THE FLOOR. A free optimiser
+ *    prefers a tighter radius every time, because the same heading change costs
+ *    less arc and buys straight length elsewhere. Run unconstrained it returned
+ *    45m and 55m corners all over a circuit whose whole complaint history is
+ *    "the few turns are far too sharp". The radii below are therefore CHOSEN
+ *    per corner, one per band, and only the degrees and lengths were fitted.
+ *
+ * 2. A FIT THAT ONLY MATCHES POSITIONS WANDERS OFF BY A HEADING. Fixing every
+ *    corner's degrees at the drawing's own turn budget and solving straights
+ *    alone left 150-190m of position error by three-quarters distance: the
+ *    drawing carries about 20 degrees of net turning inside runs the segmenter
+ *    calls "straight", and dropping it puts a heading error into the lap that
+ *    no straight length can undo. Giving the non-preserved corners +/-8 degrees
+ *    of freedom, with the 360-degree sum as a residual, took the chamfer from
+ *    47m to 17m. The lap is a heading problem before it is a length problem.
+ *
+ * HOW CLOSE IS CLOSE ENOUGH, MEASURED RATHER THAN ASSERTED. The baked
+ * centreline sits 27.2m (mean, symmetric chamfer) from the traced right panel,
+ * p95 66m, worst 77m. That number means nothing on its own, so here is its
+ * floor: the SHIPPED circuit against the LEFT panel -- a drawing of a lap that
+ * already exists, by the same hand, at the same scale -- measures 27.4m, p95
+ * 59m, worst 66m. This circuit therefore matches its panel about as well as
+ * Vince's own drawing matches the circuit it was traced from, and any further
+ * fitting would be fitting the pen.
+ *
+ * ===========================================================================
+ * 1. THE BIOFILM IS THE TRACK. (Unchanged, and now four corners' worth.)
+ * ===========================================================================
+ *
+ * `oil` is grip 0.30 -- lower than ice (0.45) and less than a third of tarmac.
+ * Here it is a FEATURE of the route: the tube leaks, and where it leaks things
+ * grow, so a bloom patch sits ON the racing line rather than off it.
+ *
+ * Every bloom is authored as TWO consecutive `corner` segments at the SAME
+ * radius and SAME bank -- metal, then oil -- so the geometry is one continuous
+ * arc and only the surface changes underfoot. That gives the patch a real ramp
+ * rather than a step (`Track` snaps `surface` at the midpoint between nodes, so
+ * at this file's 18m spacing the transition reads as a fade across one node
+ * gap). An earlier draft used three pieces (metal/oil/metal) and it is why that
+ * draft does not survive: three pieces at these degree budgets put at least one
+ * arc under 20m, below what a corner needs to avoid the chord-ratio problem
+ * documented at `CIRCUIT`.
+ *
+ * AND CRUCIALLY every bloom sits on a radius of 62-66m -- medium band, 47-49
+ * m/s before the oil touches it. 0.30 grip is survivable at that speed and is
+ * NOT survivable at the 76 m/s this circuit's sweepers run flat out. So a bloom
+ * punishes a driver who carried fast-corner speed into a corner that only
+ * wanted medium speed, and costs a tidy driver almost nothing.
+ *
+ * BLOOM-D IS NEW AND IT IS THE BRIEF'S "hazard where the S doubles back".
+ * BLOOM-D is the corner where the lap stops running east along the bottom of
+ * the map and turns 70 degrees north-west into the infield -- the literal
+ * double-back, and the only corner in the whole S complex inside the 62-66m
+ * window the paragraph above makes a hard requirement. Every other corner in
+ * the S is 82m or wider (54 m/s and up), where 0.30 grip is a respawn rather
+ * than a penalty. So the hazard goes where the physics allows it, not where the
+ * drawing's apex happens to be, and a fourth dose of a mechanic the driver has
+ * met three times by then is the right difficulty curve for the roster's Hard
+ * circuit.
+ *
+ * ===========================================================================
+ * 2. THE SPIRAL IS THE SET PIECE, AND IT IS ALSO THE SKETCH'S ZIGZAG.
+ * ===========================================================================
+ *
+ * The four circuits divide the set pieces between them: Halcyon Bay takes the
+ * loops, Zhen-9 one of each, and Meridian Deep is the SPIRAL track. NO LOOP
+ * here, by design, so this file never emits a `cathedral` / `cathedral-apex`
+ * tag pair; `themes/abyssal.ts`'s `landmarks()` looks for both and skips the
+ * whole dome-lighting rig cleanly when either is missing, which is what we
+ * want.
  *
  * A road inside a cylinder can climb its walls, and every node the corkscrew
  * authors an `up` off world-vertical for gets `stick` defaulted to 1 by
- * Track.ts, so a car that gets light over a seam falls back toward the road it
+ * `Track`, so a car that gets light over a seam falls back toward the road it
  * left rather than into the glass.
  *
- * TWO DIFFERENT THINGS ARE BOTH TRUE OF A HELIX HERE, AND ONLY ONE OF THEM IS
- * "dead straight." `circuit()`'s own plan/closure heading does not turn at
- * all through a cyclone segment -- it rides a straight axis and coils around
- * it, which is why the spiral consumes none of the +/-360 degree budget in
- * part 4 and needs no `deg` accounting. But the BAKED road is a real 3-D
- * curve, and `Track.curvatureAt` -- what the AI's braking logic actually
- * reads -- measures curvature about the surface normal precisely so a road
- * that climbs is not misjudged as flat (see its own comment on the gravity
- * branch). Measured on this build, the spiral reads as a sustained ~40-45m
- * radius at its tightest, matching the textbook helix-curvature formula
- * R/(R^2+(pitch/2*pi)^2) for r=30m and a ~133m pitch almost exactly. That is
- * tighter than either hairpin.
+ * `circuit()`'s own plan/closure heading does not turn at all through a
+ * cyclone -- it rides a straight axis and coils around it -- which is why the
+ * spiral consumes none of the 360-degree budget. But the BAKED road is a real
+ * 3-D curve and `Track.curvatureAt` measures curvature about the surface
+ * normal, so the spiral reads as a sustained 40-48m radius at its tightest
+ * (measured on this build at 0.25m resolution), matching the helix-curvature
+ * formula R/(R^2+(pitch/2pi)^2) for r=30 and a 133m pitch. That is tighter
+ * than either hairpin, it is not a bug, and it is why the AI takes the
+ * corkscrew carefully rather than flat out.
  *
- * This is not a bug and it was not fought: it is why the AI is measured
- * taking the spiral carefully rather than flat out (see the lap-time note by
- * `CIRCUIT` below), which is the correct thing for a three-turn corkscrew to
- * do and exactly how a driver would read it on sight -- nobody needs a HUD
- * warning to know a corkscrew is not a straight.
+ * ONE ARITHMETIC TRAP THE SKETCH PASS HAD TO FIX. `circuit()` counts a cyclone
+ * as `len` metres of lap distance (400 here), but the road it emits is a helix,
+ * so its PLAN path is about 480m and its 3-D path longer still. Measured on the
+ * shipped circuit: `built.length` says 3151.1m and the baked plan path is
+ * 3242.8m, and essentially all of that 92m gap is the spiral. Any fit that
+ * compares `built.length` against a traced drawing has to add it back or the
+ * lap comes out 90m short exactly where it can least afford to.
  *
- * `turns: 3` is still a whole number for the reason the builder's rule
- * states. At f=0 and f=1 the coil's own `up` vector is exactly world +Y (the
- * ramp factor takes the effective radius to zero at both mouths, and
- * sin(2*pi*turns) is exactly zero for an integer `turns`), so the corkscrew's
- * entry and exit seams match the flat road on either side with no discontinuity
- * to throw a light car off-line. A fractional `turns` would leave that seam
- * open and hand back "the road exits inverted."
+ * ===========================================================================
+ * 3. THE BREACH, THE JUMP, AND THE TWO BOOST STRIPS.
+ * ===========================================================================
  *
- * 3. THE BREACH.
- *
- * One span where the tube is cracked and the sea is coming through: a lateral
- * current (`wind`, a flat 15 m/s^2 across the one corner it authors on) against
+ * THE BREACH is unchanged: one span where the tube is cracked and the sea is
+ * coming through, a flat 15 m/s^2 lateral current across a 160m sweeper, with
  * BOUNCE walls, never open ones. Ashkar paid for the other choice at 16.3
- * respawns a race -- a crosswind over unbarriered road is not difficulty, it
- * is a loading screen. The breach sits on a 160m sweeper, which this
- * circuit's cars take flat out (76.3 m/s corner-speed ceiling against a
- * 59-64 m/s top speed -- the corner itself asks nothing of you), so the
- * current's job is not to slow you down, it is to push you toward a wall you
- * are now allowed to lean on. Since contact no longer ends a drift, that is a
- * corner you can commit to rather than one you survive.
+ * respawns a race -- a crosswind over unbarriered road is not difficulty, it is
+ * a loading screen. The sweeper is taken flat out, so the current's job is not
+ * to slow you, it is to push you toward a wall you are allowed to lean on.
  *
- * 4. ON DIRECTION: A MONOTONIC LAP PASSED EVERY GATE AND WAS STILL WRONG.
+ * THE TRENCH JUMP MOVED 494m, AND THAT IS THE ONE PLACE THIS PASS SPENT ART
+ * RATHER THAN GEOMETRY. On the shipped lap it runs along the top of the map at
+ * (u -655..-842, v -511..-537). The drawing does not put a straight anywhere
+ * near there any more: the new top run is the wave, and the wave's own longest
+ * piece is 44m of road between two corners. The one straight in the whole
+ * redrawn half long enough to carry a ramp, a gap and a landing is the DESCENT
+ * off the top-right crest -- the drawing gives it 188m -- so the jump is there,
+ * deck running (u -280, v -300) down to (u -381, v -235), falling 42m to 32m
+ * across it. Measured mid-deck to mid-deck that is 494m from where it was.
  *
- * The first working draft of this circuit turned right on all twelve corners,
- * angles summing to exactly +360. It passed every gate cleanly -- gap 0.000m,
- * scale 1.00, chord ratio 3.09, 0.0 respawns/race, mean lap 69.73s -- and it
- * was still a mistake, because plotted against the other seven circuits a lap
- * that only ever turns one way reads as a large simple polygon rather than a
- * racetrack. That is the exact "does not offer a lot of variety" complaint
- * that started this whole rewrite, reproduced one level up.
+ * TWO ALTERNATIVES WERE PRICED AND REJECTED. Leaving the jump on the wave
+ * (`boost-wave`, the crest straight) puts it within ~120m of its old ground,
+ * but a 120m dead-straight deck plus its run-in and run-out is 208m of road
+ * laid through the one crest the fit already struggles to push far enough
+ * north -- it makes the worst-fitting 250m of the lap worse, to move a prop
+ * scatter. Keeping the old 180m deck and 60m gap does not fit 188m of drawn
+ * straight without bending the wave around it, so the deck is 120m with a 46m
+ * gap: still a fall across a trench, three quarters the length.
  *
- * Getting genuine left-handers back in without breaking closure took two
- * attempts, and the difference between them is worth recording precisely,
- * because the failure mode is easy to misdiagnose as "mixing directions is
- * unsafe" when the real cause is narrower than that.
+ * WHAT THAT COSTS THE THEME, SAID PLAINLY: `themes/abyssal.ts` scatters its
+ * `wreck` prop field on the `trench-jump` tag with a 260m span, so the wrecks
+ * follow the tag and nothing needs changing -- but the wreck field now lies on
+ * the upper-right descent instead of along the top of the map. Nothing else in
+ * the theme keys off it, and the jump still reads as "the trench crossing",
+ * because the descent is where the trench is now.
  *
- * ATTEMPT ONE, WHICH FAILED: pick four corners, inflate their right-hand
- * angles to make room, and drop a left into each (four rights at 54/48/48/46
- * degrees instead of the monotonic draft's 22/16/20/12, four lefts at
- * 20-24). Angles still summed to +360. It still failed closure, at every
- * site scale tried, with one particular straight going from 32m to -28m as
- * the uniform straight-length guess grew from 80 to 160 -- worse with a
- * BIGGER site, the opposite of what scaling is supposed to do. Diagnosed by
- * hand: the four inflated rights bunched SEVEN of the lap's sixteen straight
- * headings into one 80-degree arc of the compass (182 to 262 degrees)
- * instead of spreading them the way the monotonic draft's smaller, more
- * numerous turns had. With most of the lap's straight-line length aimed the
- * same general way, even the UNCORRECTED shape (before `circuit()`'s own
- * closure math touches it) missed closing by hundreds of metres, so the
- * minimum-norm correction it computed was itself enormous -- and that
- * correction scales with the site's overall size, landing hardest on
- * whichever single straight's own heading happened to be most nearly
- * opposite to it. Growing the site made the correction grow to match,
- * which is why the failing straight got WORSE, not better, as the uniform
- * length guess increased. Mixing left and right was never the problem;
- * clustering the straight headings by using a few large compensating turns
- * was.
+ * TWO BOOST STRIPS, AND THEY EARN THEIR PLACE ON A NUMBER RATHER THAN A FEELING.
+ * `boost-wave` sits mid-wave between the swell and the second shelf; `boost-s`
+ * sits on the climb out of BLOOM-D into the S. Both new sections are ~950m of
+ * continuous cornering in which NO straight exceeds 44m, so without them there
+ * is nowhere in either that a following car can use a tow, and a 4km lap with
+ * no overtaking spot is a parade.
  *
- * ATTEMPT TWO, WHICH WORKED: leave the monotonic draft's PROVEN checkpoint
- * headings -- the cumulative heading right after each of its twelve corners
- * -- completely alone, and get every new left by splitting a single flexible
- * corner into a small right/left/right (or right/left) group whose net
- * degree total EXACTLY matches the corner it replaces. FAST-1's old +22
- * becomes an esses of +24/-20/+18 (net +22, unchanged). SWEEPER-1's old +16
- * becomes a counter-curve of +36/-20 (net +16, unchanged). Same trick at the
- * old FAST-3 and SWEEPER-3. Because every checkpoint heading downstream of
- * every split is bit-for-bit what it was in a sequence already proven to
- * close at gap 0.000m with zero correction, the correction this design needs
- * is ALSO essentially zero, independent of which way the new sub-corners
- * turn -- confirmed empirically (gap 0.0000m, scale 1.000, across a sweep of
- * site sizes) before a single line of this went near the real file.
+ * MEASURED, by deleting both `boost: true` flags and changing nothing else:
+ * mean lap goes 92.74s -> 93.68s and respawns go 0.0/race -> 1.0/race. The
+ * second number is the one that matters and it was not the reason they were
+ * added: a pad is `T.boost.padMag` 0.35 for 2.60s, and eight cars arriving at
+ * the wave's second shelf and the S's first left-hander with that much more
+ * separation stop wedging each other into the outside wall. 1.0 respawns a race
+ * would also be outside the 0.7 this circuit is held to, so the strips are
+ * load-bearing, not decoration.
  *
- * That trick is free with respect to CLOSURE, but not with respect to
- * LENGTH: reversing direction by L degrees and then un-reversing it costs
- * 2*L degrees of extra steering somewhere, converted to metres of extra arc
- * at whatever radius it happens at, plus a short connecting straight (held
- * at the 40m floor plus a working margin) for every new reversal. Four
- * 20-degree reversals bolted straight onto the monotonic file's original
- * straight lengths measured out at +705m of plan length -- 24% over the
- * 2976.6m the monotonic draft closed at, which was not going to hold inside
- * the 55-75s lap-time band this circuit is tuned for. Paid for instead by
- * trimming every straight that is NOT a hairpin's braking zone by roughly a
- * fifth (the 170m and 195m braking straights ahead of HAIRPIN-1 and
- * HAIRPIN-2 are the one exception -- the brief's 150m floor for a braking
- * zone was never up for negotiation), which lands the whole lap back within
- * about 6% of the monotonic draft's own length rather than a quarter over
- * it. See the measured numbers at `CIRCUIT` below.
+ * ===========================================================================
+ * 4. ON DIRECTION, AND ON THE BANK SIGN.
+ * ===========================================================================
  *
- * The result: FOUR genuine left-handers, all -20 degrees (the low end of
- * "rarely breaks closure," chosen deliberately for a uniform, easy-to-verify
- * budget rather than four different numbers) -- one esses complex
- * (right/left/right, all in the medium band, the corners a driver actually
- * drifts) plus three standalone counter-curves, each a right immediately
- * followed by a left at a slightly smaller radius. Every one of the six
- * "keep as authored" pieces from the original pass -- both hairpins with
- * their braking zones, all three biofilm corners, the spiral, the jump, the
- * breach -- is untouched by any of this; only the four flexible corners
- * between them were ever in play.
+ * The lap is net +360 (right-hand), same as the shipped one, but it is nothing
+ * like monotonic: eleven of the thirty corners turn LEFT, holding 383 of the
+ * lap's 1126 degrees of steering, and they are not
+ * decoration -- the wave is literally a right/left alternation (crest, shelf,
+ * swell, shelf) and the top of the S is 208 degrees of continuous left-hander.
+ * The previous pass had to manufacture four left-handers by splitting corners
+ * net-neutrally, because its shape did not want any; this shape wants them, and
+ * that is the difference between a lap that turns both ways and a lap that has
+ * been made to.
  *
- * 5. THE BANK SIGN, WHICH THE FIELD TYPE'S OWN COMMENT GETS BACKWARDS.
- *
- * TrackNode.bank's doc comment says "positive banks the left edge up." Built
+ * `TrackNode.bank`'s doc comment says "positive banks the left edge up". Built
  * and measured directly (a right-hand corner, bank +15, reading back
  * `sample.right` against the corner's own centre): positive bank raises the
  * OUTSIDE edge of a RIGHT-hand corner, i.e. the doc comment has the sign
- * backwards, the same bug rustfall.ts found and fixed by hand for its own
- * corners. The rule that is actually true of the code: bank the SAME SIGN as
- * the corner's `deg` banks INTO the turn (outside edge up, the physically
- * correct direction); the opposite sign is adverse camber. Every right-hand
- * corner below is banked positive and every left-hand one negative, for
- * exactly that reason -- 2 to 11 degrees depending on how much the corner
- * needs the extra grip to hold, on both sides of zero.
+ * backwards -- the same bug `rustfall.ts` found. The rule that is actually true
+ * of the code: bank of the SAME SIGN as the corner's `deg` banks INTO the turn.
+ * Every right-hander below is banked positive and every left-hander negative,
+ * for exactly that reason.
  *
- * 6. WHAT THE PLAYER IS LOOKING AT.
+ * ===========================================================================
+ * 5. THE TAG CONTRACT WAS BROKEN BEFORE THIS PASS. IT IS FIXED BELOW.
+ * ===========================================================================
  *
- * Unchanged from the shipped art pass: everything outside the glass, light
- * shafts from a surface 900m up, schools turning in unison, and the
- * leviathans holding station in the middle distance (themes/abyssal.ts draws
- * them through the celestial `ships` layer -- silhouettes with running
- * lights, exactly what a bioluminescent animal at range IS). The tube is the
- * only lit thing; the ocean is the dark. This file only reshapes the road; it
- * does not touch the theme.
+ * `circuit()` records where a tagged SEGMENT starts -- `built.marks`, a plan
+ * distance -- and never writes `TrackNode.tag`. `environment.ts`'s `tagSample`
+ * reads `track.def.nodes.find(n => n.tag === tag)`. Those are two different
+ * things, and the shipped file only ever did the first: measured on the
+ * shipped build, `TRACKS_BY_ID['abyssal'].nodes.filter(n => n.tag)` returns
+ * ZERO nodes. So `tagSample('bloom')` returned -1, the amber bloom beacons
+ * never drew, and both prop clusters (`coral-bank` on `bloom`, `wreck` on
+ * `trench-jump`) silently fell back to an even scatter. Nothing errored and
+ * nothing looked obviously wrong, which is why it survived a pass.
+ *
+ * `emberfall.ts` bridges the gap by walking the emitted nodes and taking the
+ * one whose cumulative distance is nearest the mark. That method is not good
+ * enough HERE, for a reason the spiral creates and which is spelled out at
+ * `nodeCount` below; this file counts NODES instead, exactly. Every tag
+ * `themes/abyssal.ts` reads is placed on a real node at the bottom of this
+ * file, and there is an assertion that throws if it is not.
+ *
+ * 6. WHAT THE PLAYER IS LOOKING AT -- unchanged from the shipped art pass:
+ * everything outside the glass, light shafts from a surface 900m up, schools
+ * turning in unison, and the leviathans holding station in the middle distance.
+ * The tube is the only lit thing; the ocean is the dark. This file reshapes the
+ * road and repairs the tag contract; it does not touch the theme.
  */
 
 /**
- * THE LAP, CORNER BY CORNER.
+ * THE LAP, CORNER BY CORNER. `[kept]` marks a corner carried over from the
+ * shipped circuit at its own radius and degrees, because the sketch preserves
+ * that stretch of the map. Corner speed is sqrt(1.07 * 34 * R) against a roster
+ * top speed of 59-64 m/s.
  *
- *   corner            dir   r      deg   band      v(corner)   note
- *   BLOOM-A           R     64m    22    medium    48.2 m/s    first biofilm
- *   BLOOM-A (oil)     R     64m    22    medium    48.2 m/s
- *   ESSES-IN          R     72m    24    medium    51.2 m/s    esses piece 1
- *   ESSES             L     68m    20    medium    49.7 m/s    esses piece 2
- *   ESSES-OUT         R     72m    18    medium    51.2 m/s    esses piece 3
- *   COUNTER-1 IN      R     100m   36    fast      60.3 m/s    replaces SWEEPER-1
- *   COUNTER-1         L     90m    20    fast      57.2 m/s
- *   [ trench jump: 180m deck, 29 m/s launch, 60m gap ]
- *   HAIRPIN-1         R     52m    58    hairpin   43.5 m/s    heaviest brake
- *   BLOOM-B           R     66m    21    medium    49.0 m/s    second biofilm
- *   BLOOM-B (oil)     R     66m    21    medium    49.0 m/s
- *   FAST-2            R     95m    20    fast      58.8 m/s    run to the spiral
- *   [ the spiral: r=30, 3 turns, 400m axis, a geodesic -- see part 2 ]
- *   BREACH            R    160m    14    sweeper   76.3 (flat) crosswind, bounce walls
- *   COUNTER-2 IN      R     85m    40    fast      55.6 m/s    replaces FAST-3
- *   COUNTER-2         L     72m    20    medium    51.2 m/s
- *   BLOOM-C           R     62m    20    medium    47.5 m/s    third biofilm
- *   BLOOM-C (oil)     R     62m    20    medium    47.5 m/s
- *   FAST-4            R     85m    18    fast      55.6 m/s
- *   COUNTER-3 IN      R    110m    32    sweeper   63.3 m/s    replaces SWEEPER-3
- *   COUNTER-3         L     98m    20    fast      59.7 m/s
- *   HAIRPIN-2         R     50m    54    hairpin   42.7 m/s    last brake before home
+ *   corner           dir   r     deg   band      v(corner)  note
+ *   BLOOM-A          R     64    44    medium    48.3  [kept] first biofilm
+ *   TURN-IN          R     72    24    medium    51.2  [kept] onto the crest
+ *   CREST            R     82    51    fast      54.6   the top-right crest
+ *   [ trench jump: 120m deck, 28 m/s launch, 46m gap, 10m fall ]
+ *   SHELF-1a         L    105   -31    fast      61.8   wave, first trough
+ *   SHELF-1b         L     66   -59    medium    49.0
+ *   SWELL-a          R    100    26    fast      60.3   wave, crest
+ *   SWELL-b          R     68    44    medium    49.7
+ *   [ boost-wave ]
+ *   SHELF-2a         L    112   -20    sweeper   63.8   wave, second trough
+ *   SHELF-2b         L     76   -36    medium    52.6
+ *   FEATHER          L    150    -9    sweeper   73.9   the kink before the hook
+ *   HOOK             R     86    37    fast      55.9   turn-in that tightens
+ *   HAIRPIN-1        R     52    58    hairpin   43.5  [kept] into it
+ *   BLOOM-B          R     66    42    medium    49.0  [kept] second biofilm
+ *   FAST-2           R     95    20    fast      58.8  [kept]
+ *   SPIRAL-FEED      R    160     9    sweeper   76.3   sets the corkscrew axis
+ *   [ the spiral: r=30, 3 turns, 400m axis -- the sketch's zigzag ]
+ *   BREACH           R    160    14    sweeper   76.3  [kept] crosswind, bounce
+ *   COUNTER-2a       R     85    40    fast      55.6  [kept]
+ *   COUNTER-2b       L     72   -20    medium    51.2  [kept]
+ *   BLOOM-C          R     62    40    medium    47.5  [kept] third biofilm
+ *   FAST-4           R     85    18    fast      55.6  [kept]
+ *   S-ENTRY-a        R     88    44    fast      56.6   the S begins
+ *   BLOOM-D          R     64    70    medium    48.3   fourth biofilm, on the
+ *                                                       double-back
+ *   [ boost-s ]
+ *   S-DRIFT          L    170    -9    sweeper   78.6
+ *   S-TOP-a          L    112   -48    sweeper   63.8   208 degrees of left
+ *   S-TOP-b          L     82   -70    fast      54.6
+ *   S-KNEE           L    130    -9    sweeper   68.8
+ *   S-TOP-c          L     90   -72    fast      57.2
+ *   S-EXIT-a         R     98    40    fast      59.7   back toward the line
+ *   S-EXIT-b         R     76    68    medium    52.6
+ *   HAIRPIN-2        R     54    54    hairpin   44.3  [kept*] last brake home
  *
- * Twelve conceptual corners (twenty authored arcs): 2 hairpin, 3 biofilm
- * (medium), 1 esses complex (3 pieces, all medium), 3 standalone
- * counter-curves (each fast-into-medium or fast-into-fast), 2 fast-only
- * breathers (FAST-2, FAST-4), 1 spiral, 1 breach. FOUR left-handers --
- * ESSES, COUNTER-1, COUNTER-2, COUNTER-3 -- every one of them -20 degrees,
- * arranged as one esses complex plus three standalone counter-curves.
+ * THIRTY corners (thirty-four authored arcs -- the four blooms are two arcs
+ * each and nothing else is split), against the shipped circuit's seventeen:
  *
- * Sixteen right-hand pieces sum to +440 (22+22 bloom-a, 24+18 esses in/out,
- * 36 counter-1 in, 58 hairpin-1, 21+21 bloom-b, 20 fast-2, 14 breach, 40
- * counter-2 in, 20+20 bloom-c, 18 fast-4, 32 counter-3 in, 54 hairpin-2);
- * four left-hand pieces sum to -80 (20 each at esses, counter-1, counter-2,
- * counter-3). Net +360 -- the builder throws unless this is exactly
- * +/-360, and `circuit()` verifies it at build time below.
+ *   hairpin  45-58m    2   (52, 54)
+ *   medium   58-80m   10   (62, 64, 64, 66, 66, 68, 72, 72, 76, 76)
+ *   fast     80-110m  11   (82, 82, 85, 85, 86, 88, 90, 95, 98, 100, 105)
+ *   sweeper 110-220m   7   (112, 112, 130, 150, 160, 160, 170)
+ *
+ * [kept*] HAIRPIN-2 IS THE ONE PRESERVED CORNER THIS PASS MOVED, from r=50 to
+ * r=54, and it is a gate fix rather than a redesign. `Track` bakes a uniform
+ * Catmull-Rom, so a corner reads tighter than it is authored when its arc buys
+ * few nodes: at r=50 and 54 degrees the arc is 47.1m, which is three nodes at
+ * this file's 18m spacing, and the baked centreline reads 44.3m -- under the
+ * 45m floor this circuit is held to, and the same 44m the SHIPPED file has
+ * always measured for the same corner. r=54 is 50.9m of arc, still three nodes,
+ * and reads 48.1m. The 8% of radius bought 9% of read radius for nothing else:
+ * the corner is in the same place, turns the same 54 degrees, and the closure
+ * absorbed the extra 3.8m of arc without moving any straight by a third of a
+ * metre. (Ashkar's header records the same effect at its Summit Hairpin, where
+ * the node count flipped between r=56 and r=58 and moved the reading 21%.)
+ *
+ * Twenty-three right-hand arcs sum to +743 and eleven left-hand arcs to -383.
+ * Net +360 -- `circuit()` throws unless the sum is a whole number of turns, and
+ * this lap has no crossover, so one turn it is. Total STEERING is 1126 degrees
+ * against the shipped circuit's 500, which is the measurement behind "the
+ * revised plan wanders".
  */
 const SEGS: Seg[] = [
-  { t: 'straight', len: 188, tag: 'start', toY: 30, tunnel: true },
+  // ---- the start straight and the top-right, exactly where they were -------
+  { t: 'straight', len: 198.5, tag: 'start', toY: 34, tunnel: true },
 
-  // BLOOM-A. r=64m is the loosest of the three biofilm corners -- deliberately
-  // the most forgiving introduction to "the surface changes under you," so a
-  // first-timer meets the mechanic here rather than at the tightest of the
-  // three. Split metal/oil at a constant 64m radius and +6 deg bank, so only
-  // the surface changes across the arc -- an even 22/22 degree split, which is
-  // what keeps BOTH halves above the ~24m-arc floor a 3-step corner segment
-  // needs to avoid a sub-8m chord (see the chord-ratio note by `CIRCUIT`
-  // below).
+  // BLOOM-A. r=64m is the loosest of the four biofilm corners -- deliberately
+  // the most forgiving introduction to "the surface changes under you". Split
+  // metal/oil at a constant radius and bank, an even 22/22, which is what keeps
+  // BOTH halves above the ~24m-arc floor a corner segment needs.
   { t: 'corner', r: 64, deg: 22, bank: 6, w: 20, tunnel: true, tag: 'bloom' },
   { t: 'corner', r: 64, deg: 22, bank: 6, w: 21, surface: 'oil', tunnel: true },
 
-  { t: 'straight', len: 140, tunnel: true },
-
-  // THE ESSES. Replaces the monotonic draft's single FAST-1 (+22, r=90) with
-  // a genuine right-left-right, net degree total UNCHANGED at +22 so the
-  // checkpoint heading downstream of it is identical to the proven design
-  // (part 4, attempt two). All three pieces sit in the medium band (68-72m)
-  // -- this is the corner sequence a driver actually drifts through, flicked
-  // one way then the other rather than held in one arc.
+  { t: 'straight', len: 95, toY: 38, tunnel: true },
+  // TURN-IN. The shipped circuit's old ESSES-IN, kept at r=72/+24: the drawing
+  // preserves the lap to this point and then diverges inside the next corner.
   { t: 'corner', r: 72, deg: 24, bank: 6, tunnel: true },
-  { t: 'straight', len: 46, tunnel: true },
-  { t: 'corner', r: 68, deg: -20, bank: -6, tunnel: true, tag: 'esses' },
-  { t: 'straight', len: 46, tunnel: true },
-  { t: 'corner', r: 72, deg: 18, bank: 6, tunnel: true },
 
-  { t: 'straight', len: 112, toY: 36, tunnel: true },
+  { t: 'straight', len: 44, toY: 42, tunnel: true },
+  // THE CREST. Where the new lap leaves the old one. The shipped circuit went
+  // -20 here (into its little esses); the drawing keeps turning right, over the
+  // top-right crest and onto the descent. 51 degrees at r=82 is the fast band's
+  // tight end -- a committed corner taken at 54.6 m/s, and the highest ground
+  // on the lap at 42m.
+  { t: 'corner', r: 82, deg: 51, bank: 7, tunnel: true, tag: 'crest' },
 
-  // COUNTER-CURVE 1. Replaces the monotonic draft's SWEEPER-1 (+16, r=140)
-  // with a right/left pair, net still +16. Pulled down to the fast band
-  // (90-100m) rather than kept at 140m -- a genuine 20-degree reversal at a
-  // 140m sweeper radius costs far more arc for the same net heading change
-  // than the same reversal at 90-100m, and this corner's job was already
-  // "committed, not held flat," so the tighter radii cost less without
-  // changing what the corner asks of the driver.
-  { t: 'corner', r: 100, deg: 36, bank: 3, tunnel: true },
-  { t: 'straight', len: 54, tunnel: true },
-  { t: 'corner', r: 90, deg: -20, bank: -4, tunnel: true },
+  { t: 'straight', len: 44, tunnel: true },
+  // THE TRENCH JUMP, on the descent down the right -- see part 3 for why it
+  // moved. `jump` is its own segment type: the first 18% of the deck is the
+  // ramp (`ramp: 28`, auto-boosted), then 46m of unbarriered road over the gap
+  // (`open` auto-set for that span), then the landing. toY drops the far side
+  // 10m below the crest, so it is a fall across the trench and not a hop.
+  { t: 'jump', len: 120, launch: 28, gap: 46, toY: 32, tag: 'trench-jump' },
+  { t: 'straight', len: 44, toY: 28, tunnel: true },
 
-  { t: 'straight', len: 92, tunnel: true },
-  // THE TRENCH JUMP. `jump` is its own segment type: the first 18% of its
-  // 180m deck is the ramp (`ramp: 29`, auto-boosted), then 60m of unbarriered
-  // road over the gap (`open` auto-set by the builder for that span), then a
-  // landing runway. toY=24 drops the far side 12m below the crest before it
-  // -- a real fall across the trench, not a hop. Tagged `trench-jump` for the
-  // theme's wreck cluster underneath.
-  { t: 'jump', len: 180, launch: 29, gap: 60, toY: 24, tag: 'trench-jump' },
+  // ---- THE WAVE. 904m of alternating shelf and swell, from the crest's exit
+  // to HAIRPIN-1's entry, replacing the shipped circuit's flat run along the
+  // top. Each half of the wave is authored as a PAIR -- an opening arc in the
+  // fast or sweeper band and a tightening one in the medium band -- rather than
+  // as one long constant-radius bend, because a pair tracks the drawn arc
+  // within a few metres where a single tighter arc replacing a 90-degree
+  // R=116m drawn bend with an R=70m one cuts 19m inside it at the apex, and
+  // because it doubles the corner count for free.
+  { t: 'corner', r: 105, deg: -31, bank: -4, tunnel: true, tag: 'shelf' },
+  { t: 'straight', len: 44, tunnel: true },
+  { t: 'corner', r: 66, deg: -59, bank: -7, tunnel: true },
 
-  // 170m of landing runway before the first hairpin -- the braking zone the
-  // brief calls for (150m floor), untouched by the length-trimming in part 4
-  // since a hairpin's braking zone was never a candidate for that.
-  { t: 'straight', len: 170, tunnel: true },
-  // HAIRPIN-1. 52m -- 43.5 m/s, the heaviest brake on the lap. WIDER than the
-  // rest of the circuit (25m half-width against a 19m default) for exactly
-  // the reason the brief calls out: a tight radius arriving off a long fast
-  // run needs room for a car that turns in a little hot to still find the
-  // apex rather than the wall. Bank +11, the most aggressive on the lap --
-  // this is the corner that most needs the extra grip, not the one that
-  // least needs it (see part 5).
+  { t: 'straight', len: 44, toY: 26, tunnel: true },
+  { t: 'corner', r: 100, deg: 26, bank: 4, tunnel: true, tag: 'swell' },
+  { t: 'straight', len: 44, tunnel: true },
+  { t: 'corner', r: 68, deg: 44, bank: 7, tunnel: true },
+
+  // BOOST-WAVE. Mid-wave, on the only piece of the section that points
+  // anywhere for long enough to be a tow. See part 3.
+  { t: 'straight', len: 44, boost: true, toY: 30, tunnel: true, tag: 'boost-wave' },
+
+  { t: 'corner', r: 112, deg: -20, bank: -3, tunnel: true },
+  { t: 'straight', len: 44, tunnel: true },
+  { t: 'corner', r: 76, deg: -36, bank: -6, tunnel: true },
+
+  { t: 'straight', len: 44, toY: 28, tunnel: true },
+  // FEATHER. A 9-degree sweeper-band left, which is the drawing's own -8.4 in
+  // the run up to the top-left hook. It is here rather than folded into its
+  // neighbours because at r=150 its arc is 23.6m -- over twice `circuit.ts`'s
+  // kink floor -- so it is a real corner the AI reads, and because a lap that
+  // spends 900m alternating hard left and hard right needs one place where the
+  // road only breathes.
+  { t: 'corner', r: 150, deg: -9, bank: -2, tunnel: true },
+  { t: 'straight', len: 44, tunnel: true },
+
+  // THE HOOK INTO HAIRPIN-1. The drawing reads this whole corner as +114 where
+  // the shipped circuit turns +58, and the extra is geometry rather than a
+  // redraw: the wave arrives at the top-left climbing north-west, the shipped
+  // lap arrived running due west, and both leave heading south down the left
+  // flank. So a fast-band turn-in was added AHEAD of the shipped hairpin rather
+  // than the hairpin being opened up. It is a double-apex that tightens, which
+  // is a harder corner than either half and the right thing at the end of 900m
+  // of wandering.
+  //
+  // WHAT IT COSTS: HAIRPIN-1 NO LONGER HAS ITS 170m BRAKING ZONE. The shipped
+  // circuit fed it off the jump's landing runway; the drawing puts a corner
+  // there instead. The hook is the braking zone now -- 57m of arc at 55.9 m/s
+  // falling to the hairpin's 43.5 -- which is a corner-entry brake rather than
+  // a straight-line one. Flagged rather than fixed: fixing it means opening the
+  // top-left hook out until it stops being the shape Vince drew.
+  { t: 'corner', r: 86, deg: 37, bank: 6, tunnel: true, tag: 'hook' },
+  // HAIRPIN-1 [kept]. 52m -- 43.5 m/s. WIDER than the rest of the circuit
+  // (25m against a 19m default) for the reason the brief calls out: a tight
+  // radius arriving off a fast run needs room for a car that turns in a little
+  // hot to still find the apex rather than the wall. Bank +11, the most
+  // aggressive on the lap.
   { t: 'corner', r: 52, deg: 58, bank: 11, w: 25, tunnel: true, tag: 'hairpin-1' },
 
-  { t: 'straight', len: 104, toY: 20, tunnel: true },
-  // BLOOM-B. 66m -- the middle of the three biofilm radii, same construction
-  // as BLOOM-A: metal/oil at a constant radius and bank, split 21/21.
+  // ---- the left flank: preserved, and the spiral inside it -----------------
+  { t: 'straight', len: 55, toY: 24, tunnel: true },
+  // BLOOM-B [kept]. 66m, same two-piece construction as BLOOM-A, split 21/21.
   { t: 'corner', r: 66, deg: 21, bank: 6, w: 20, tunnel: true, tag: 'bloom-b' },
   { t: 'corner', r: 66, deg: 21, bank: 6, w: 21, surface: 'oil', tunnel: true },
 
-  { t: 'straight', len: 72, tunnel: true },
-  // FAST-2. 95m -- 58.8 m/s. One of two corners this pass left completely
-  // alone (with FAST-4) -- a clean single right, no reversal, a breather
-  // between the esses/counter-curve work either side of it.
+  { t: 'straight', len: 44, toY: 22, tunnel: true },
   { t: 'corner', r: 95, deg: 20, bank: 4, tunnel: true },
 
-  // THE SPIRAL. r=30 (matching the old Descent's own radius -- the one
-  // continuous set piece this circuit keeps), three FULL turns over a 400m
-  // axis, descending 4m net (toY=10, on top of the 6m the approach already
-  // gave up) into the deepest, darkest point of the lap. Still 10m above the
-  // 6m floor at the axis -- the coil's own vertical bob adds height on top of
-  // that, never subtracts it (see part 2), so nothing here ever reads below
-  // the axis value. `turns: 3` is a whole number, which is what keeps the
-  // entry and exit seams flush with the flat road on either side.
-  { t: 'straight', len: 68, toY: 14, tunnel: true },
+  { t: 'straight', len: 44, toY: 18, tunnel: true },
+  // SPIRAL-FEED. A sweeper-band right that aims the corkscrew's axis. The
+  // shipped circuit reached the spiral off a plain straight; the drawing has
+  // ~10 degrees of turn in the approach, and putting it in a 160m corner rather
+  // than bending the straight keeps the axis dead straight where it matters.
+  { t: 'corner', r: 160, deg: 9, bank: 2, tunnel: true },
+  { t: 'straight', len: 44, toY: 14, tunnel: true },
+  // THE SPIRAL [kept]. r=30, three FULL turns over a 400m axis, descending into
+  // the deepest, darkest point of the lap at 10m. `turns: 3` is a whole number,
+  // which is what keeps the entry and exit seams flush with the flat road on
+  // either side -- at f=0 and f=1 the coil's `up` is exactly world +Y. This is
+  // the sketch's zigzag; see part 0.
   { t: 'cyclone', r: 30, turns: 3, len: 400, toY: 10, tunnel: true, tag: 'spiral' },
 
-  // THE BREACH. The tube is open here -- no `tunnel` on this straight or the
-  // corner that follows it, which is the visual the art pass wants at exactly
-  // the spot the sim also stops pretending the tube is sealed.
-  { t: 'straight', len: 68 },
-  // 160m sweeper, taken flat out (76.3 m/s ceiling). ONE piece, not three: at
-  // only 14 degrees of total sweep there is no way to split this corner into
-  // several sub-arcs without at least one of them falling under the ~24m-arc
-  // floor noted at BLOOM-A above. Peak wind is still 15 m/s^2 of lateral
-  // push -- it is simply the WHOLE corner now rather than a ramped middle
-  // third; the fade in and out happens at the one node gap on either side,
-  // same as every other surface change on this lap. BOUNCE walls throughout,
-  // never `open` -- see part 3 and Ashkar's 16.3 respawns/race the other way
-  // round. +1.5m of width over the default, matching the extra room
-  // Elkarim's own crosswind corridor gives a car that is being pushed.
+  // THE BREACH [kept]. The tube is open here -- no `tunnel` on this straight or
+  // the corner after it, which is the visual the art pass wants at exactly the
+  // spot the sim also stops pretending the tube is sealed. 160m sweeper taken
+  // flat out, 15 m/s^2 of lateral push, BOUNCE walls throughout and never
+  // `open`. +1.5m of width over the default for a car that is being shoved.
+  { t: 'straight', len: 44 },
   { t: 'corner', r: 160, deg: 14, bank: 2, w: 20.5, wind: 15, bounce: true, tag: 'breach' },
 
-  { t: 'straight', len: 76, toY: 16, tunnel: true },
-
-  // COUNTER-CURVE 2. Replaces the monotonic draft's FAST-3 (+20, r=100) with
-  // a right/left pair, net still +20, right after the breach lets go -- the
-  // second standalone counter-curve, the right piece still fast (85m), the
-  // left piece down in the medium band (72m) rather than fast, giving this
-  // one a slightly sharper bite on the way out than COUNTER-1's.
+  { t: 'straight', len: 92.7, toY: 14, tunnel: true },
+  // COUNTER-2 [kept]. A right/left pair, net +20, right after the breach lets
+  // go -- fast into medium, so it bites a little harder on the way out.
   { t: 'corner', r: 85, deg: 40, bank: 4, tunnel: true },
-  { t: 'straight', len: 50, tunnel: true },
+  { t: 'straight', len: 44, tunnel: true },
   { t: 'corner', r: 72, deg: -20, bank: -6, tunnel: true },
 
-  { t: 'straight', len: 104, toY: 20, tunnel: true },
-  // BLOOM-C. 62m -- the tightest of the three biofilm radii, and deliberately
-  // last: by this point in the lap a driver has met the mechanic twice
-  // already, so the tightest dose comes when they know what it is. Split
-  // 20/20 -- the tightest even split of the three blooms, right at the arc
-  // floor rather than comfortably above it, which is why it is spent last.
+  { t: 'straight', len: 80, toY: 18, tunnel: true },
+  // BLOOM-C [kept]. 62m -- the tightest of the four biofilm radii, and third of
+  // four: by this point a driver has met the mechanic twice, so the tightest
+  // dose comes when they know what it is. Split 20/20, right at the arc floor.
   { t: 'corner', r: 62, deg: 20, bank: 6, w: 20, tunnel: true, tag: 'bloom-c' },
   { t: 'corner', r: 62, deg: 20, bank: 6, w: 21, surface: 'oil', tunnel: true },
 
-  { t: 'straight', len: 120, toY: 24, tunnel: true },
-  // FAST-4. 85m -- 55.6 m/s. The second of the two corners left completely
-  // alone (with FAST-2) -- another clean breather, no reversal.
+  { t: 'straight', len: 55, toY: 22, tunnel: true },
   { t: 'corner', r: 85, deg: 18, bank: 4, tunnel: true },
 
-  { t: 'straight', len: 132, toY: 28, tunnel: true },
+  // ---- THE S. 953m of road through the bottom middle, against the 370m the
+  // shipped lap spent sweeping round the same ground. The single biggest thing
+  // the sketch adds, and about 60% of the lap's growth.
+  { t: 'straight', len: 44, tunnel: true },
+  // S-ENTRY-a. Fast band, the first half of the 114-degree turn that stops the
+  // lap running east along the bottom.
+  { t: 'corner', r: 88, deg: 44, bank: 5, tunnel: true, tag: 's-entry' },
+  { t: 'straight', len: 44, tunnel: true },
+  // BLOOM-D, the second half of the same turn and the brief's hazard at the
+  // double-back. r=64 matches BLOOM-A exactly; split 35/35 metal then oil,
+  // which at this radius is 39.1m of arc each -- the most comfortable margin
+  // over the floor of any bloom on the lap, and 70 degrees of biofilm corner
+  // against BLOOM-A's 44. See part 1 for why the hazard is here and not at the
+  // S's apex.
+  { t: 'corner', r: 64, deg: 35, bank: 7, w: 20, tunnel: true, tag: 'bloom-d' },
+  { t: 'corner', r: 64, deg: 35, bank: 7, w: 21, surface: 'oil', tunnel: true },
 
-  // COUNTER-CURVE 3. Replaces the monotonic draft's SWEEPER-3 (+12, r=180)
-  // with a right/left pair, net still +12 -- the third standalone
-  // counter-curve, right before the final hairpin's braking zone. The right
-  // piece is held at 110m, the bottom edge of the sweeper band, so this lap
-  // keeps at least one flexible-section sweeper alongside the breach rather
-  // than pushing every fast-radius corner down into the fast band.
-  { t: 'corner', r: 110, deg: 32, bank: 2, tunnel: true },
-  { t: 'straight', len: 46, tunnel: true },
-  { t: 'corner', r: 98, deg: -20, bank: -4, tunnel: true },
+  // BOOST-S. On the climb out of BLOOM-D, which is the one moment in the S
+  // where the road points somewhere for longer than a corner. See part 3.
+  { t: 'straight', len: 44, boost: true, toY: 28, tunnel: true, tag: 'boost-s' },
 
-  // 195m authored -- comfortably past the 150m brief for a hairpin's braking
-  // zone, and, like the zone before HAIRPIN-1, untouched by the
-  // length-trimming pass in part 4.
-  { t: 'straight', len: 195, tunnel: true },
-  // HAIRPIN-2. 50m -- 42.7 m/s, the tightest corner on the circuit and the
-  // last thing before the line. Widened and banked the same as HAIRPIN-1 (25m
-  // half-width class, +11 deg) for the same reason: the tightest radius on
-  // the lap gets the most margin, not the least.
-  { t: 'corner', r: 50, deg: 54, bank: 11, w: 25.5, tunnel: true, tag: 'hairpin-2' },
+  // THE TOP OF THE S: 208 degrees of continuous left-hander in five arcs at
+  // five different radii (170, 112, 82, 130, 90), with 44m of road between
+  // them. Five rather than one because a single 208-degree arc is a hairpin
+  // the drawing does not draw: measured off the traced right panel the loop is
+  // 305m across, which is a ~150m effective radius, and the only way to be
+  // that wide AND still have corners a driver can drift is to build the arc
+  // out of sweepers and fast corners in alternation.
+  { t: 'corner', r: 170, deg: -9, bank: -2, tunnel: true },
+  { t: 'straight', len: 44, toY: 32, tunnel: true },
+  { t: 'corner', r: 112, deg: -48, bank: -5, tunnel: true, tag: 's-top' },
+  { t: 'straight', len: 44, tunnel: true },
+  { t: 'corner', r: 82, deg: -70, bank: -7, tunnel: true },
+  { t: 'straight', len: 44, toY: 34, tunnel: true },
+  { t: 'corner', r: 130, deg: -9, bank: -3, tunnel: true },
+  { t: 'straight', len: 44, tunnel: true },
+  // S-TOP-c. 72 degrees at r=90 -- 113m of arc, the longest single corner on
+  // the circuit, and the point where the road is running back the way it came.
+  // The S is the only place on the lap where two distant stretches face each
+  // other at all, and they do it with room to spare: see the self-clearance
+  // line in the measured note at the bottom.
+  { t: 'corner', r: 90, deg: -72, bank: -6, tunnel: true },
+
+  { t: 'straight', len: 44, toY: 30, tunnel: true },
+  // S-EXIT. The unwind back toward the start line, fast into medium.
+  { t: 'corner', r: 98, deg: 40, bank: 5, tunnel: true, tag: 's-exit' },
+  { t: 'straight', len: 44, tunnel: true },
+  { t: 'corner', r: 76, deg: 68, bank: 7, tunnel: true },
+
+  // 101m of braking zone into the last corner. The shipped circuit gave
+  // HAIRPIN-2 206m; the drawing puts S-EXIT-b's exit about a hundred metres
+  // from the corner and that is the number the shape allows. 101m from 52.6
+  // m/s to 44.3 is a comfortable brake -- unlike HAIRPIN-1's hook above, this
+  // one is not a compromise, because S-EXIT-b has already taken the speed out.
+  { t: 'straight', len: 101.4, toY: 30, tunnel: true },
+  // HAIRPIN-2. 54m -- 44.3 m/s, the last thing before the line. Carried over
+  // from the shipped circuit at 50m and opened to 54 so it BAKES at 48.1m
+  // rather than 44.3m; see [kept*] in the corner table for the node-count
+  // reason. Widened and banked like HAIRPIN-1: the tightest radius gets the
+  // most margin, not the least.
+  { t: 'corner', r: 54, deg: 54, bank: 11, w: 25.5, tunnel: true, tag: 'hairpin-2' },
 ]
 
 /**
- * Closing this lap needs no site scaling at all (`scale` comes back 1.00),
- * exactly as it did for the monotonic draft in part 4 -- gap 0.0000m. This is
- * NOT a coincidence: every corner this pass touched was split net-neutral
- * against a corner sequence already proven to close for free, so the
- * left-handers cost this file nothing in closure math, only in length (see
- * part 4's attempt two).
+ * Closing this lap needs no site scaling (`scale` comes back 1.000) and
+ * `circuit()`'s own minimum-norm correction moves no straight by more than a
+ * tenth of a metre, because the straight lengths above are the SOLVED ones --
+ * see "HOW THE SEGMENT LIST WAS SOLVED" in the header. Change one number and
+ * the builder will quietly reshape the other thirty to compensate.
  *
- * SPACING IS 18m, NOT THE 24m THE API EXAMPLE SUGGESTS, AND THAT IS A
- * MEASURED CHOICE CARRIED OVER FROM THE MONOTONIC DRAFT, NOT AN AESTHETIC
- * ONE. The chord-ratio gate reads the straight-line distance between every
- * pair of CONSECUTIVE AUTHORED NODES, and a `corner` segment's node count is
- * `max(3, round(arc/spacing))` -- a floor of three steps that this lap's
- * shortest corner arcs (the biofilm and breach sub-pieces, and now the
- * esses/counter-curve pieces too, 18-40 degrees of sweep at 62-110m) all
- * land on regardless of spacing. Spacing 18 keeps the long end of the ratio
- * (from the shortest straights) down near 22m against a 7m short end --
- * ratio 3.10, comfortably under the 3.5 gate, essentially unchanged from the
- * monotonic draft's own 3.09.
+ * SPACING IS 18m, NOT THE 24m THE API EXAMPLE SUGGESTS, and it is a measured
+ * choice carried over from the shipped file. The chord-ratio gate reads the
+ * straight-line distance between consecutive AUTHORED nodes; a `corner`
+ * segment's node count is `max(1, ceil(deg/30), round(arc/spacing))`. At
+ * spacing 18 every authored segment on this lap emits chords between 15.1m and
+ * 26.7m -- a ratio of 1.77 before the spiral and the jump add their own, and
+ * 2.07 (12.9-26.7m) once they do -- so there is real headroom under the gate.
  */
 const CIRCUIT = circuit(SEGS, {
   spacing: 18,
-  start: [0, 28, 0],
+  start: [0, 30, 0],
   heading: 0,
   defaults: { w: 19, surface: 'metal' },
   minStraight: 40,
 })
 
+const nodes: TrackNode[] = CIRCUIT.nodes
+
 /**
- * MEASURED, via `tools/probe-newtrack.ts --track=abyssal` and
- * `tools/probe-selfclear.ts --track=abyssal` against this exact file:
+ * WHERE EACH TAG GOES, AND WHY IT IS COUNTED IN NODES RATHER THAN METRES.
  *
- *   plan length 3151.1m (+5.9% over the monotonic draft's 2976.6m -- the
- *     structural cost of four genuine reversals, paid for by trimming every
- *     non-braking-zone straight roughly a fifth, see part 4); baked 3328m
- *   gap 0.000m, scale 1.000 -- no site inflation needed
- *   chord 7.2-22.2m, ratio 3.10                       (gate: < 3.5)
- *   35% of the lap reads as curved (|k| > 0.0045)      (gate: >= 12%)
- *   curved-sample radius bands: hairpin 12.2%, medium 22.6%, fast 23.3%,
- *     sweeper 38.8% -- plus 2.2% under 45m (the spiral's own curvature, see
- *     part 2, not a fourteenth authored corner) and 0.9% over 220m (corner-
- *     boundary blend samples). Medium+fast -- the 58-110m band the brief
- *     calls the heart of a lap -- is 45.9% here against the monotonic
- *     draft's 38.3%, richer for the four counter-curves mostly landing there.
+ * `circuit()` records only a plan DISTANCE per tagged segment
+ * (`built.marks`); `environment.ts`'s `tagSample` looks for a NODE carrying the
+ * tag. See part 5 of the header for the bug that gap caused on the shipped
+ * file. `emberfall.ts` bridges it by walking the nodes and taking the one whose
+ * cumulative 3-D distance is nearest the mark.
+ *
+ * THAT METHOD IS WRONG ON THIS CIRCUIT, and the spiral is why. `walk()` adds
+ * `len` to `dist` for a cyclone -- 400m -- but the road it emits is a helix. A
+ * constant-radius one would run `len * sqrt(1 + (2*pi*r*turns/len)^2)` = 693m;
+ * this one ramps its radius to zero over the outer 35% at each mouth, and the
+ * emitted nodes measure 571m. Either way, plan distance and node distance run
+ * at 1:1 for 3456m of this lap and at 1:1.43 for 400m of it, and no single
+ * scale factor maps between them. Measured on the first build that tried it:
+ * the `breach` tag landed 86m before the breach and every tag after it was
+ * early by more.
+ *
+ * So the mapping is done in NODES, exactly. `walk()`'s step count per segment
+ * is deterministic and stated below; summing it gives each tagged segment's
+ * first node index with no distance arithmetic anywhere. The assertion that the
+ * total matches `CIRCUIT.nodes.length` is what keeps this honest if
+ * `circuit.ts` ever changes the rule.
+ */
+function nodeCount(seg: Seg, straightLen: number): number {
+  const SPACING = 18
+  if (seg.t === 'straight') return Math.max(1, Math.round(straightLen / SPACING))
+  if (seg.t === 'jump') return Math.max(1, Math.round(seg.len / SPACING))
+  if (seg.t === 'cyclone') return Math.max(1, Math.round(seg.len / 13))
+  if (seg.t === 'loop') return Math.max(14, Math.round((2 * Math.PI * seg.r) / 18)) + 1
+  const arc = Math.abs(seg.deg) * (Math.PI / 180) * seg.r
+  return Math.max(1, Math.ceil(Math.abs(seg.deg) / 30), Math.round(arc / SPACING))
+}
+const tagNode: Record<string, number> = {}
+{
+  let idx = 0, si = 0
+  for (const seg of SEGS) {
+    if (seg.tag) tagNode[seg.tag] = idx
+    idx += nodeCount(seg, seg.t === 'straight' ? CIRCUIT.straights[si++] : 0)
+  }
+  if (idx !== nodes.length) {
+    throw new Error(
+      `Meridian Deep: the node-count replica says ${idx} nodes and circuit() emitted ` +
+      `${nodes.length}. walk()'s step rule changed -- fix nodeCount() above before trusting any tag.`,
+    )
+  }
+}
+for (const tag of Object.keys(tagNode)) nodes[tagNode[tag]].tag = tag
+nodes[0].tag = 'start'
+
+/**
+ * THE TAGS `themes/abyssal.ts` ACTUALLY READS, asserted rather than assumed.
+ * `bloom` drives the amber beacon run in `landmarks()` AND the `coral-bank`
+ * prop cluster; `trench-jump` drives the `wreck` cluster. The theme's other
+ * pair, `cathedral` / `cathedral-apex`, is deliberately absent -- this circuit
+ * has no loop (part 2) and the theme skips the dome rig cleanly without them.
+ */
+for (const required of ['bloom', 'trench-jump']) {
+  if (!nodes.some((n) => n.tag === required)) {
+    throw new Error(`Meridian Deep: themes/abyssal.ts reads the '${required}' tag and no node carries it`)
+  }
+}
+
+/**
+ * Cumulative 3-D distance along the emitted nodes, used to turn a tag into the
+ * LAP FRACTION `race.ts` wants: `itemBoxRows[].at` and `chargeRuns[].from/to`
+ * are multiplied by `track.length`, the BAKED length, so a plan fraction
+ * (`marks[tag] / CIRCUIT.length`, which is what the other circuit-built tracks
+ * use) puts every pickup after the spiral about 4% of a lap early. The node
+ * polyline measures 4026.2m against the baked spline's 4033.8m -- 0.19% short,
+ * which is well inside a pickup row's own spread.
+ */
+const cum: number[] = [0]
+for (let i = 1; i < nodes.length; i++) {
+  const a = nodes[i - 1].p, b = nodes[i].p
+  cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+}
+const LAP = cum[cum.length - 1] + Math.hypot(
+  nodes[0].p[0] - nodes[nodes.length - 1].p[0],
+  nodes[0].p[1] - nodes[nodes.length - 1].p[1],
+  nodes[0].p[2] - nodes[nodes.length - 1].p[2],
+)
+
+/** Lap fraction where a tagged segment starts, measured along the road. */
+const frac = (tag: string) => cum[tagNode[tag]] / LAP
+
+/**
+ * MEASURED against this exact file.
+ *
+ * `tools/probe-newtrack.ts --track=abyssal`
+ *   plan length 3856.5m, BAKED 4034m, 209 nodes, 2689 samples
+ *   gap 0.0000m, scale 1.000 -- no site inflation, correction <= 0.31m
+ *   chord 12.9-26.7m, ratio 2.07                       (gate: < 3.5, brief < 3.0)
+ *   52% of the lap reads as curved (|k| > 0.0045)       (gate: >= 12%)
+ *   curved-sample radius bands: <45m 0.6%, hairpin 7.9%, medium 19.1%,
+ *     fast 32.3%, sweeper 39.1%, >220m 1.0%. Medium+fast -- the 58-110m band
+ *     the brief calls the heart of a lap -- is 51.4% here against the shipped
+ *     circuit's 45.9%.
+ *   tightest read radius 40m, median 94m
  *   24/24 racers finish, three fixed seeds x eight racers
- *   lap time: best 68.47s, mean 73.88s, worst 80.80s   (gate: mean in 55-75s)
- *   0.0 respawns/race, 0.0% off-track                  (gate: <= 3.0/race)
- *   closest the road ever comes to itself: infinite -- no self-overlap
+ *   lap time: best 85.28s, mean 92.74s, worst 102.82s   (gate: mean 55-105s)
+ *   0.0 respawns/race, 0.0% off-track                   (gate: <= 3.0/race)
+ *   elevation 10m to 72m
  *
- * "MERIDIAN DEEP IS RACEABLE."
+ * `tools/probe-selfclear.ts`  closest the road comes to itself: infinite -- no
+ *   pair of samples 70m+ apart along the lap is even within a road width.
+ * `tools/probe-solidclear.ts` CLEAR; no part of the lap comes within 8m (its
+ *   own reporting floor) of another part's road, and the viaduct substructure
+ *   is clear.
+ * SELF-CLEARANCE AGAINST THE 9m RULE THIS SESSION TIGHTENED TO, measured
+ *   directly on the baked centreline in 3-space: the closest two stretches
+ *   ever come is 101m when they are 150m+ apart along the lap, 147m at 250m+,
+ *   and 154m at 400m+. The 101m pair is the corkscrew's own coil passing its
+ *   own barrel, which is the set piece working. There is no flyover, no
+ *   crossover (`built.crossovers.length === 0`) and nothing anywhere on this
+ *   lap within an order of magnitude of the 9m floor.
+ *
+ * THE ONE READING UNDER 45m IS THE CORKSCREW, AND IT IS INHERITED. Sampling
+ * `curvatureAt(s, 20)` on a 0.25m grid rather than probe-newtrack's 1.5m one
+ * finds 39.8m at s=2191 and 47.9m at s=2277 -- both INSIDE the spiral, on its
+ * helix, where nothing is authored. That matches the textbook helix curvature
+ * R/(R^2 + (pitch/2pi)^2) for r=30 and a 133m pitch, and the SHIPPED circuit
+ * measures the same 32-44m there with the same spiral. Every corner this file
+ * actually authors bakes at 47.5m or wider: HAIRPIN-1 (r=52) reads 47.5,
+ * HAIRPIN-2 (r=54) reads 48.1, and the next tightest is 51.3.
  */
 export const ABYSSAL: TrackDef = {
   id: 'abyssal',
@@ -495,26 +751,37 @@ export const ABYSSAL: TrackDef = {
   // which is what makes the shafts read as shafts.
   sunDirection: [0.14, 0.96, 0.24],
   palette: { a: 0x10323f, b: 0x1d6b7a, c: 0x37b0b4, accent: 0x54f0d0 },
-  nodes: CIRCUIT.nodes,
-  // Five rows, spread across the straights between hazards rather than on top
-  // of them. Fractions re-measured against this build's own length
-  // (`CIRCUIT.marks` gives the exact beat positions: bloom 0.064, esses
-  // 0.152, trench-jump 0.294, hairpin-1 0.405, bloom-b 0.450, spiral 0.512,
-  // breach 0.657, bloom-c 0.764, hairpin-2 0.985).
+  nodes,
+  /**
+   * Rows sit ON the driven line: `stepAI` has no item-seeking term, so a row
+   * taken off the line is a row the AI never touches. Every position is derived
+   * from a TAG through `frac()` rather than written as a constant, so a later
+   * reshape moves the pickups with the road instead of leaving them behind --
+   * which is exactly what the shipped file's hand-written fractions would have
+   * done to this pass. The row at `frac('spiral') + 0.03` is deliberately
+   * INSIDE the corkscrew: `surfacePoint` carries the roll and `race.ts` lifts
+   * each box along the sample normal, so a rolled box sits 1.5m off the deck
+   * the same as a flat one (Ashkar puts rows inside both its Cinder Loops on
+   * the same reasoning).
+   */
   itemBoxRows: [
-    { at: 0.03, count: 5, spread: 4.2 },
-    { at: 0.22, count: 4, spread: 4.0 },
-    { at: 0.49, count: 5, spread: 4.2 },
-    { at: 0.71, count: 5, spread: 4.4 },
-    { at: 0.87, count: 4, spread: 4.0 },
+    { at: (frac('start') + frac('bloom')) / 2, count: 5, spread: 4.2 },
+    { at: frac('crest') + 0.01, count: 4, spread: 4.0 },
+    { at: frac('swell') + 0.01, count: 5, spread: 4.2 },
+    { at: frac('hairpin-1') + 0.02, count: 4, spread: 4.4 },
+    { at: frac('spiral') + 0.03, count: 5, spread: 4.2 },
+    { at: frac('bloom-c') - 0.01, count: 4, spread: 4.0 },
+    { at: frac('s-top') + 0.015, count: 5, spread: 4.4 },
+    { at: frac('s-exit') + 0.01, count: 4, spread: 4.0 },
   ],
   chargeRuns: [
-    { from: 0.01, to: 0.05, count: 6, lateral: -5 },
-    { from: 0.18, to: 0.22, count: 6, lateral: 4 },
-    { from: 0.33, to: 0.37, count: 6, lateral: 0 },
-    { from: 0.56, to: 0.61, count: 6, lateral: -4 },
-    { from: 0.70, to: 0.75, count: 7, lateral: 5 },
-    { from: 0.88, to: 0.92, count: 6, lateral: 0 },
+    { from: frac('start') + 0.005, to: frac('bloom') - 0.005, count: 6, lateral: -5 },
+    { from: frac('shelf') + 0.01, to: frac('swell') - 0.01, count: 6, lateral: 4 },
+    { from: frac('boost-wave') + 0.004, to: frac('hook') - 0.01, count: 6, lateral: 0 },
+    { from: frac('bloom-b') + 0.01, to: frac('spiral') - 0.005, count: 5, lateral: -4 },
+    { from: frac('breach') + 0.005, to: frac('bloom-c') - 0.01, count: 6, lateral: 5 },
+    { from: frac('s-entry') + 0.01, to: frac('s-top') - 0.01, count: 6, lateral: 0 },
+    { from: frac('s-exit') + 0.005, to: frac('hairpin-2') - 0.008, count: 5, lateral: -5 },
   ],
   laps: 3,
 }

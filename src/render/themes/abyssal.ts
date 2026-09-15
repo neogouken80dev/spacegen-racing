@@ -44,7 +44,7 @@
  */
 import * as THREE from 'three'
 import {
-  bindSurfaceSpray, merge, mulberry32, part, xf,
+  bindSurfaceSpray, loopHoop, merge, mulberry32, part, xf,
   type FrameInfo, type Palette, type PropSpec, type SurfaceSprayTable,
   type TerrainPoint, type Theme, type ThemeContext,
 } from './kit'
@@ -188,26 +188,35 @@ function landmarks(ctx: ThemeContext): void {
    * bioluminescent growth concentric with the loop, plus two cold fills inside
    * the bore. Geometry derived from the two tags -- the art layer reads
    * content, it does not import it. ---- */
-  const iDome = ctx.tagSample('cathedral')
-  const iApex = ctx.tagSample('cathedral-apex')
-  if (iDome >= 0 && iApex >= 0) {
-    const a = track.samples[iDome], b = track.samples[iApex]
-    const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
-    const cx = (a.pos.x + b.pos.x) / 2, cy = (a.pos.y + b.pos.y) / 2, cz = (a.pos.z + b.pos.z) / 2
-    const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
-    const fx = a.tangent.x / tl, fz = a.tangent.z / tl
-    const ringGeo = new THREE.TorusGeometry(loopR + ctx.corridor(a.width) + 3.2, 0.9, 5, Math.max(16, ctx.seg * 2))
+  //
+  // Meridian Deep authors no loop at the moment -- `src/content/tracks/abyssal.ts`
+  // says so in as many words and asserts that it emits no `cathedral` pair -- so
+  // `loopHoop` returns null and this beat costs nothing. It is written through
+  // the shared derivation anyway: this call site used the same
+  // `loopR + corridor(width) + K` line as the other three and cleared only
+  // because there was no loop left for it to stand in. The day one comes back,
+  // it comes back measured.
+  const RING_TUBE = 0.9
+  const hoop = loopHoop(ctx, 'cathedral', 'cathedral-apex', { tube: RING_TUBE, clear: 2.0 })
+  if (hoop) {
+    const seg = Math.max(12, Math.round(ctx.seg * 2 * (hoop.sweep / (Math.PI * 2))))
+    const ringGeo = new THREE.TorusGeometry(hoop.radius, RING_TUBE, 5, seg, hoop.sweep)
+    ringGeo.rotateZ(hoop.from)
     ctx.own(ringGeo)
     const ringMat = new THREE.MeshBasicMaterial({ color: BIOLUME, fog: true })
     ctx.own(ringMat)
     const ringMesh = new THREE.Mesh(ringGeo, ringMat)
-    ringMesh.position.set(cx, cy, cz)
-    ringMesh.rotation.y = Math.atan2(fx, fz) + Math.PI / 2
+    ringMesh.name = 'landmark-cathedral-ring'
+    ringMesh.position.set(hoop.cx, hoop.cy, hoop.cz)
+    ringMesh.rotation.y = hoop.rotY
     ctx.add(ringMesh)
     if (quality.tier !== 'low') {
       for (const k of [-1, 1]) {
-        const L = new THREE.PointLight(0x49d8d0, 1.9, loopR * 3.2, 1.8)
-        L.position.set(cx + fx * k * loopR * 0.55, cy, cz + fz * k * loopR * 0.55)
+        const L = new THREE.PointLight(0x49d8d0, 1.9, hoop.loopR * 3.2, 1.8)
+        L.position.set(
+          hoop.cx + hoop.fx * k * hoop.loopR * 0.55, hoop.cy,
+          hoop.cz + hoop.fz * k * hoop.loopR * 0.55,
+        )
         ctx.add(L)
       }
     }

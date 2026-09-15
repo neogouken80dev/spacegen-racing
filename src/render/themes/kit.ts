@@ -616,6 +616,233 @@ export function surfaceSprayAt(splineS: number, cracked: boolean): SurfaceSpray 
   return table[kind] ?? DEFAULT_SPRAY
 }
 
+/* --------------------------------------------------------------- loop hoops */
+
+/**
+ * ===========================================================================
+ * A HOOP ROUND A VERTICAL LOOP -- MEASURED OFF THE ROAD, NOT ASSUMED FROM IT.
+ * ===========================================================================
+ *
+ * Four themes want the same object. A vertical loop carries no boost strip --
+ * it must not, a geodesic set piece that also hands out speed is a gift with no
+ * bill -- so nothing lights its far side, and a headline set piece the player
+ * cannot see is not one. Every one of them answers with a ring concentric with
+ * the loop: Ashkar's molten seam, Zhen-9's advertising hoop, Halcyon Bay's
+ * pier lamps, and the bioluminescent dome Meridian Deep will get back the day
+ * it authors a loop again.
+ *
+ * All four had copied the same line:
+ *
+ *     new THREE.TorusGeometry(loopR + ctx.corridor(a.width) + K, ...)
+ *
+ * and three of the four were standing in the road. `probe-intrude.ts`:
+ *
+ *     Ashkar    10.01m inside the edge at s=2914m, 4.74m above the road
+ *     Ashkar     6.38m inside the edge at s=3370m, 0.43m above the road
+ *     Zhen-9     6.88m inside the edge at s=910m,  0.12m above the road
+ *     Halcyon    8.74m inside the edge at s=1957m, 4.72m above the road
+ *
+ * THE BUG IS THE `corridor` TERM, AND IT IS A CONFUSION OF AXES.
+ * `corridor(width)` is a LATERAL half-width -- how far sideways the road
+ * reaches. On a vertical loop "sideways" is the loop's AXIS, the direction the
+ * hoop's hole points, not its radius. The road has no width at all in the
+ * plane the hoop is drawn in, so adding 21.8 m of it to the radius inflated
+ * Cinder Loop One's hoop from the 35.3 m its road actually reaches to 59.3 m.
+ *
+ * Measured, in each hoop's own plane, over the loop's own run of samples:
+ *
+ *     loop            loopR    road's true reach    radius that was built
+ *     Cinder One       34.0           35.25                  59.3
+ *     Cinder Two       40.0           41.49                  66.3
+ *     Zhen-9 holoring  34.0           35.21                  58.1
+ *     Halcyon pier     36.0           37.74                  63.1
+ *
+ * AND THAT INFLATION IS WHAT PUT THEM IN THE ROAD. A hoop of radius R centred
+ * on a loop of radius `loopR` hangs `R - loopR` BELOW the deck the loop is
+ * entered from -- 25 m, on Cinder One -- so on its way down there its lower
+ * arc has to cross the level of the feed road, at a plan distance
+ * sqrt(R^2 - loopR^2) from the loop's centre. 48.6 m out, on Cinder One, and
+ * the feed road is a straight run into the loop, so it is still there. Every
+ * one of the four hits is on the feed road 45-60 m BEFORE the loop's own
+ * entry, not on the loop -- which is also why the fourth, Halcyon Bay, is in
+ * the list even though its "ring" is eighteen lamp spheres and not a torus.
+ * The shape of the object never mattered; the radius did.
+ *
+ * SO THE RADIUS IS MEASURED. Walk the loop's own run of road -- from the entry
+ * tag, through the apex tag, and the same distance again to the exit -- expand
+ * every sample into the box a car can occupy, and take the furthest any of it
+ * reaches from the hoop's centre IN THE HOOP'S PLANE. The hoop clears that by
+ * `tube + clear`. It now hugs the loop instead of hanging off it.
+ *
+ * AND THE HOOP IS AN ARC, BECAUSE A FULL CIRCLE CANNOT BE DRAWN HERE.
+ * Even hugging the loop the hoop's bottom is a few metres under the entry
+ * deck, and the road drives in through exactly that gap: there is no radius
+ * that both encircles the loop and misses the road it is entered from. So the
+ * blocked angles are computed rather than guessed -- for every piece of road
+ * near the hoop's plane, the arc of the hoop it would come within `tube +
+ * clear` of -- and the hoop is the largest clear window that leaves. Measured
+ * across the four, it comes out at 322-328 degrees: a hoop with its feet
+ * planted either side of the road, which is what an arch over a road looks
+ * like anyway.
+ *
+ * WHAT `clear` BUYS. The box measured here is `ctx.corridor(width)` wide,
+ * which is the placement engine's own protected half-width and already reaches
+ * 0.1*w + 1.9 m past the barrier `probe-intrude.ts` measures against, and
+ * FLIGHT_CEIL tall, which is above the probe's own 5 m band. `clear` is on top
+ * of all of that.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Ride height + max lift of the flight chassis: the top of anybody's airspace. */
+const HOOP_CEIL = 6.5
+/** Angular resolution of the blocked-arc scan. Half a degree. */
+const HOOP_BINS = 720
+/** Spacing of the protected box's rim samples, metres. See `rim` below. */
+const HOOP_STEP = 0.75
+/** Below this much clear arc there is no hoop worth drawing. */
+const HOOP_MIN_SWEEP = Math.PI * 1.1
+
+export interface LoopHoop {
+  /** Hoop centre, world. Midway between the loop's entry and its apex. */
+  cx: number; cy: number; cz: number
+  /** The loop's plan forward at the entry, unit. */
+  fx: number; fz: number
+  /** Y rotation that stands a TorusGeometry up in the loop's plane. */
+  rotY: number
+  /** Radius of the hoop's CENTRELINE. */
+  radius: number
+  /** The loop's own road radius, for scaling lights and fills. */
+  loopR: number
+  /** Start of the clear window, radians from the hoop's local +X. */
+  from: number
+  /** Length of the clear window, radians. Never more than 2*PI. */
+  sweep: number
+  /** World offset from the centre at hoop angle `a`, radians. */
+  offset(a: number): [number, number, number]
+}
+
+export function loopHoop(
+  ctx: ThemeContext, entryTag: string, apexTag: string,
+  opt: { tube: number; clear: number },
+): LoopHoop | null {
+  const S = ctx.track.samples
+  const m = S.length
+  const iEntry = ctx.tagSample(entryTag)
+  const iApex = ctx.tagSample(apexTag)
+  if (iEntry < 0 || iApex < 0) return null
+
+  const a = S[iEntry], b = S[iApex]
+  const loopR = Math.max(8, (b.pos.y - a.pos.y) / 2)
+  const cx = (a.pos.x + b.pos.x) / 2
+  const cy = (a.pos.y + b.pos.y) / 2
+  const cz = (a.pos.z + b.pos.z) / 2
+  const tl = Math.hypot(a.tangent.x, a.tangent.z) || 1
+  const fx = a.tangent.x / tl, fz = a.tangent.z / tl
+  // The hoop's own frame. +X runs BACK down the road (so angle 0 faces the
+  // oncoming car), +Y is world up, +Z is the hoop's axis. This is the frame
+  // `rotY` maps a TorusGeometry into, and the three are orthonormal.
+  const ux = -fx, uz = -fz
+  const wx = fz, wz = -fx
+  const need = opt.tube + opt.clear
+
+  /**
+   * Hand every rim point of one sample's protected box to `hit`, in the hoop's
+   * own frame: `rad` in the hoop's plane, `c` along its axis, and the two
+   * in-plane components the angle can be recovered from. The rim is enough --
+   * the hoop ends up outside the box, so whatever is nearest to it is on the
+   * box's surface.
+   *
+   * THE STEP IS IN METRES, NOT IN A FIXED NUMBER OF STEPS, and that is not a
+   * detail. A first cut walked the rim in sevenths of the half-width, which on
+   * Halcyon Bay's 24.1 m corridor is an 8 m stride: the hoop threaded between
+   * two rim points, every distance came back large, and `probe-intrude.ts`
+   * still found a lamp 8.51 m inside the edge. HOOP_STEP of 0.75 m leaves at
+   * most 0.38 m of lateral and 0.75 m of along-lap discretisation, which is
+   * what `clear` has to be bigger than.
+   */
+  const rim = (i: number, hit: (rad: number, c: number, a: number, b: number) => void): void => {
+    const s = S[i]
+    const L = ctx.corridor(s.width)
+    const nL = Math.max(2, Math.ceil((2 * L) / HOOP_STEP))
+    const nU = Math.max(1, Math.ceil(HOOP_CEIL / HOOP_STEP))
+    for (let lk = 0; lk <= nL; lk++) {
+      for (let uk = 0; uk <= nU; uk++) {
+        if (lk !== 0 && lk !== nL && uk !== 0 && uk !== nU) continue
+        const lat = (lk / nL) * 2 * L - L, up = (uk / nU) * HOOP_CEIL
+        const dx = s.pos.x + s.right.x * lat + s.normal.x * up - cx
+        const dy = s.pos.y + s.right.y * lat + s.normal.y * up - cy
+        const dz = s.pos.z + s.right.z * lat + s.normal.z * up - cz
+        // The in-plane components go out RAW: only the second pass needs the
+        // angle, and an atan2 per rim point per pass is the one thing in here
+        // big enough to notice on a phone's world build.
+        const A = dx * ux + dz * uz, B = dy, C = dx * wx + dz * wz
+        hit(Math.hypot(A, B), C, A, B)
+      }
+    }
+  }
+
+  // PASS 1 -- how far the LOOP's own road reaches in the hoop's plane. The run
+  // is entry -> apex -> as far again, which is the loop the two tags describe.
+  const half = ((iApex - iEntry) % m + m) % m
+  let reach = 0
+  for (let k = 0; k <= 2 * half; k++) {
+    rim((iEntry + k) % m, (rad) => { if (rad > reach) reach = rad })
+  }
+  if (reach <= 0) return null
+  const radius = reach + need
+
+  // PASS 2 -- which angles of that circle any part of the lap stands in. A
+  // point at (rad, th, c) is within `need` of the hoop over the angles where
+  // cos(phi - th) >= (R^2 + rad^2 + c^2 - need^2) / (2 R rad); outside the band
+  // |c| < need nothing can reach it at any angle.
+  const blocked = new Uint8Array(HOOP_BINS)
+  const perBin = (Math.PI * 2) / HOOP_BINS
+  for (let i = 0; i < m; i++) {
+    // Nothing further from the centre than the hoop's own reach plus the box's
+    // can touch it, and on a 4.5 km lap that is all but a couple of hundred
+    // samples. The cull is what keeps this walk off the frame budget.
+    const s = S[i]
+    const far = radius + need + ctx.corridor(s.width) + HOOP_CEIL
+    const dx = s.pos.x - cx, dy = s.pos.y - cy, dz = s.pos.z - cz
+    if (dx * dx + dy * dy + dz * dz > far * far) continue
+    rim(i, (rad, c, a, b) => {
+      if (Math.abs(c) >= need || rad < 1e-6) return
+      const k = (radius * radius + rad * rad + c * c - need * need) / (2 * radius * rad)
+      if (k >= 1) return
+      const d = k <= -1 ? Math.PI : Math.acos(k)
+      const th = Math.atan2(b, a)
+      const b0 = Math.floor((th - d) / perBin), b1 = Math.ceil((th + d) / perBin)
+      for (let bi = b0; bi <= b1; bi++) blocked[((bi % HOOP_BINS) + HOOP_BINS) % HOOP_BINS] = 1
+    })
+  }
+
+  let from = 0, sweep = Math.PI * 2
+  let anyBlocked = false
+  for (let i = 0; i < HOOP_BINS; i++) if (blocked[i]) { anyBlocked = true; break }
+  if (anyBlocked) {
+    let bestStart = -1, bestRun = 0
+    for (let start = 0; start < HOOP_BINS; start++) {
+      if (blocked[start] || !blocked[(start + HOOP_BINS - 1) % HOOP_BINS]) continue
+      let run = 0
+      while (run < HOOP_BINS && !blocked[(start + run) % HOOP_BINS]) run++
+      if (run > bestRun) { bestRun = run; bestStart = start }
+    }
+    if (bestStart < 0 || bestRun * perBin < HOOP_MIN_SWEEP) return null
+    from = bestStart * perBin
+    sweep = bestRun * perBin
+  }
+
+  return {
+    cx, cy, cz, fx, fz, radius, loopR, from, sweep,
+    rotY: Math.atan2(fx, fz) + Math.PI / 2,
+    offset: (ang: number) => [
+      Math.cos(ang) * radius * ux,
+      Math.sin(ang) * radius,
+      Math.cos(ang) * radius * uz,
+    ],
+  }
+}
+
 export interface Theme {
   id: string
   /** Hero props for the instanced scatter, built against the track palette. */

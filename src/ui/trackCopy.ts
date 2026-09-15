@@ -118,31 +118,47 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
   },
   emberfall: {
     world: 'Volcanic Shield',
-    hook: 'A third of the lap is ash, and neither set piece is a corner.',
+    // REWRITTEN AFTER THE SKETCH PASS, because both halves of the old hook had
+    // stopped being true. "A third of the lap is ash" is now 229m of gravel out
+    // of 4481.6m -- 5% -- since the infield the sketch added took that ground.
+    // And "neither set piece is a corner" was the whole point of the old copy:
+    // the looper the same pass added is 441 degrees of ordinary plan-view
+    // corner, so it is a set piece that IS a corner, and the one that can end
+    // a race.
+    hook: 'Two loops, a corkscrew, and a road that flies over itself.',
     difficulty: 'Medium',
     note:
-      'The two things you will remember are the two things that cannot ' +
-      'decide the race. A full vertical loop through a lava tube and two ' +
-      'turns of corkscrew bored through the shield are both geodesics -- the ' +
-      'road curves, the surface curves with it, and the sim reads them as ' +
-      'dead straight, so nothing brakes and nothing drifts. Hold the ' +
-      'throttle and enjoy them. The lap is actually decided on the ash beds: ' +
-      'a third of the circuit on gravel, wide and banked and fast, where ' +
-      'your corner model and the AI\'s disagree by the most. Then the rim, ' +
-      'where an updraft pushes you at a barrier you are allowed to lean on.',
+      'The maximalist one: two vertical loops, a corkscrew, a launch across ' +
+      'an open fissure and a tunnel bored through the basalt, all inside ' +
+      'four and a half kilometres. Most of that cannot decide the race -- a ' +
+      'loop and a corkscrew are geodesics, so the road curves, the surface ' +
+      'curves with it, and the sim reads them dead straight. Hold the ' +
+      'throttle and enjoy them. The one set piece that can is the looper: a ' +
+      'large right-hander that keeps turning for 441 degrees and climbs back ' +
+      'over the road it arrived on, an ordinary corner the whole way round, ' +
+      'so you brake for it, drift it, and can fall off it. Then the ash beds ' +
+      'and the rim, where loose gravel and an updraft both push you at a ' +
+      'barrier you are allowed to lean on.',
   },
   abyssal: {
     world: 'Submerged Transit Tube',
     hook: 'The tube leaks, and where it leaks things grow.',
     difficulty: 'Hard',
+    // The plan sentence was rewritten after the sketch pass. "Two very long
+    // flanks, the fastest shape on the roster" described the kidney this
+    // circuit used to be; Vince's redraw put a wave across the top and an S
+    // through the bottom and took the lap to 4033.8m. Four blooms now, not
+    // three -- BLOOM-D came in with the S.
     note:
       'Nine hundred metres down, inside the glass, with the trench on the ' +
-      'other side of it. The plan is the trench: two hairpins and two very ' +
-      'long flanks, the fastest shape on the roster. Three corners run over ' +
-      'biofilm -- grip 0.30, lower than ice -- and every bloom sits where the ' +
-      'corner already wanted you slow, so it costs a tidy driver almost ' +
-      'nothing and takes everything off one who arrived hot. Watch the amber ' +
-      'posts; everything alive down here is cyan, so amber means one thing. ' +
+      'other side of it. The plan wanders, and is meant to: a long wave ' +
+      'across the top, a descent down the right flank, a big S driven ' +
+      'through the bottom, and two hairpins holding the ends of four ' +
+      'kilometres together. Four corners run over biofilm -- grip 0.30, ' +
+      'lower than ice -- and every bloom sits where the corner already ' +
+      'wanted you slow, so it costs a tidy driver almost nothing and takes ' +
+      'everything off one who arrived hot. Watch the amber posts; ' +
+      'everything alive down here is cyan, so amber means one thing. ' +
       'This is the SPIRAL circuit: one three-turn descent through the tube and ' +
       'no loop anywhere. Then the Breach, where the sea comes in sideways and ' +
       'the wall is the thing you lean on.',
@@ -165,19 +181,26 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
   neonspire: {
     world: 'Stacked Metropolis',
     hook: 'Dry deck, grip 1.0, and the hardest lap in the game.',
+    // THE SHAPE SENTENCE WAS FOUR CIRCUITS OUT OF DATE. "A squared-off block:
+    // four flat sides and four real corners, 14-21m of road" described neither
+    // the circuit this file rebuilt from the sketch (twenty corners, 4322.9m,
+    // 14-22m) nor the fourteen-corner one before it, which is the version the
+    // line was already stale for when it was written. Re-read off the built
+    // lap this time, not off the last thing anyone remembered about it.
     difficulty: 'Hard',
     note:
       'Every other Hard circuit is hard because of a substance -- ice, ' +
       'biofilm, vacuum. Take it away and they are wide and forgiving. This ' +
-      'one has no hostile surface at all. It is a squared-off block: four ' +
-      'flat sides and four real corners, 14-21m of road, walled on both ' +
-      'sides, down to 14m at the Squeeze where the street runs between two ' +
-      'towers. It only works because contact no longer ends a drift -- ' +
-      'leaning on a barrier through a corner this tight is a line you can ' +
-      'choose now. The maglev strips are the compensation, so the lap ' +
-      'alternates real top speed with hard braking and never gives you both. ' +
-      'One loop and one spiral: the Holo Ring and the Spire, the only two ' +
-      'places on the lap you stop working.',
+      'one has no hostile surface at all. Twenty corners over 4.3km of ' +
+      'walled street, 14-22m of road, and an infield that folds a double ' +
+      'hairpin through the middle of the city -- two hooks that each turn ' +
+      'you the whole way back on yourself, down a diagonal where the Squeeze ' +
+      'pinches the street to 14m. It only works because contact no longer ' +
+      'ends a drift -- leaning on a barrier through a corner this tight is a ' +
+      'line you can choose now. Three maglev runs are the compensation, so ' +
+      'the lap alternates real top speed with hard braking and never gives ' +
+      'you both. One loop and one spiral: the Holo Ring and the Spire, the ' +
+      'only two places on the lap you stop working.',
   },
 }
 

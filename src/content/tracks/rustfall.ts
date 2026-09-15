@@ -75,6 +75,11 @@ export const RUSTFALL: TrackDef = {
     // the square root of radius and doubling the three slowest corners buys
     // more than 146m of extra road costs.
     //
+    // The lap length is still 2625.6m -- nothing since has touched a node
+    // position on this circuit -- but 56.10s is this reshape's reading and not
+    // the current one; that pin has moved four times since. Read it out of
+    // tests/gravity.test.ts rather than from here.
+    //
     // WHY SEPARATION IS THE ONLY LEVER. Each of these is a 180 between two
     // parallel legs, and for that shape the largest radius available is HALF
     // THE LEG SEPARATION. Splaying the entry, over-rotating into a teardrop, a
@@ -125,7 +130,52 @@ export const RUSTFALL: TrackDef = {
     { p: [-140, 2.2, 378.8], w: 22.5, surface: 'tarmac', tag: 'crane-drop' },
     { p: [-140, 1, 285], w: 22.5, surface: 'metal', ramp: 28, tag: 'ramp-crane' },
     { p: [-142, 0, 220], w: 23.438, surface: 'tarmac' },
-    { p: [-154, 0, 150], w: 24.375, bank: 11, surface: 'metal', tag: 'sweeper-T4' },
+    // 11 DEGREES HERE, NOT 6, WAS WHAT THE FLYOVER'S DECK PLATE WAS HITTING.
+    //
+    // `probe-selfclear` reads the crossing above this corner as the closest the
+    // ROAD comes to itself on this circuit -- 3.9m, comfortably past the 2m a
+    // car needs -- and passes it. Measured as `trackMesh` actually builds it,
+    // `probe-solidclear` read the same pair as a failure: the flyover's viaduct
+    // soffit stood 0.37m inside this road's airspace and its wall cap 0.26m
+    // inside it, 2.63m and 2.74m over a deck that carries a 3.0m barrier. The
+    // bridge was slicing the top of the guardrail underneath it. A grounded car
+    // still passed below either way, so it was never a collision -- it is the
+    // passthrough Vince asked to be rid of.
+    //
+    // WHAT WAS IN THE WAY WAS THE BANK, NOT THE ROAD. The deck overhead leaves
+    // 3.47m of clear air above this centreline, which is plenty. What ate it is
+    // this corner's own outer edge: at 11.4 degrees across a 24.4m half-width it
+    // climbed 4.81m, so the road reached UP into the bridge from below. Taking
+    // this node to 6 puts the bank at the crossing at 7.0 degrees and the edge
+    // at 2.97m, and that one number is the whole fix -- 0.26m of intrusion
+    // becomes 1.13m of clearance, and the headroom over this road 3.01 -> 4.32m.
+    //
+    // THE SWEEPER ITSELF IS UNTOUCHED. The next two nodes keep their 14 degrees,
+    // so the Tier-4 arc runs at full bank through its apex and its exit; what
+    // changed is the RAMP-IN, which now climbs 0 -> 6 -> 14 out of the crane
+    // drop instead of 0 -> 11 -> 14. A road cannot be banked up into a deck that
+    // crosses over it, and this is what that looks like.
+    //
+    // WHY THIS END AND NOT THE BRIDGE, WHICH IS WHERE THE FIX WAS EXPECTED.
+    // Raising the flyover works -- about 0.8m of clearance per metre of crest,
+    // and a shaped +1.8m measured 1.19m clear -- and it costs three things a
+    // bank does not. It lengthens the baked lap, which this circuit cannot
+    // afford (see `flyover-cross` below). It steepens a descent into a final
+    // corner pinned at y=0, and even a modest +1.0m crest took the barrier
+    // budget in tests/barriers.test.ts from 208.9 to 215.4 against its 215 pin,
+    // because a steeper descent arrives at the wall faster. And a bank costs no
+    // length AT ALL: the lap bakes to 2625.60179m before and after, the same
+    // sample count, the same resolution, the same radius census (tightest 47.8m,
+    // median 107.9m) and the same 0.274s surface tax. Nothing downstream of the
+    // centreline can see this change.
+    //
+    // WHAT IT COSTS. Over 20 fixed seeds the field is 0.10s a lap SLOWER --
+    // 55.229 -> 55.329s, respawns 0.65 -> 0.75, off-track 0.08 -> 0.10% -- i.e.
+    // marginally less help through the corner, in the direction the 55s lap
+    // floor wants. Per SEED it swings far wider: the pin in tests/gravity.test.
+    // ts moved 55.475 -> 54.820s on its own seed, and the circuit as it shipped
+    // already reads 54.722s on another. Read the twenty-seed number, not a race.
+    { p: [-154, 0, 150], w: 24.375, bank: 6, surface: 'metal', tag: 'sweeper-T4' },
     // THIS NODE IS A RIGID 50m SHIFT OF THE AUTHORED ONE AND MUST STAY THAT
     // WAY. The most expensive finding of the reshape is recorded here.
     //
@@ -222,6 +272,40 @@ export const RUSTFALL: TrackDef = {
     // The return leg crosses back over the sweeper-T4 entry, so it climbs onto
     // a flyover. Plan separation alone was 18m against 26m of combined width,
     // which folded the ribbon through itself and made Track.project ambiguous.
+    //
+    // NEITHER THIS DECK'S HEIGHT NOR ITS BANK IS THE LEVER FOR CLEARANCE OVER
+    // THAT SWEEPER. The fix, and the measurement behind it, is at `sweeper-T4`
+    // above; what was tried HERE and rejected is recorded below, because both
+    // look like the obvious answer and neither is.
+    //
+    // THE BANK. -6 on a right-hander drops this deck's OUTSIDE edge 2.54m,
+    // which is off camber and reads like a sign bug of the kind the final
+    // corner had. It is not a lever, because the crossing is DIAGONAL: the
+    // whole width of this deck passes over that road, so every setting only
+    // chooses which edge clips. Measured, -3 gives 0.10m of clearance on the
+    // other edge, 0 gives 0.91m of intrusion, and +6 gives 1.60m -- six times
+    // worse than the 0.26m it set out to fix.
+    //
+    // THE HEIGHT, AND THE REASON IS A PROPERTY OF THE ENGINE, NOT OF THE ROAD.
+    // The crest can rise, but it feeds a descent to a final corner pinned at
+    // y=0, and that descent is already the steepest 30m on the circuit at
+    // 10.80% against the grammar's 12% ceiling; a naive +1.6m here measured
+    // 12.95%. A SHAPED lift does fit -- 11.0 / 13.3 / 9.0 / 4.4 across these
+    // four nodes is a near-constant 9.6-10.3% descent, measuring 11.24% of
+    // grade and 1.19m of clearance -- and it was still rejected, because it
+    // takes the baked lap from 2625.60m to 2625.86m and 2625.75m is where
+    // `Track.at()` puts one more sample in the lap. At that point
+    // `length / samples` crosses 1.5m, and since `at()` FLOORS, the fixed
+    // metre window `curvatureAt` is asked for resolves to a different NUMBER of
+    // samples: the 15m window tests/track.test.ts measures radii with goes from
+    // 9 samples to 11, so every radius in the game reads about 10% tighter at
+    // once. Measured across that step: census tightest 47.8 -> 50.6m, median
+    // 107.9 -> 113.4m, surface tax 0.274 -> 0.461s. None of it is geometry --
+    // measured with a window that is a fixed number of SAMPLES the named
+    // corners all move by under a metre -- and all of it is what the AI reads.
+    // Elkarim sits 0.15m under that boundary and Frosthelm 0.0105m under its
+    // own; until `at()` interpolates, a track change that adds baked length is
+    // a change to every corner on the lap.
     { p: [-201.6, 9.8, 146.3], w: 24.375, bank: -6, surface: 'metal' },
     { p: [-163.2, 11.5, 123.4], w: 24.375, bank: -6, surface: 'metal', tag: 'flyover-cross' },
     { p: [-137.2, 7.3, 86.9], w: 24.375, bank: -6, surface: 'metal', ramp: 24, tag: 'ramp-descent' },

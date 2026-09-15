@@ -7,7 +7,7 @@ import { lateralBudget, cornerSpeedAt } from '../src/sim/vehicle'
 import { RUSTFALL } from '../src/content/tracks/rustfall'
 import { CRYOSTATIC } from '../src/content/tracks/cryostatic'
 import { AETHERION } from '../src/content/tracks/aetherion'
-import { HOLLOWCHOIR } from '../src/content/tracks/hollowchoir'
+import { TRACKS } from '../src/content/tracks'
 import { TUNING } from '../src/content/tuning'
 import { buildEnvironment } from '../src/render/environment'
 import { buildTrackVisual } from '../src/render/trackMesh'
@@ -127,111 +127,139 @@ describe('Rustfall track geometry', () => {
  * by agreeing with a duplicate of the placement maths.
  */
 /**
- * Run for EVERY track, not just the one the rules were written against.
+ * Run for EVERY track on the roster, not just the one the rules were written
+ * against -- and driven off `TRACKS` rather than a hand-written list, so a
+ * ninth planet is covered the day it is added rather than the day somebody
+ * remembers this file.
  *
- * These are placement invariants — nothing solid inside the road or its
- * airspace, no terrain above the road at any lateral — and they hold for a
+ * These are placement invariants -- nothing solid inside the road or its
+ * airspace, no terrain above the road at any lateral -- and they hold for a
  * planet or they do not. Cryostatic arrived with the same placement engine and
  * a completely different catalogue (a 13.5 m rock arch swept over the cavern,
  * a banked ice tube, marker poles down the blizzard band), and the only thing
  * standing between that catalogue and a serac on the racing line is this
  * suite actually being pointed at it.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS FIXTURE USED TO PASS THINGS THAT WERE IN THE ROAD, AND IT IS WORTH
+ * BEING PRECISE ABOUT WHY, BECAUSE THE OLD COMMENTS HERE NAMED THE WRONG
+ * REASONS. It asserted "keeps every prop and landmark out of the road" for
+ * Aetherion while `landmark-rotunda` stood 17.90 m inside the edge, and it
+ * had a note explaining that the fixture could not speak for the rotunda or
+ * for The Hollow Choir's drum -- so the one thing that was actually broken was
+ * inside the part the fixture had already written off. Three faults, all now
+ * fixed, all of them shared with the old `tools/probe-intrude.ts` and fixed
+ * there first; that probe's header is the long version.
+ *
+ *   1. IT PICKED THE CROSS-SECTION IN PLAN. A point belonged to a sample if it
+ *      was within 0.9 m along the PLAN tangent -- and where the road is a
+ *      vertical wall the plan tangent and the plan right are parallel, so
+ *      "along the lap" and "across the road" stopped being distinguishable.
+ *      Bands are now bounded by the two neighbouring cross-section PLANES,
+ *      which tile the lap exactly at any width, radius or roll.
+ *
+ *   2. IT WORKED IN A PLAN-PROJECTED FRAME. The lateral was
+ *      `alongLat / |right_xz|`, which diverges as the ribbon rolls past
+ *      vertical, and the height was a plain difference in world Y, which is
+ *      meaningless on an inverted deck. Both are now taken in the sample's own
+ *      banked frame -- the frame `Track.surfacePoint` and `trackMesh.ts` use.
+ *
+ *   3. IT COULD NOT TELL PAINT FROM AN OBSTACLE, and worked around it with a
+ *      list of mesh NAMES to skip that had to be extended by hand every time a
+ *      theme painted something. A decal is identified by the fact that it does
+ *      not write depth: it cannot occlude anything and the renderer draws it
+ *      as an overlay. Every actual prop, landmark and structure in all eight
+ *      themes is `depthWrite: true`; every decal, and the camera-anchored
+ *      debris volume, is not. So the list is gone and the material answers.
+ *
+ * `tools/probe-intrude.ts` runs the same measurement from the command line and
+ * prints how deep each finding is; this is the gate.
+ * ---------------------------------------------------------------------------
  */
-describe.each([
-  ['Rustfall', RUSTFALL],
-  ['Cryostatic', CRYOSTATIC],
-  // Aetherion joined this list with its art pass. It is the case the fixture
-  // was hardest to get right for: `reach()` measures the lateral in the banked
-  // frame as `alongLat / |right_xz|`, and on the rotunda's vertical wall
-  // `|right_xz|` is zero -- so the scale diverges, every candidate lateral
-  // comes out enormous, the penetration goes negative and the whole wall-ride
-  // is skipped. What the fixture therefore covers on this track is the 90% of
-  // the lap that is an ordinary road, which is where a prop actually can wander
-  // onto the tarmac. The drum is guarded by construction instead: it is swept
-  // in the ribbon's own frame at `corridor(width) + pad`, hanging along
-  // -normal, so its entire surface is BEHIND the road at every sample.
-  ['Aetherion', AETHERION],
-  // The Hollow Choir joined with its art pass, and it is the case the fixture
-  // is LEAST able to speak for -- worth stating precisely, because the design
-  // note written before the pass predicted the wrong failure.
-  //
-  // The prediction was that `reach()` would divide by a `|right_xz|` that
-  // passes through zero on the drum. It does not: `right` on this bore is
-  // `-cos(psi) * e_phi + sin(psi) * e_z`, so `|right_xz|^2` is
-  // `cos^2(psi) cos^2(phi) + sin^2(psi)`, and psi is 80 degrees through the
-  // whole Breach -- measured, the minimum over the lap is 0.92 and the scale
-  // never diverges.
-  //
-  // What DOES break is one step earlier. The fixture picks the cross-section a
-  // point stands on by requiring it to be within 0.9 m ALONG the track, using
-  // the plan projection of the frame -- and where the road is a wall, the plan
-  // tangent and the plan right are parallel, so "along the track" and "across
-  // it" are the same direction in plan and the test cannot tell them apart. So
-  // on the drum this suite is not measuring what it measures elsewhere.
-  //
-  // The drum is guarded by CONSTRUCTION instead, which is the same answer
-  // Aetherion's rotunda gives: every radius in `themes/hollowchoir.ts` is an
-  // offset from a cylinder FITTED to the ribbon's own samples, and the
-  // smallest of them is `R + 14` against a road that reaches 79.3 m from that
-  // fitted axis at its worst point. What this suite does cover on this track
-  // is the 73% of the lap that is ordinary road -- the two galleries, the
-  // Gantry's portals, the Carousel's spindle and every scattered prop -- which
-  // is exactly where something can wander onto the tarmac.
-  ['Hollow Choir', HOLLOWCHOIR],
-])('%s environment fits the ribbon', (_name, def) => {
+describe.each(TRACKS.map((d) => [`${d.name} (${d.id})`, d] as const))(
+  '%s environment fits the ribbon', (_name, def) => {
   const track = new Track(def)
   const m = track.samples.length
   const EDGE = TUNING.offTrack.edgeTolerance
   const RACER = TUNING.collision.racerRadius
 
-  /** One cross-section of the ribbon in the frame the sim actually uses. */
-  const frames = track.samples.map((s) => {
-    const hl = Math.hypot(s.right.x, s.right.z) || 1
-    return {
-      x: s.pos.x, y: s.pos.y, z: s.pos.z, w: s.width,
-      ry: s.right.y, rx: s.right.x / hl, rz: s.right.z / hl, inv: 1 / hl,
-    }
-  })
-  // Plan-space bucket grid, so a scan of every vertex of every prop is linear.
+  /**
+   * One cross-section of the ribbon in the frame the sim actually uses -- the
+   * full banked frame, not its plan projection.
+   *
+   * `limit` is where the ROAD ends, which is not where a car can get to. A
+   * walled sample's road ends at the barrier, i.e. at `width`; an `open` one
+   * has no barrier, so out there the car's own envelope
+   * (`width * edgeTolerance + racerRadius`) is the honest edge and it still
+   * applies. Measuring the envelope everywhere -- which this fixture used to do
+   * -- reaches 4.9 m PAST a 30 m half-width's barrier and reports things that
+   * are buried in the wall, unreachable and invisible from the road.
+   */
+  const frames = track.samples.map((s, i) => ({
+    px: s.pos.x, py: s.pos.y, pz: s.pos.z,
+    rx: s.right.x, ry: s.right.y, rz: s.right.z,
+    nx: s.normal.x, ny: s.normal.y, nz: s.normal.z,
+    tx: s.tangent.x, ty: s.tangent.y, tz: s.tangent.z,
+    limit: s.open ? s.width * EDGE + RACER : s.width,
+    s: (i / track.samples.length) * track.length,
+  }))
+  // Plan bucket grid covering each band's full lateral reach, so a point 30 m
+  // off the centreline of a 60 m-wide road still finds its own sample.
   const CELL = 24
   const grid = new Map<string, number[]>()
   for (let i = 0; i < frames.length; i++) {
-    const f = frames[i]
-    const gi = Math.floor(f.x / CELL), gj = Math.floor(f.z / CELL)
-    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
-      const k = `${gi + a},${gj + b}`
-      const arr = grid.get(k)
-      if (arr) arr.push(i); else grid.set(k, [i])
+    const a = frames[i], b = frames[(i + 1) % frames.length]
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity
+    for (const g of [a, b]) for (const lat of [-g.limit, g.limit]) {
+      const x = g.px + g.rx * lat, z = g.pz + g.rz * lat
+      if (x < x0) x0 = x; if (x > x1) x1 = x
+      if (z < z0) z0 = z; if (z > z1) z1 = z
     }
+    for (let cx = Math.floor((x0 - 2) / CELL); cx <= Math.floor((x1 + 2) / CELL); cx++)
+      for (let cz = Math.floor((z0 - 2) / CELL); cz <= Math.floor((z1 + 2) / CELL); cz++) {
+        const k = `${cx},${cz}`
+        const arr = grid.get(k)
+        if (arr) arr.push(i); else grid.set(k, [i])
+      }
   }
 
   /**
-   * How far a world point reaches past the forgiving edge, and how far above the
-   * road surface it sits, on the cross-section it actually stands on.
+   * How far a world point reaches inside the road's own boundary, and how far
+   * above the deck it sits, on the cross-section it actually stands on.
    *
-   * The lateral is measured in the BANKED frame, because that is where the road
+   * Both are taken in the sample's BANKED frame, because that is where the road
    * is: on the 34-degree cargo ring the high edge is 9 m above the centreline,
-   * so a prop standing on the ground well outside the plan footprint can still
-   * be hanging inside the road.
+   * and on an inverted deck "above the road" points at the ground. Which
+   * cross-section owns a point is decided by the two neighbouring section
+   * PLANES rather than by a distance along the plan tangent, so the bands tile
+   * the lap exactly however the ribbon is rolled -- including where it is a
+   * wall and the plan tangent and plan right are the same direction.
    */
   function reach(x: number, y: number, z: number): { pen: number; dy: number; s: number } | null {
     const cands = grid.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`)
     if (!cands) return null
     let out: { pen: number; dy: number; s: number } | null = null
     for (const i of cands) {
-      const f = frames[i]
-      const dx = x - f.x, dz = z - f.z
-      const alongLat = dx * f.rx + dz * f.rz
-      // Samples are 1.5 m apart, so a 0.9 m window picks exactly one frame per
-      // section — and still picks BOTH where the track crosses over itself.
-      if ((dx * dx + dz * dz) - alongLat * alongLat > 0.81) continue
-      const lat = alongLat * f.inv
-      const pen = f.w * EDGE + RACER - Math.abs(lat)
+      const a = frames[i], b = frames[(i + 1) % frames.length]
+      const dx = x - a.px, dy = y - a.py, dz = z - a.pz
+      if (dx * a.tx + dy * a.ty + dz * a.tz < 0) continue
+      if ((x - b.px) * b.tx + (y - b.py) * b.ty + (z - b.pz) * b.tz >= 0) continue
+      const lat = dx * a.rx + dy * a.ry + dz * a.rz
+      const pen = a.limit - Math.abs(lat)
       if (pen <= 0) continue
-      const dy = y - (f.y + f.ry * Math.max(-f.w, Math.min(f.w, lat)))
-      if (!out || pen > out.pen) out = { pen, dy, s: (i / m) * track.length }
+      const up = dx * a.nx + dy * a.ny + dz * a.nz
+      if (!out || pen > out.pen) out = { pen, dy: up, s: a.s }
     }
     return out
+  }
+
+  /**
+   * True where a mesh is paint rather than an obstacle: it does not write
+   * depth, so it cannot occlude anything and has no inside. See fault 3 above.
+   */
+  function isDecal(mesh: THREE.Mesh): boolean {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    return mats.every((mm) => mm && (mm as THREE.Material).depthWrite === false)
   }
 
   /** Every vertex of a mesh (or of every instance of one) in world space. */
@@ -273,7 +301,14 @@ describe.each([
             p.lerpVectors(a, b, k / steps)
             const r = reach(p.x, p.y, p.z)
             if (!r || r.dy < band[0] || r.dy > band[1]) continue
-            bad.push(`${mesh.name} reaches ${r.pen.toFixed(2)}m inside the edge at ` +
+            // The FIRST point of this instance inside the band, not the
+            // deepest: the walk stops here because a gate only has to answer
+            // yes or no, and stopping is what keeps a scatter of two hundred
+            // instances off the suite's clock. Run
+            // `npx tsx tools/probe-intrude.ts --track=<id>` for the deepest
+            // point of each offender, which is the number that says how bad it
+            // is -- this one is wherever the triangle walk happened to start.
+            bad.push(`${mesh.name} stands ${r.pen.toFixed(2)}m inside the edge at ` +
               `s=${r.s.toFixed(0)}m, ${r.dy.toFixed(2)}m above the road`)
             found = true
             break
@@ -288,53 +323,97 @@ describe.each([
   const env = buildEnvironment(track, scene, QUALITY_PRESETS.high)
   const visual = buildTrackVisual(track, QUALITY_PRESETS.high)
 
+  /**
+   * THE AIRSPACE THE ROAD OWNS, metres above the deck.
+   *
+   * The floor is ZERO, not a small negative. The deck is opaque and faces up:
+   * anything strictly under it cannot be seen from the road and cannot be
+   * touched by a car riding on it, and an object that really does pass THROUGH
+   * the deck has geometry on both sides, so it is still caught from above. A
+   * negative floor buys nothing and costs findings -- at -0.15 it reports The
+   * Hollow Choir's drum hull, which is the bore the road runs through, sitting
+   * 1.4 cm under its own deck exactly as intended.
+   *
+   * The ceiling is above the 3 m barrier because a flight chassis rides to
+   * 6.5 m; 5 m is where the old fixture set it and nothing has argued for more.
+   */
+  const BAND: [number, number] = [0, 5.0]
+
   it('keeps every prop and landmark out of the road and its airspace', () => {
     const bad: string[] = []
     for (const obj of env.group.children) {
       const mesh = obj as THREE.Mesh
-      if (!mesh.isMesh || mesh.name === 'sky' || mesh.name === 'terrain') continue
-      // The smelt pit and its shimmer are unlit transparent decals on the floor,
-      // and the crack ripple is a decal on the ice.
-      if (mesh.name.startsWith('landmark-smelt') || mesh.name === 'heat-shimmer') continue
-      if (mesh.name === 'crack-ripple') continue
-      // The crosswind debris is a CAMERA-ANCHORED volume, exactly like the
-      // motes and the fog banks — its instances wrap into a cube around the
-      // viewer in the vertex shader, so its buffer holds a seeded box at the
-      // origin and its world position is wherever the camera is. Asking
-      // whether it clears the road is the same question as asking whether the
-      // dust does. The other two escape this fixture only by being Points.
-      if (mesh.name === 'wind-debris') continue
-      // Aetherion's void skin is a decal ON the phasing spans, 14 cm over the
-      // deck, drawn only while the sim says that deck does not exist. It is on
-      // the road on purpose and is the one thing in this file that is.
-      if (mesh.name === 'bridge-void-decal') continue
-      // STRUCTURES THE ROAD RUNS THROUGH OR INSIDE.
-      //
-      // These three enclose the road rather than stand beside it, so they meet
-      // it by construction and edge sampling correctly reports the seam. The
-      // vertex test never saw them because a seam has no corner in the band.
-      // Named individually rather than pattern-matched, so a NEW prop cannot
-      // inherit an exemption by being called something similar:
-      //
-      //   drum-hull           cut where the road threads through each mouth of
-      //                       The Hollow Choir's drum. Grazes 1.4 cm BELOW the
-      //                       surface at s=774m -- the junction itself.
-      //   landmark-ice-tunnel Cryostatic's tunnel is a tunnel: its walls rise
-      //                       from the roadside and its roof spans the road.
-      //                       Reported 1 cm inside the forgiving edge, 4.2 m
-      //                       up, which is the wall meeting the verge.
-      //   landmark-rotunda    Aetherion's road runs INSIDE the rotunda. Its
-      //                       floor is the road, so 0.13 m above the surface
-      //                       is the surface.
-      //
-      // Anything that is not one of these and touches the road is a bug, which
-      // is the whole point of the list being short and explicit.
-      if (mesh.name === 'drum-hull') continue
-      if (mesh.name === 'landmark-ice-tunnel') continue
-      if (mesh.name === 'landmark-rotunda') continue
-      bad.push(...offenders(mesh, [-0.15, 5.0]))
+      if (!mesh.isMesh) continue
+      // The ground the road sits on meets the deck everywhere by construction;
+      // it is the one opaque thing that is allowed to. Everything else that is
+      // legitimately ON the road -- the magma veins, the smelt pit and its
+      // shimmer, the crack ripple, Namaresh's void skin, the camera-anchored
+      // debris volume -- is paint, and says so in its own material.
+      if (mesh.name === 'terrain') continue
+      if (isDecal(mesh)) continue
+      bad.push(...offenders(mesh, BAND))
     }
     expect(bad.slice(0, 5)).toEqual([])
+  })
+
+  /**
+   * THE GATE HAS TO BE SHOWN FAILING SOMETHING.
+   *
+   * A fixture that reports nothing is indistinguishable from a fixture that
+   * cannot see, and this one spent a release in exactly that state. So four
+   * probes are planted at known offsets from the MOST INVERTED sample on this
+   * track -- found by searching rather than written down, so a content edit
+   * cannot quietly move the check onto level road -- and each asserts a
+   * different edge of the measurement:
+   *
+   *   mast-in-road      a 20 m box through the middle of the deck   -> caught
+   *   mast-mid-only     the same, with its ENDS clear of the band   -> caught
+   *                     (this is the lamp post that shipped: no vertex is
+   *                      anywhere near the road, so the vertex-sampling
+   *                      version of this fixture could not see it)
+   *   prop-behind-wall  a block 1.2 m OUTSIDE the road edge         -> passed
+   *   decal-on-road     the same box as mast-in-road, depthWrite:false -> passed
+   *
+   * On a track with no inversion this runs on its most banked sample, which is
+   * still a frame the plan-projected version of `reach()` got wrong.
+   */
+  it('reports a mast standing in the road, and does not report paint or a prop behind the wall', () => {
+    let worst = track.samples[0], wi = 0
+    for (let i = 0; i < m; i++) if (track.samples[i].normal.y < worst.normal.y) { worst = track.samples[i]; wi = i }
+    const at = (lat: number, up: number) => new THREE.Vector3(
+      worst.pos.x + worst.right.x * lat + worst.normal.x * up,
+      worst.pos.y + worst.right.y * lat + worst.normal.y * up,
+      worst.pos.z + worst.right.z * lat + worst.normal.z * up,
+    )
+    const plant = (name: string, g: THREE.BufferGeometry, p: THREE.Vector3, mm: THREE.Material) => {
+      const mesh = new THREE.Mesh(g, mm)
+      mesh.name = name
+      mesh.position.copy(p)
+      // Stand it along the sample's own normal, so "20 m tall" means 20 m off
+      // the deck even where the deck is upside down.
+      mesh.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(worst.normal.x, worst.normal.y, worst.normal.z),
+      )
+      return mesh
+    }
+    const solid = new THREE.MeshStandardMaterial()
+    const paint = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
+    const probes: [THREE.Mesh, boolean][] = [
+      [plant('mast-in-road', new THREE.BoxGeometry(0.6, 20, 0.6), at(4, 2), solid), true],
+      [plant('mast-mid-only', new THREE.BoxGeometry(0.6, 40, 0.6), at(-6, 0), solid), true],
+      [plant('prop-behind-wall', new THREE.BoxGeometry(1.5, 2, 1.5), at(worst.width + 1.2, 1), solid), false],
+      [plant('decal-on-road', new THREE.BoxGeometry(0.6, 20, 0.6), at(10, 2), paint), false],
+    ]
+    const where = `${_name} s=${((wi / m) * track.length).toFixed(0)}m ` +
+      `(half-width ${worst.width.toFixed(1)}m, deck normal.y=${worst.normal.y.toFixed(2)})`
+    for (const [mesh, shouldFail] of probes) {
+      const found = isDecal(mesh) ? [] : offenders(mesh, BAND)
+      expect(found.length > 0, `${mesh.name} at ${where}: ${found[0] ?? 'not reported'}`)
+        .toBe(shouldFail)
+      mesh.geometry.dispose()
+    }
+    solid.dispose(); paint.dispose()
   })
 
   it('keeps viaduct piers off the road the flyover crosses over', () => {

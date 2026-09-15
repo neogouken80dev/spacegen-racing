@@ -147,10 +147,61 @@ export const CRYOSTATIC: TrackDef = {
     // --- Beat 4: double Class C switchback up a moraine --------------------
     // Packed snow, full grip, 20m of climb. THE EQUALISER: the grounded
     // classes take back here what the lake cost them.
+    //
+    // THE CLIMB IS THE SAME CLIMB, RE-SPREAD SO THE ROAD PASSES LOWER UNDER THE
+    // CHASM APPROACH. 17 / 21 / 25 became 16.2 / 19.4 / 23.7. `moraine` at 13
+    // and `moraine-top` at 28 did not move, so the beat starts and ends where
+    // it always did, every x and z on the lap is untouched, and the four gaps
+    // go from 4 / 4 / 4 / 3m to 3.2 / 3.2 / 4.3 / 4.3m.
+    //
+    // WHY. This climb passes UNDER the chasm-jump approach at s=1556, and
+    // `probe-solidclear` read that crossing at 0.08m of clearance. Eight
+    // centimetres is under the ripple on the baked centreline: it is a pass
+    // that means nothing, and one node's drift in either direction is a deck
+    // plate standing in this road -- the same failure Elkarim's flyover had, at
+    // a tenth of the depth. Measured after: 1.69m of clearance and 4.69m of
+    // headroom over this road, against 3.08m. The road-over-road separation
+    // that tests/track.test.ts pins as a KNOWN defect ("2.12m, under the 4m a
+    // flyover is supposed to have") improves with it, 2.09 -> 3.66m. It is
+    // deliberately NOT taken past 4m: 4.08m was measured and available, and 4m
+    // is where `trackMesh` starts growing a soffit, so landing just over it
+    // trades this hairline for a different one and grows bridge structure under
+    // a crossing that has never had any.
+    //
+    // WHY THE CLIMB WAS RE-SPREAD RATHER THAN THE BRIDGE RAISED, AND THE REASON
+    // IS NOT THE OBVIOUS ONE. Raising the chasm bodily is the clean fix on
+    // paper -- a ramp sets a vertical velocity and the racer is ballistic from
+    // there, so lifting the launch, the gap and the landing TOGETHER leaves the
+    // jump identical (which is the note below, used forwards), and +1.2m
+    // measures 1.30m of clearance. It cannot be used, because it makes the lap
+    // LONGER and this lap has 10.5mm of room. Frosthelm bakes at 2891.98946m
+    // across 1928 samples, so `length / samples` is 1.499995; at 1.5 exactly the
+    // floor inside `Track.at()` fits a different NUMBER of samples into the
+    // fixed metre window `curvatureAt` is asked for. Measured across that step,
+    // the 15m window the friction-budget test reads radii with goes from 11
+    // samples to 9, every radius on the lap reads about 10% looser, and the
+    // surface tax collapses 0.6245 -> 0.2958s, under its own 0.55 floor. A
+    // +0.6m lift lands 0.00006m under that cliff, which is not a place to park
+    // a circuit.
+    //
+    // Re-spreading the climb costs nothing there because it makes the lap
+    // marginally SHORTER: evening the gaps removes more arc than dropping the
+    // middle node adds. 2891.98946 -> 2891.98498m, so the margin to the cliff
+    // goes UP, 10.5mm -> 15.0mm. Surface tax 0.6245 -> 0.6244s, radius census
+    // and steepest sustained grade unchanged, and over 15 fixed seeds the field
+    // is 0.09s a lap slower at 0.40 respawns a race against 0.27.
+    //
+    // BANK WAS TRIED FIRST, BECAUSE ON ELKARIM IT WAS THE ANSWER, AND IT DOES
+    // NOT WORK HERE. That crossing is a barrier reaching down onto a banked
+    // outer edge; this one is a flat 20m deck lying across a road that is
+    // rolling through a bank reversal, so the contact is a long shallow one
+    // rather than a point. Measured: -14 at this node gives 0.65m of intrusion,
+    // -6 gives 0.64m, and 6 or 20 at switchback-2 give 0.18m clear and 0.30m of
+    // intrusion. Every setting just moves which metre of the crossing is worst.
     { p: [282, 13, 44], w: 19, surface: 'snow', tag: 'moraine' },
-    { p: [234, 17, 68], w: 18, bank: -14, surface: 'snow', tag: 'switchback-1' },
-    { p: [226, 21, 118], w: 18, bank: -10, surface: 'snow' },
-    { p: [266, 25, 154], w: 18, bank: 14, surface: 'snow', tag: 'switchback-2' },
+    { p: [234, 16.2, 68], w: 18, bank: -14, surface: 'snow', tag: 'switchback-1' },
+    { p: [226, 19.4, 118], w: 18, bank: -10, surface: 'snow' },
+    { p: [266, 23.7, 154], w: 18, bank: 14, surface: 'snow', tag: 'switchback-2' },
     { p: [324, 28, 160], w: 19, bank: 10, surface: 'snow', tag: 'moraine-top' },
 
     // --- Beat 6: ice tunnel loop -------------------------------------------

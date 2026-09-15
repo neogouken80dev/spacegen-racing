@@ -406,7 +406,28 @@ describe('the AI', () => {
     //           Taking the free boosts away costs the field a third of a second
     //           -- which is the clearest evidence available that the bug was
     //           real and was firing constantly.
-    expect(avg).toBeCloseTo(55.475, 2)
+    //   54.82s  ONE NUMBER ON ONE NODE: Elkarim's sweeper-T4 bank went 11 -> 6,
+    //           so that corner's outer edge stops climbing 4.81m into the
+    //           flyover crossing over it (`probe-solidclear` read 0.26m of
+    //           intrusion and now reads 1.13m of clearance). A TRACK line
+    //           again, not a sim one: vehicle.ts, ai.ts and the tuning table
+    //           are untouched and the other seven circuits do not move. Note
+    //           what did NOT move -- a bank leaves the centreline alone, so the
+    //           lap still bakes to 2625.60179m with the same 1750 samples, the
+    //           same radius census and the same surface tax.
+    //           SLOWER by 0.10s over twenty fixed seeds (55.229 -> 55.329s,
+    //           respawns 0.65 -> 0.75) and FASTER by 0.65s on this one, which
+    //           is the honest shape of this measurement rather than a
+    //           contradiction: a single seed on this circuit swings about half
+    //           a second either way, and the track as it shipped already reads
+    //           54.722s on seed 20260901. This line is a determinism pin -- it
+    //           does its job by shouting -- but its VALUE is one draw, so the
+    //           lap-time question belongs to the twenty-seed number and to the
+    //           three-seed gate in tools/probe-newtrack.ts, which reads
+    //           55.00 -> 55.12s. Both say the corner got very slightly less
+    //           helpful, which is the direction the 55s floor wants and is why
+    //           the warning four entries up is not being broken here.
+    expect(avg).toBeCloseTo(54.820, 2)
   })
 })
 
