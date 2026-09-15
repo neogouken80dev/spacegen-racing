@@ -154,6 +154,95 @@ function propArch(pal: Palette, seg: number): THREE.BufferGeometry {
   return merge(parts)
 }
 
+/* ------------------------------------------------------------ ash spires */
+
+/**
+ * THE ASH BEDS' OWN SPIRES, AND WHY A `cluster` CANNOT PLACE THEM.
+ *
+ * These used to ride `cluster: { tag: 'ashbeds', span: 420 }`. The layout pass
+ * that added the looper cut the gravel from 769 m to 236 m and the dressing
+ * went on spilling over the basalt either side of it, which is the obvious
+ * half of the problem. The other half is not obvious and does not go away by
+ * shrinking the span.
+ *
+ * `cluster` is SYMMETRIC: environment.ts places at `clusterIdx` plus a uniform
+ * draw in [-span/2, +span/2]. That is the right shape for a tag in the middle
+ * of the thing it names. `ashbeds` is not: it marks where the beds BEGIN, and
+ * it sits 11 m into a 236 m run with 225 m of gravel ahead of it. A symmetric
+ * window centred there is about half gravel and half the basalt approach FOR
+ * ANY SPAN -- measured, 53% at the old 420 and 53% at a "corrected" 236, and
+ * the count that actually landed on gravel was 22 of 96. Tuning the number
+ * changes how far the misplaced ones are thrown, not how many there are.
+ *
+ * So the gather stops being a window around a node and becomes what it always
+ * meant: the stretch of GRAVEL the node opens. The run is walked off
+ * `sample.surface`, which is the same field the spray table and the sim read,
+ * so it tracks the beds through any future re-lay without a number in this
+ * file to forget to update -- and it is the ash beds' own definition, not a
+ * measurement of them. `landmark` appends to the spec's own InstancedMesh, so
+ * all of this still costs exactly the draw call the scatter was already
+ * paying for.
+ */
+function ashSpires(ctx: ThemeContext, push: (m: THREE.Matrix4, tint: THREE.Color) => void): void {
+  const iTag = ctx.tagSample('ashbeds')
+  if (iTag < 0) return
+  const S = ctx.track.samples
+  const m = S.length
+  const res = ctx.track.length / m
+  const N = (i: number): number => ((i % m) + m) % m
+
+  // Gravel at, just before, or shortly after the tag. A node marking the start
+  // of a bed can round to either side of the surface change, and a layout that
+  // moves the tag a little should not silently stop dressing the beds.
+  let seed = -1
+  for (let d = -Math.round(12 / res); d <= Math.round(60 / res); d++) {
+    if (S[N(iTag + d)].surface === 'gravel') { seed = N(iTag + d); break }
+  }
+  if (seed < 0) return
+  let back = 0
+  while (back < m && S[N(seed - back - 1)].surface === 'gravel') back++
+  let fwd = 0
+  while (fwd < m && S[N(seed + fwd + 1)].surface === 'gravel') fwd++
+  const len = back + fwd + 1
+  // Too short to be a bed, or so long it is the whole planet and the tag has
+  // been put on something this routine has no business dressing.
+  if (len * res < 40 || len > m * 0.5) return
+  const i0 = N(seed - back)
+
+  /**
+   * Placed the way environment.ts places the scatter -- the prop's SHELL set
+   * `gap` past the protected corridor, the lateral carrying its own scaled
+   * radius, `clearOfTrack` with the same radius, sunk by the same fraction --
+   * so a landmark spire and a scattered one are the same object standing the
+   * same way, and the two cannot drift apart in look.
+   */
+  const RADIUS = 3.2, GAP = 3.0, SPREAD = 175, SINK = 0.35
+  const want = Math.max(1, Math.round(30 * (ctx.quality.propDensity ?? 1)))
+  const rnd = mulberry32(0xa5be05)
+  let placed = 0, guard = 0
+  while (placed < want && guard++ < want * 40) {
+    const smp = S[N(i0 + Math.floor(rnd() * len))]
+    const side = rnd() < 0.5 ? -1 : 1
+    const tl = Math.hypot(smp.tangent.x, smp.tangent.z) || 1
+    const rx = (smp.tangent.z / tl) * side, rz = (-smp.tangent.x / tl) * side
+    const scl = 0.75 + rnd() * 1.35
+    const lateral = ctx.corridor(smp.width) + RADIUS * scl + GAP + rnd() * SPREAD
+    const x = smp.pos.x + rx * lateral, z = smp.pos.z + rz * lateral
+    if (!ctx.clearOfTrack(x, z, RADIUS * scl)) continue
+    const g = ctx.ground(x, z)
+    _fe.set((rnd() - 0.5) * 0.10, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.10)
+    _fq.setFromEuler(_fe)
+    _fp.set(x, g.y - SINK * scl, z)
+    _fs.set(scl, scl * (0.9 + rnd() * 0.3), scl)
+    const tint = 0.62 + rnd() * 0.62
+    push(
+      new THREE.Matrix4().compose(_fp, _fq, _fs),
+      new THREE.Color(tint, tint * (0.94 + rnd() * 0.12), tint * (0.88 + rnd() * 0.2)),
+    )
+    placed++
+  }
+}
+
 /* -------------------------------------------------------------- landmarks */
 
 function landmarks(ctx: ThemeContext): void {
@@ -421,6 +510,19 @@ function landmarks(ctx: ThemeContext): void {
     })
   }
 
+  /* ---- THE SKYLOOP FLYOVER. See `buildFlyover` below for the whole argument.
+   *
+   * Three tags or nothing. `tagSample` answers -1 for a tag no node carries, so
+   * on a circuit that has not authored the looper yet -- which is every circuit
+   * in the game the day this shipped -- the guard falls through and the theme
+   * builds exactly what it built before: no geometry, no material, no hook. ---- */
+  {
+    const iLooper = ctx.tagSample('looper')
+    const iApex = ctx.tagSample('looper-apex')
+    const iOver = ctx.tagSample('overpass')
+    if (iLooper >= 0 && iApex >= 0 && iOver >= 0) buildFlyover(ctx, iLooper, iApex, iOver)
+  }
+
   /* ---- LAVA BOILING OFF THE FLATS.
    *
    * The planet's horizon was static: a lava field that never moves is a
@@ -478,6 +580,597 @@ function landmarks(ctx: ThemeContext): void {
   }
 
   void pal; void m
+}
+
+/* ---------------------------------------------------------------- flyover */
+
+/**
+ * THE SKYLOOP'S FLYOVER, AND THE ONE THING A GENERIC BRIDGE CANNOT DO.
+ *
+ * The Skyloop is a plan-view looper: 360 degrees of right-hander hung off the
+ * circuit whose late, high arc comes back over its own low feed road. It is a
+ * bridge, and the renderer already knows how to build a bridge -- trackMesh's
+ * `buildViaductPiers` grows a soffit and a row of steel bays under ANY deck
+ * standing VIA_LO+ above the floor, on every track, and environment.ts drops
+ * the terrain out from under it to match. None of that needs a theme and none
+ * of it is repeated here; a second soffit would z-fight the first and a second
+ * pier row would stand beside it arguing.
+ *
+ * What the generic bridge cannot do is be MADE OF ANYTHING. It is steel bays
+ * and a flat plate, which is correct over Rustfall's junkyard and wrong over a
+ * shield volcano, and it leaves three specific holes this theme fills:
+ *
+ *   THE UNDERSIDE HAS NO DEPTH. `emitSoffit` is one downward-facing plane at
+ *   VIA_FOOT, which closes the deck and stops you seeing sky through it, and
+ *   which from a car 25 m below is a flat ceiling with no scale in it. So the
+ *   span gets a basalt EDGE BEAM down each flank and transverse ribs across
+ *   the bay between them -- the thing that passes overhead and casts a shape.
+ *
+ *   THE DECK CANNOT CAST A SHADOW. trackMesh sets `castShadow = false` on
+ *   every road chunk (it receives, it never casts), on every tier, so no
+ *   amount of shadow quality will ever put shade on the road underneath. It
+ *   is authored here instead, and authored as SKY occlusion rather than sun
+ *   occlusion: this planet's key is scaled to 0.40 through the ash and most of
+ *   what lights the deck is the hemisphere, so what a 49 m-wide slab 25 m up
+ *   actually takes away is the dome -- which is directly beneath it, not
+ *   thrown 38 m downsun where a hard shadow would land and where it would miss
+ *   the road entirely.
+ *
+ *   NOTHING MARKS THE CROSSING AT SPEED. One dim molten seam along the beam's
+ *   bottom edge, in VEIN -- the same deliberately-dim value the road's own
+ *   cracks use, for the same reason the veins block gives at length. It is a
+ *   line you read the span's width off at 70 m/s, not a light: this planet
+ *   spends its whole emissive budget on three things and a bridge is not one
+ *   of them.
+ *
+ * GEOMETRY IS MEASURED, NEVER AUTHORED. The span's extent is found by walking
+ * out from `overpass` while the deck still overhangs the road beneath it, the
+ * road beneath is found by searching near `looper`, and how far the walk may
+ * run is bounded by the looper's own arc to `looper-apex`. Nothing here knows
+ * a node count, a length or a position, so the geometry worker can move the
+ * whole loop and the art follows it.
+ *
+ * COST: four draw calls (span, pylons, shade, seam), two of which share
+ * `ctx.propMaterial` and add no material at all.
+ */
+
+/** Lateral overhang of trackMesh's soffit past the physics edge (`WALL_CAP` +
+ *  0.12), and its depth below the surface on a viaduct (`VIA_FOOT`). Copied,
+ *  not imported -- the same arrangement trackMesh and environment.ts already
+ *  have over the viaduct test itself. Change those and change these. */
+const SPAN_OUT = 0.67
+const SPAN_SOFFIT = 0.90
+/** The edge beam hanging under each deck flank: depth, and how far in it
+ *  reaches from the soffit's outer edge. */
+const BEAM_H = 2.60
+const BEAM_W = 2.20
+/**
+ * How far the beam's top edge tucks ABOVE that soffit plate.
+ *
+ * Without it the two agree to the millimetre -- the beam's top corners land on
+ * the soffit's own edge vertices, which is a clean butt joint for exactly as
+ * long as `via` is 1 across the whole span. It is 1 across this one, but
+ * `wallFoot` slides the plate from 0.90 m down to 2.7 m as `via` falls off,
+ * and a plate that has dropped away from a beam pinned to where it used to be
+ * leaves a slot you can see the sky through. A quarter of a metre of overlap
+ * costs nothing, is never coplanar with anything, and makes the joint true for
+ * every value the plate can take.
+ */
+const BEAM_RISE = 0.25
+/** Transverse ribs: spacing along the span, and the depth band they occupy.
+ *  The band is below trackMesh's pier cross-head (which bottoms out 2.20 m
+ *  under the deck) and above the beam's own soffit, so the two never meet. */
+const RIB_STEP = 12.5
+const RIB_TOP = 2.45
+const RIB_BOT = 3.45
+/** How far the deck must stand over the road beneath to count as a span. */
+const SPAN_CLEAR = 6.0
+/** Structure carried past each end of the overlap, metres -- so the beams
+ *  finish past the lower road's edge rather than stopping dead on it. */
+const SPAN_ABUT = 9.0
+/** Pylon lateral as a fraction of the deck's half-width -- outboard of
+ *  trackMesh's own legs, which sit at 0.46 and reach 12.5 m. */
+const PYLON_LAT_F = 0.86
+/** Clearance a pylon keeps from every other part of the ribbon, metres. */
+const PYLON_GAP = 3.0
+/** Arc window around a pylon that counts as its own deck rather than as
+ *  something it could foul. trackMesh uses 60 samples for the same job. */
+const PYLON_SELF = 90
+/** The shade under the span: peak darkening and how far it feathers past the
+ *  deck's plan edge. */
+const SHADE_PEAK = 0.46
+const SHADE_PEN = 7.5
+/** Width of the molten chamfer along the beam's bottom outer corner. */
+const SEAM_W = 0.52
+
+type Smp = ThemeContext['track']['samples'][number]
+
+const _fa = new THREE.Vector3()
+const _fb = new THREE.Vector3()
+const _fn = new THREE.Vector3()
+const _fp = new THREE.Vector3()
+const _fq = new THREE.Quaternion()
+const _fe = new THREE.Euler()
+const _fs = new THREE.Vector3()
+/** Filled by `nearestUnder`; module scope so the search never allocates. */
+const _under = { d: 0, y: 0, w: 0, i: 0 }
+
+function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x }
+function smooth01(x: number): number { const t = clamp01(x); return t * t * (3 - 2 * t) }
+
+/**
+ * Emit a quad into `idx`, wound so that the face it makes points along
+ * (ox,oy,oz) rather than away from it.
+ *
+ * DERIVED, NOT REASONED ABOUT, and this is not caution. The first version of
+ * the molten seam picked its winding by hand and got it right -- on one flank.
+ * The other flank is the mirror image, so the same vertex order describes the
+ * opposite face and half the seam was back-face culled: invisible, no error,
+ * nothing in a typecheck or a draw-call count that would ever say so. The
+ * beams, the ribs and the corbels all have the same mirror in them, on a deck
+ * that is banking and climbing and turning at the same time. One cross product
+ * at build time settles all of it.
+ */
+function windQuad(
+  p: number[], idx: number[],
+  a: number, b: number, c: number, d: number,
+  ox: number, oy: number, oz: number,
+): void {
+  _fa.set(p[b * 3] - p[a * 3], p[b * 3 + 1] - p[a * 3 + 1], p[b * 3 + 2] - p[a * 3 + 2])
+  _fb.set(p[c * 3] - p[a * 3], p[c * 3 + 1] - p[a * 3 + 1], p[c * 3 + 2] - p[a * 3 + 2])
+  _fn.crossVectors(_fa, _fb)
+  if (_fn.x * ox + _fn.y * oy + _fn.z * oz >= 0) idx.push(a, b, c, a, c, d)
+  else idx.push(a, d, c, a, c, b)
+}
+
+/**
+ * Build the flyover, or build nothing.
+ *
+ * Every exit below is silent and complete: no geometry is created before the
+ * last test passes, so a tag that points somewhere the geometry does not
+ * support leaves the theme exactly as it was.
+ */
+function buildFlyover(ctx: ThemeContext, iLooper: number, iApex: number, iOver: number): void {
+  const S = ctx.track.samples
+  const m = S.length
+  const res = ctx.track.length / m
+  const N = (i: number): number => ((i % m) + m) % m
+  /** Separation between two samples along the lap, in samples, either way round. */
+  const arcGap = (a: number, b: number): number => Math.abs(((b - a + m + m / 2) % m) - m / 2)
+
+  /* ---- 1. WHICH ROAD DOES THE SPAN CROSS, AND WHERE EXACTLY.
+   *
+   * THE DECK ANCHOR IS `overpass` ITSELF, NOT A SEARCH.
+   *
+   * This used to hunt a window either side of the tag for the closest approach
+   * in plan between the two decks, on the reasoning that a node is 15-20 m of
+   * track and the tag is only roughly on the crossing. That reasoning holds
+   * for a crossing you can see the angle of. Ashkar's does not have one: the
+   * looper turns 441 degrees, so its exit comes back over the feed road at a
+   * SKEW OF 18 DEGREES and runs within four metres of that road's centreline
+   * for seventy metres. Over a near-parallel overlap the plan separation is a
+   * near-tie along its whole length -- measured, 1.64 m at the tag against
+   * 0.28 m fifty-seven metres downstream -- so "closest approach" stopped
+   * meaning "the crossing" and started meaning "wherever the noise floor
+   * happened to dip". It moved the span 57 m past the tag and aimed the
+   * forward walk at the looper's SECOND crossing.
+   *
+   * A tag does not have that problem. `overpass` is the node the author chose
+   * to mean "the bridge starts here", and it is the one piece of information
+   * in this whole routine that is not a measurement. Take it, and walk FORWARD
+   * only far enough to be genuinely over the road beneath -- which is d=0 on
+   * the shipped layout, and which also covers a future tag placed at the foot
+   * of the climb rather than on the crossing. ---- */
+  const MIN_ARC = Math.round(90 / res)
+  /** Plan distance from (x,z) to a stretch of lower deck, and that deck's
+   *  height and half-width where it is closest. */
+  const nearestIn = (win: number[], x: number, z: number): void => {
+    let bd2 = Infinity, bk = 0
+    for (let k = 0; k < win.length; k++) {
+      const s = S[win[k]]
+      const dx = x - s.pos.x, dz = z - s.pos.z
+      const d2 = dx * dx + dz * dz
+      if (d2 < bd2) { bd2 = d2; bk = k }
+    }
+    const s = S[win[bk]]
+    _under.d = Math.sqrt(bd2); _under.y = s.pos.y; _under.w = s.width; _under.i = win[bk]
+  }
+  // The feed road, seeded at `looper`. Wide, because this only has to FIND the
+  // crossing; the walk below gets a tighter window centred on what it finds.
+  const feed: number[] = []
+  const feedWin = Math.round(240 / res)
+  for (let e = -feedWin; e <= feedWin; e++) {
+    const j = N(iLooper + e)
+    if (arcGap(iOver, j) >= MIN_ARC) feed.push(j)
+  }
+  if (feed.length === 0) return
+  let ci = -1, cj = -1
+  for (let d = 0; d <= Math.round(140 / res); d++) {
+    const i = N(iOver + d)
+    nearestIn(feed, S[i].pos.x, S[i].pos.z)
+    if (S[i].pos.y - _under.y < SPAN_CLEAR) continue
+    // Over the road it crosses means over the part of it a car can drive on.
+    if (_under.d > _under.w) continue
+    ci = i; cj = _under.i; break
+  }
+  if (ci < 0) return
+
+  /* ---- 2. HOW FAR THE SPAN RUNS.
+   *
+   * Out from the anchor in both directions while the deck's centreline is
+   * still inside the lower road's DRIVEABLE WIDTH, stopping at the first
+   * sample that is not.
+   *
+   * That test used to carry a generous spill -- three quarters of the deck's
+   * own half-width past the lower road's edge -- on the reasoning that the
+   * deck's EDGE is still overhead even once its centreline is not. True, and
+   * unusable here. A 441-degree looper crosses its own feed road TWICE, and
+   * between the two crossings the decks part by only about forty metres; at
+   * three quarters of a 30 m half-width the allowance is 48 m, the walk never
+   * registers an exit at all, and the two bridges weld into one 290 m slab
+   * with a hole in the middle. Measured exits, forward, by spill: 107 m at
+   * zero, 116 m at a quarter, 225 m at a half. The cliff is not a tuning
+   * curve, it is the gap closing.
+   *
+   * So the span is exactly the overlap, and the structure is carried a fixed
+   * short abutment past each end so the beams finish past the road's edge
+   * instead of stopping dead on it. The centreline test has a third of the
+   * gap in hand rather than a couple of metres, and it means something you
+   * can say in one sentence.
+   *
+   * `looper-apex` still bounds the walk, but only as a runaway guard now:
+   * half the looper's own arc from its entry to its far side. On the shipped
+   * layout that is 130 m against a walk that ends at 107 m, so it does not
+   * bind -- which is the point. The old bound was a flat 70 m ceiling and it
+   * truncated this span by 34 m. ---- */
+  const underWin = Math.round(120 / res)
+  const under: number[] = []
+  for (let e = -underWin; e <= underWin; e++) under.push(N(cj + e))
+  const overhangs = (i: number): boolean => {
+    const s = S[i]
+    nearestIn(under, s.pos.x, s.pos.z)
+    return s.pos.y - _under.y >= SPAN_CLEAR && _under.d <= _under.w
+  }
+  /** Elevated, but no longer over the road: how the abutment is allowed to end. */
+  const stillHigh = (i: number): boolean => {
+    nearestIn(under, S[i].pos.x, S[i].pos.z)
+    return S[i].pos.y - _under.y >= SPAN_CLEAR
+  }
+  const loopArc = arcGap(iLooper, iApex) * res
+  const maxHalf = Math.round(Math.min(200, Math.max(40, loopArc * 0.5)) / res)
+  let iA = ci, iB = ci
+  for (let d = 1; d <= maxHalf; d++) { const i = N(ci - d); if (!overhangs(i)) break; iA = i }
+  for (let d = 1; d <= maxHalf; d++) { const i = N(ci + d); if (!overhangs(i)) break; iB = i }
+  const abut = Math.round(SPAN_ABUT / res)
+  for (let d = 1; d <= abut; d++) { const i = N(iA - 1); if (!stillHigh(i)) break; iA = i }
+  for (let d = 1; d <= abut; d++) { const i = N(iB + 1); if (!stillHigh(i)) break; iB = i }
+  const spanLen = arcGap(iA, iB)
+  // A span shorter than its own deck is wide is not a crossing anyone can read.
+  if (spanLen * res < 24) return
+  const run: number[] = []
+  for (let d = 0; d <= spanLen; d++) run.push(N(iA + d))
+
+  /* ---- 3. THE SPAN: EDGE BEAMS, RIBS AND CORBELS.
+   *
+   * Hand-built rather than merged from primitives for the same reason the
+   * magma veins are: this follows the ribbon's own banked frame at every
+   * station, so it inherits width and camber for free and cannot drift off
+   * the deck it is hanging from. One geometry, and it borrows
+   * `ctx.propMaterial` -- the shared flat-shaded basalt the scatter already
+   * pays for -- so it adds a draw call and no material. ---- */
+  const pos: number[] = []
+  const col: number[] = []
+  const idx: number[] = []
+  const pushV = (x: number, y: number, z: number, c: THREE.Color): number => {
+    const k = pos.length / 3
+    pos.push(x, y, z); col.push(c.r, c.g, c.b)
+    return k
+  }
+  const faceOut = (a: number, b: number, c: number, d: number, ox: number, oy: number, oz: number): void =>
+    windQuad(pos, idx, a, b, c, d, ox, oy, oz)
+  /** A box in one sample's frame: lateral along `right`, depth down `-normal`,
+   *  length along the tangent. */
+  const pushBox = (
+    s: Smp, lat: number, dep: number, hl: number, hd: number, hg: number, c: THREE.Color,
+  ): void => {
+    const tl = Math.hypot(s.tangent.x, s.tangent.y, s.tangent.z) || 1
+    const tx = s.tangent.x / tl, ty = s.tangent.y / tl, tz = s.tangent.z / tl
+    const b = pos.length / 3
+    for (let a = 0; a < 8; a++) {
+      const L = lat + ((a & 1) ? hl : -hl)
+      const D = dep + ((a & 2) ? hd : -hd)
+      const G = (a & 4) ? hg : -hg
+      pushV(
+        s.pos.x + s.right.x * L - s.normal.x * D + tx * G,
+        s.pos.y + s.right.y * L - s.normal.y * D + ty * G,
+        s.pos.z + s.right.z * L - s.normal.z * D + tz * G,
+        c,
+      )
+    }
+    const nx = -s.normal.x, ny = -s.normal.y, nz = -s.normal.z
+    faceOut(b + 1, b + 3, b + 7, b + 5, s.right.x, s.right.y, s.right.z)
+    faceOut(b + 0, b + 2, b + 6, b + 4, -s.right.x, -s.right.y, -s.right.z)
+    faceOut(b + 2, b + 3, b + 7, b + 6, nx, ny, nz)
+    faceOut(b + 0, b + 1, b + 5, b + 4, -nx, -ny, -nz)
+    faceOut(b + 4, b + 5, b + 7, b + 6, tx, ty, tz)
+    faceOut(b + 0, b + 1, b + 3, b + 2, -tx, -ty, -tz)
+  }
+
+  const cLit = new THREE.Color(BASALT_LIT)
+  const cRock = new THREE.Color(BASALT)
+  const cDark = new THREE.Color(OBSIDIAN)
+  const cVein = new THREE.Color(VEIN)
+
+  // Rings every ~3 m. Finer than that buys nothing on a shape with no
+  // cross-sectional detail, and the span is 100 m of it.
+  const stride = Math.max(1, Math.round(3 / res))
+  const rings: number[] = []
+  for (let d = 0; d <= spanLen; d += stride) rings.push(N(iA + d))
+  if (rings[rings.length - 1] !== iB) rings.push(iB)
+  if (rings.length < 3) return
+
+  // Four verts per flank per ring: outer-top, outer-bottom, inner-bottom,
+  // inner-top. The outer pair carry BASALT_LIT so the fascia is the one face
+  // on the whole structure that catches the key; the inner pair fall away to
+  // obsidian, which is what gives the underside somewhere to be dark.
+  const beam: number[][] = []
+  const seamPos: number[] = []
+  const seamIdx: number[] = []
+  for (const i of rings) {
+    const s = S[i]
+    const out = s.width + SPAN_OUT
+    const inn = out - BEAM_W
+    const row: number[] = []
+    for (const side of [-1, 1]) {
+      const at = (lat: number, dep: number, c: THREE.Color): number => pushV(
+        s.pos.x + s.right.x * lat - s.normal.x * dep,
+        s.pos.y + s.right.y * lat - s.normal.y * dep,
+        s.pos.z + s.right.z * lat - s.normal.z * dep,
+        c,
+      )
+      row.push(
+        at(side * out, SPAN_SOFFIT - BEAM_RISE, cLit),
+        at(side * out, SPAN_SOFFIT + BEAM_H, cLit),
+        at(side * inn, SPAN_SOFFIT + BEAM_H, cRock),
+        at(side * inn, SPAN_SOFFIT - BEAM_RISE, cDark),
+      )
+      // The seam rides the bottom outer corner as a chamfer standing slightly
+      // proud of both faces, so it reads from the flank AND from directly
+      // underneath without ever being coplanar with the beam.
+      seamPos.push(
+        s.pos.x + s.right.x * side * (out + 0.04) - s.normal.x * (SPAN_SOFFIT + BEAM_H - SEAM_W),
+        s.pos.y + s.right.y * side * (out + 0.04) - s.normal.y * (SPAN_SOFFIT + BEAM_H - SEAM_W),
+        s.pos.z + s.right.z * side * (out + 0.04) - s.normal.z * (SPAN_SOFFIT + BEAM_H - SEAM_W),
+        s.pos.x + s.right.x * side * (out - SEAM_W) - s.normal.x * (SPAN_SOFFIT + BEAM_H + 0.04),
+        s.pos.y + s.right.y * side * (out - SEAM_W) - s.normal.y * (SPAN_SOFFIT + BEAM_H + 0.04),
+        s.pos.z + s.right.z * side * (out - SEAM_W) - s.normal.z * (SPAN_SOFFIT + BEAM_H + 0.04),
+      )
+    }
+    beam.push(row)
+  }
+  for (let r = 1; r < beam.length; r++) {
+    const p = beam[r - 1], q = beam[r]
+    const s = S[rings[r]]
+    for (let k = 0; k < 2; k++) {
+      const o = k * 4, side = k === 0 ? -1 : 1
+      const rx = s.right.x * side, ry = s.right.y * side, rz = s.right.z * side
+      faceOut(p[o + 0], p[o + 1], q[o + 1], q[o + 0], rx, ry, rz)                       // fascia
+      faceOut(p[o + 1], p[o + 2], q[o + 2], q[o + 1], -s.normal.x, -s.normal.y, -s.normal.z) // soffit
+      faceOut(p[o + 2], p[o + 3], q[o + 3], q[o + 2], -rx, -ry, -rz)                    // inner
+      // Seam ribbon, two verts per flank per ring, in its own buffer. The
+      // chamfer faces down AND out, which is the whole point of cutting the
+      // corner with it, so that is the direction its winding is derived from.
+      const a0 = ((r - 1) * 2 + k) * 2, b0 = (r * 2 + k) * 2
+      windQuad(seamPos, seamIdx, a0, a0 + 1, b0 + 1, b0,
+        rx - s.normal.x, ry - s.normal.y, rz - s.normal.z)
+    }
+  }
+  // Close both ends so the beams are boxes and not troughs.
+  for (const [r, sgn] of [[0, -1], [beam.length - 1, 1]] as const) {
+    const row = beam[r]
+    const s = S[rings[r]]
+    const tl = Math.hypot(s.tangent.x, s.tangent.y, s.tangent.z) || 1
+    for (let k = 0; k < 2; k++) {
+      const o = k * 4
+      faceOut(row[o], row[o + 1], row[o + 2], row[o + 3],
+        sgn * s.tangent.x / tl, sgn * s.tangent.y / tl, sgn * s.tangent.z / tl)
+    }
+  }
+  // Transverse ribs. Full bay width, in the band between the pier cross-head
+  // above them and the beams' own soffit below.
+  const ribStep = Math.max(stride, Math.round(RIB_STEP / res))
+  for (let d = ribStep; d < spanLen; d += ribStep) {
+    const s = S[N(iA + d)]
+    const half = s.width + SPAN_OUT - BEAM_W
+    pushBox(s, 0, (RIB_TOP + RIB_BOT) / 2, half, (RIB_BOT - RIB_TOP) / 2, 0.85,
+      (d / ribStep) % 2 === 0 ? cRock : cLit)
+  }
+
+  /* ---- 4. PYLONS.
+   *
+   * Basalt, hexagonal, clustered -- the same columnar jointing the scatter's
+   * `propColumns` is built from, because a flyover on this planet is a flow
+   * that cooled standing up, not a structure someone welded.
+   *
+   * WHERE THEY STAND IS THE WHOLE PROBLEM. The span crosses its own feed road
+   * at 55 degrees and both decks are wide, so the obvious spot -- under the
+   * middle of the crossing -- is the middle of a road. Each station is
+   * therefore the FIRST sample walking out from the crossing whose columns
+   * clear the lower deck's own corridor, read off that deck's width, not off a
+   * constant; and every candidate is then tested against every other part of
+   * the ribbon in plan AND in height, so a column can stand under its own deck
+   * without the deck rejecting it. One InstancedMesh for all of them. ---- */
+  const pylonM: THREE.Matrix4[] = []
+  const standsClear = (x: number, z: number, r: number, topY: number, baseY: number, home: number): boolean => {
+    for (let j = 0; j < m; j++) {
+      if (arcGap(home, j) < PYLON_SELF) continue
+      const s = S[j]
+      // A road passing well over the column's head or under its foot is not in
+      // its way. Without this the span the column carries rejects it.
+      if (s.pos.y > topY + 2.5 || s.pos.y < baseY - 2.5) continue
+      const hl = Math.hypot(s.right.x, s.right.z) || 1
+      const need = ctx.corridor(s.width * hl) + r + PYLON_GAP
+      const dx = x - s.pos.x, dz = z - s.pos.z
+      if (dx * dx + dz * dz < need * need) return false
+    }
+    return true
+  }
+  // One column per direction out of the crossing, per flank: four at most, and
+  // fewer wherever the ground or the road below refuses one. Each flank walks
+  // out on its own rather than as a pair, because the span crosses at a skew --
+  // the flank the lower road recedes from clears it several metres sooner, and
+  // staggering the two is what the legs of a skew pier actually do.
+  for (const dir of [-1, 1]) {
+    const limit = dir < 0 ? arcGap(iA, ci) : arcGap(ci, iB)
+    for (const side of [-1, 1]) {
+      for (let d = Math.round(6 / res); d <= limit - Math.round(4 / res); d++) {
+        const st = N(ci + dir * d)
+        const s = S[st]
+        const lat = s.width * PYLON_LAT_F * side
+        const x = s.pos.x + s.right.x * lat
+        const z = s.pos.z + s.right.z * lat
+        const topY = s.pos.y + s.right.y * lat - s.normal.y * (SPAN_SOFFIT + BEAM_H + 0.70)
+        const h = topY - (ctx.ground(x, z).y - 1.8)
+        if (h < 5) continue
+        const r = Math.min(3.4, 1.9 + h * 0.042)
+        if (!standsClear(x, z, r, topY, topY - h, st)) continue
+        _fe.set(0, Math.atan2(s.tangent.x, s.tangent.z), 0)
+        _fq.setFromEuler(_fe)
+        _fp.set(x, topY - h, z)
+        _fs.set(r, h, r)
+        pylonM.push(new THREE.Matrix4().compose(_fp, _fq, _fs))
+        // The corbel is the one piece of a pier that must not stretch with it,
+        // so it rides in the span's own geometry instead of the instance.
+        pushBox(s, lat, SPAN_SOFFIT + BEAM_H + 0.40, r * 1.05, 0.45, 1.6, cRock)
+        break
+      }
+    }
+  }
+
+  /* ---- 5. THE SHADE. See the header: this is sky occlusion, so it sits
+   * directly under the span's plan footprint and is feathered rather than
+   * edged. It is the magma veins' own strip, built the same way and laid a
+   * hair above them so it darkens the seams too -- a crack that stayed bright
+   * under a bridge would give the whole thing away. ---- */
+  const spanHalf = S[ci].width + SPAN_OUT
+  const shadeWin = Math.round(Math.min(150, spanHalf * 2.6 + 34) / res)
+  const shadeStride = Math.max(1, Math.round(3 / res))
+  const sPos: number[] = []
+  const sCol: number[] = []
+  const sIdx: number[] = []
+  let rows = 0, peak = 0
+  for (let d = -shadeWin; d <= shadeWin; d += shadeStride) {
+    const s = S[N(cj + d)]
+    for (const side of [-1, 1]) {
+      const off = s.width * 0.99 * side
+      const x = s.pos.x + s.right.x * off + s.normal.x * 0.11
+      const y = s.pos.y + s.right.y * off + s.normal.y * 0.11
+      const z = s.pos.z + s.right.z * off + s.normal.z * 0.11
+      let bd2 = Infinity
+      for (const i of run) {
+        const dx = x - S[i].pos.x, dz = z - S[i].pos.z
+        const q = dx * dx + dz * dz
+        if (q < bd2) bd2 = q
+      }
+      const a = SHADE_PEAK * (1 - smooth01((Math.sqrt(bd2) - (spanHalf - 2)) / (SHADE_PEN + 2)))
+      if (a > peak) peak = a
+      sPos.push(x, y, z); sCol.push(1, 1, 1, a)
+    }
+    if (rows > 0) {
+      const a0 = (rows - 1) * 2
+      sIdx.push(a0, a0 + 1, a0 + 2, a0 + 1, a0 + 3, a0 + 2)
+    }
+    rows++
+  }
+
+  /* ---- 6. COMMIT. Nothing above touched the scene; everything below is
+   * owned, so the environment's own teardown disposes it. `propMaterial` is
+   * NOT owned here -- environment.ts already disposes it. ---- */
+  const spanGeo = new THREE.BufferGeometry()
+  spanGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  spanGeo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+  spanGeo.setIndex(idx)
+  spanGeo.computeVertexNormals()
+  spanGeo.computeBoundingSphere()
+  ctx.own(spanGeo)
+  const spanMesh = new THREE.Mesh(spanGeo, ctx.propMaterial)
+  spanMesh.name = 'flyover-span'
+  spanMesh.castShadow = ctx.quality.shadows
+  ctx.add(spanMesh)
+
+  if (pylonM.length > 0) {
+    const parts: THREE.BufferGeometry[] = []
+    const rnd = mulberry32(0x5f1ce7)
+    // Three shafts of a cooled flow, the subordinate two stopping short of the
+    // cap. Everything is prismatic between base and cap, so an instance scaled
+    // to 32 m of column has nothing in it that can stretch wrong.
+    for (let k = 0; k < 3; k++) {
+      const rr = 1.0 - k * 0.21
+      const hh = k === 0 ? 1 : 0.93 - k * 0.06
+      const ang = rnd() * Math.PI * 2
+      const dd = k === 0 ? 0 : 0.58 + rnd() * 0.28
+      parts.push(part(
+        new THREE.CylinderGeometry(rr * 0.86, rr, 1, 6, 1),
+        k === 1 ? BASALT_LIT : BASALT,
+        xf(Math.cos(ang) * dd, hh / 2, Math.sin(ang) * dd, rnd() * Math.PI, 0, 0, 1, hh, 1),
+      ))
+    }
+    const pylonGeo = merge(parts)
+    ctx.own(pylonGeo)
+    const inst = new THREE.InstancedMesh(pylonGeo, ctx.propMaterial, pylonM.length)
+    inst.name = 'flyover-pylons'
+    for (let k = 0; k < pylonM.length; k++) inst.setMatrixAt(k, pylonM[k])
+    inst.instanceMatrix.needsUpdate = true
+    inst.computeBoundingSphere()
+    inst.castShadow = ctx.quality.shadows
+    inst.receiveShadow = ctx.quality.shadows
+    ctx.add(inst)
+  }
+
+  if (rows > 1 && peak > 0.02) {
+    const shadeGeo = new THREE.BufferGeometry()
+    shadeGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3))
+    shadeGeo.setAttribute('color', new THREE.Float32BufferAttribute(sCol, 4))
+    shadeGeo.setIndex(sIdx)
+    shadeGeo.computeBoundingSphere()
+    ctx.own(shadeGeo)
+    // Warm-dark rather than black: the value rule this file opens with cuts
+    // both ways, and a hole punched in the deck is as wrong as a hot one.
+    const shadeMat = new THREE.MeshBasicMaterial({
+      color: 0x120906, vertexColors: true, fog: true,
+      transparent: true, depthWrite: false,
+    })
+    ctx.own(shadeMat)
+    const shadeMesh = new THREE.Mesh(shadeGeo, shadeMat)
+    shadeMesh.name = 'flyover-shade'
+    // Over the veins (2), so the seams go under the bridge with the road.
+    shadeMesh.renderOrder = 3
+    ctx.add(shadeMesh)
+  }
+
+  {
+    const seamGeo = new THREE.BufferGeometry()
+    seamGeo.setAttribute('position', new THREE.Float32BufferAttribute(seamPos, 3))
+    seamGeo.setIndex(seamIdx)
+    seamGeo.computeBoundingSphere()
+    ctx.own(seamGeo)
+    const seamMat = new THREE.MeshBasicMaterial({
+      color: cVein, fog: true, transparent: true, opacity: 0.52,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })
+    ctx.own(seamMat)
+    const seamMesh = new THREE.Mesh(seamGeo, seamMat)
+    seamMesh.name = 'flyover-seam'
+    seamMesh.renderOrder = 2
+    ctx.add(seamMesh)
+    // One breath every seventeen seconds, eight percent deep. The loops' rings
+    // run at 0.9 rad/s because a set piece you pass through can afford to be
+    // noticed; this one hangs over a corner a driver is committed in, and
+    // anything faster than this would be read as a signal.
+    ctx.onUpdate((f: FrameInfo) => {
+      seamMat.opacity = 0.52 + 0.08 * Math.sin(f.time * 0.37)
+    })
+  }
 }
 
 /** A soft radial blob, built once. The plume and nothing else uses it. */
@@ -561,9 +1254,11 @@ export const EMBERFALL_THEME: Theme = {
         cluster: { tag: 'fissure', span: 240, share: 0.44 },
       },
       {
-        name: 'lava-spire', geo: propSpire(pal, seg), count: 96,
+        name: 'lava-spire', geo: propSpire(pal, seg), count: 68,
         radius: 3.2, gap: 3.0, spread: 175, scale: [0.75, 2.1],
-        cluster: { tag: 'ashbeds', span: 420, share: 0.34 },
+        // No `cluster` -- see `ashSpires`, which is the gather instead and does
+        // it on the gravel rather than near a node.
+        landmark: ashSpires,
       },
       {
         name: 'obsidian-shards', geo: propShards(pal, seg), count: 210,

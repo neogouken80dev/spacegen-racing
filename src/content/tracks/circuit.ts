@@ -102,6 +102,12 @@ export interface CircuitOpts {
   defaults?: Attrs
   /** Shortest a straight may become after closure. */
   minStraight?: number
+  /**
+   * Least vertical gap allowed where the road crosses its own road, metres.
+   * A car is 2.4m and the deck it drives on has to sit under something, so
+   * the default is a bridge's worth rather than a clearance sticker's worth.
+   */
+  minClearance?: number
 }
 
 const DEG = Math.PI / 180
@@ -121,6 +127,18 @@ interface Built {
   tunnels: [number, number][]
   /** Uniform growth applied to the authored straights to make the lap close. */
   scale?: number
+  /** Where the road passes over its own road. Empty for an ordinary lap. */
+  crossovers: Crossover[]
+}
+
+/** One place where two distant parts of the lap share ground in plan. */
+export interface Crossover {
+  /** Lap distance of the lower deck and of the upper deck, metres. */
+  under: number
+  over: number
+  /** Vertical separation at the crossing, metres. Always positive. */
+  clearance: number
+  at: [number, number]
 }
 
 /**
@@ -286,7 +304,55 @@ function walk(segs: Seg[], L: number[], o: Required<CircuitOpts>, emit: boolean)
     const cz = z - sgn * s.r * Math.sin(h)
     const a0 = Math.atan2(x - cx, z - cz)
     const arc = Math.abs(s.deg) * DEG * s.r
-    const steps = Math.max(3, Math.round(arc / o.spacing))
+    /**
+     * A CORNER IS SAMPLED AT THE CIRCUIT'S SPACING, NOT AT A FIXED COUNT.
+     *
+     * This read `Math.max(3, Math.round(arc / o.spacing))`, and the constant
+     * 3 was a curvature spike waiting for a short corner to trip it. `Track`
+     * bakes a UNIFORM Catmull-Rom -- the tangent at a node is (next - prev)/2
+     * whatever the spacing -- so a run of 2m chords abutting a run of 24m
+     * chords does not read as "finely sampled", it reads as a hairpin. Ashkar
+     * measured it: three serpentine corners of 6-10 degrees each emitted their
+     * mandatory 3 nodes across an 11m arc, giving 2.0m chords next to 27.6m
+     * ones, a chord ratio of 13.73 against the 2.87 the same circuit shipped
+     * before they were added.
+     *
+     * So the spacing term leads, and the floor is expressed in DEGREES PER
+     * NODE rather than nodes: a corner has to be resolved finely enough that
+     * the spline through its nodes still has its radius, and 30 degrees is
+     * where that holds (a 45m hairpin turning 90 degrees gets 3 nodes and
+     * bakes at 46m). Both terms are floors, so whichever is stricter wins,
+     * and a corner is never emitted with zero nodes.
+     */
+    const steps = Math.max(1, Math.ceil(Math.abs(s.deg) / 30), Math.round(arc / o.spacing))
+    /**
+     * A KINK IS NOT A CORNER, and the builder should say so rather than emit
+     * one. Sampling at the spacing (above) stops a short corner from being
+     * over-resolved, but it cannot help a corner whose whole arc is shorter
+     * than a single node: the chord is then the arc, and a 6m chord between
+     * two 24m ones is still a curvature spike no matter how few nodes made it.
+     *
+     * The threshold is stated as the thing that actually matters -- the chord
+     * this corner will contribute -- rather than as a minimum angle or a
+     * minimum radius, because the same 11m arc can be a small angle at a big
+     * radius or a big angle at a tiny one and both are equally unbakeable.
+     *
+     * It is also a design message, not just a numeric one. A corner this
+     * short is under a fifth of a second at racing speed: the player cannot
+     * feel it, the AI's drift-hold gate cannot see it, and the only thing it
+     * does reliably is spike the curvature at its own joins. Ashkar shipped
+     * three of them as a "serpentine" and measured a chord ratio of 13.73 for
+     * it. Wanting a rhythm section is right; the way to get one is real
+     * corners on short straights, not small numbers.
+     */
+    if (arc / steps < o.spacing * 0.5) {
+      throw new Error(
+        `circuit: the ${s.deg}-degree corner at r=${s.r}m turns through only ${arc.toFixed(1)}m of ` +
+        `road, so it would emit a ${(arc / steps).toFixed(1)}m chord between ${o.spacing}m neighbours -- a ` +
+        `curvature spike, not a corner (it is ${(arc / 55).toFixed(2)}s at racing speed). Give it more ` +
+        `degrees or a smaller radius until its arc clears ${(o.spacing * 0.5).toFixed(0)}m, or make it a straight.`,
+      )
+    }
     const y0 = y, y1 = s.toY ?? y
     for (let i = 0; i < steps; i++) {
       const f = i / steps
@@ -313,7 +379,102 @@ function walk(segs: Seg[], L: number[], o: Required<CircuitOpts>, emit: boolean)
     length: dist,
     marks,
     tunnels,
+    crossovers: [],
   }
+}
+
+/**
+ * ===========================================================================
+ * WHERE DOES THE ROAD PASS OVER ITS OWN ROAD?
+ * ===========================================================================
+ *
+ * `tools/probe-selfclear.ts` already answers a version of this on the BAKED
+ * track, and it is the stricter instrument: it expands every sample across its
+ * ribbon and measures true 3-D distance, so it catches a rolled corkscrew
+ * brushing its own barrel, which nothing here would. This function exists
+ * anyway, and for a reason worth stating: the probe runs after the track is
+ * registered, and it reports a distance, not a fix. By then the designer is
+ * three steps downstream of the `toY` that was wrong.
+ *
+ * So this is the cheap, early, plan-only version -- transverse intersections of
+ * the centreline with itself -- and its whole job is to fail the BUILD with a
+ * message that names the two lap distances involved, so the answer is "raise
+ * the deck at 1840m" rather than "something overlaps".
+ *
+ * TWO THINGS IT DELIBERATELY DOES NOT COUNT.
+ *
+ * 1. COLLINEAR OVERLAP. A vertical `loop` runs `r*sin(th)` forward and back
+ *    along one line, so in plan it retraces its own path exactly. That is the
+ *    loop working, not a crossover, and the near-zero cross product of two
+ *    parallel segments skips it.
+ *
+ * 2. ANYTHING THE LAP REVISITS SOON. The same loop's stagger tilts that
+ *    retrace slightly off collinear, and a `cyclone`'s helix does the same, so
+ *    both WOULD register as a shallow crossing on the raw geometry. Both are
+ *    the road meeting itself a couple of hundred metres later -- which is the
+ *    set piece, by construction. A genuine crossover is two parts of the lap
+ *    that are FAR APART along it: the looper on Ashkar meets its own feed
+ *    straight most of a kilometre later. `APART` is where that line is drawn.
+ */
+const APART = 300
+
+function crossovers(nodes: TrackNode[]): Crossover[] {
+  const N = nodes.length
+  if (N < 8) return []
+  const cum: number[] = [0]
+  for (let i = 1; i < N; i++) {
+    const a = nodes[i - 1].p, b = nodes[i].p
+    cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+  }
+  const total = cum[N - 1] + Math.hypot(
+    nodes[0].p[0] - nodes[N - 1].p[0],
+    nodes[0].p[1] - nodes[N - 1].p[1],
+    nodes[0].p[2] - nodes[N - 1].p[2],
+  )
+  const apart = (i: number, j: number): number => {
+    const d = Math.abs(cum[i] - cum[j])
+    return Math.min(d, total - d)
+  }
+
+  const out: Crossover[] = []
+  for (let i = 0; i < N; i++) {
+    const a = nodes[i].p, b = nodes[(i + 1) % N].p
+    for (let j = i + 2; j < N; j++) {
+      if (i === 0 && j === N - 1) continue
+      if (apart(i, j) < APART) continue
+      const c = nodes[j].p, d = nodes[(j + 1) % N].p
+      const rx = b[0] - a[0], rz = b[2] - a[2]
+      const sx = d[0] - c[0], sz = d[2] - c[2]
+      const den = rx * sz - rz * sx
+      if (Math.abs(den) < 1e-9) continue
+      const qx = c[0] - a[0], qz = c[2] - a[2]
+      const t = (qx * sz - qz * sx) / den
+      const u = (qx * rz - qz * rx) / den
+      if (t <= 0 || t >= 1 || u <= 0 || u >= 1) continue
+      const yA = a[1] + (b[1] - a[1]) * t
+      const yB = c[1] + (d[1] - c[1]) * u
+      const lower = yA <= yB ? cum[i] : cum[j]
+      const upper = yA <= yB ? cum[j] : cum[i]
+      out.push({
+        under: r1(lower),
+        over: r1(upper),
+        clearance: r1(Math.abs(yA - yB)),
+        at: [r1(a[0] + rx * t), r1(a[2] + rz * t)],
+      })
+    }
+  }
+  // One physical crossing spans several node-segments on each deck; report it
+  // once, at its worst clearance, rather than as a cluster of near-duplicates.
+  const merged: Crossover[] = []
+  for (const c of out.sort((p, q) => p.under - q.under)) {
+    const prev = merged[merged.length - 1]
+    if (prev && Math.hypot(c.at[0] - prev.at[0], c.at[1] - prev.at[1]) < 60) {
+      if (c.clearance < prev.clearance) merged[merged.length - 1] = c
+      continue
+    }
+    merged.push(c)
+  }
+  return merged
 }
 
 /**
@@ -330,11 +491,38 @@ export function circuit(segs: Seg[], opts: CircuitOpts = {}): Built {
     heading: opts.heading ?? 0,
     defaults: opts.defaults ?? {},
     minStraight: opts.minStraight ?? 40,
+    minClearance: opts.minClearance ?? 9,
   }
 
+  /**
+   * THE HEADING CLOSES AT ANY WHOLE NUMBER OF TURNS, NOT ONLY ONE.
+   *
+   * This guard used to demand exactly +/-360, and that was a real restriction
+   * rather than a formality: it made a CROSSOVER unauthorable. The total
+   * turning of a closed curve is 360 times its turning number, and the Hopf
+   * Umlaufsatz says a curve that never touches itself has turning number
+   * +/-1. Contrapositive, which is the useful direction here: a lap whose
+   * corners sum to +/-720 MUST cross its own road somewhere. That is not a
+   * failure mode to be trapped, it is the only way to author the thing every
+   * real circuit with a flyover has -- Ashkar's large right-hand looper is a
+   * full 360 of right-hander hung off the lap, so the rest of the lap still
+   * owes its own 360 and the total is 720.
+   *
+   * So the sum must be a whole number of turns, and 2 is the ceiling: three
+   * would mean two separate crossings, each needing its own bridge, and
+   * nothing in the roster wants that yet. `crossovers` below then finds where
+   * the road meets itself and checks that one deck actually clears the other,
+   * which is the check that ACTUALLY matters and the one +/-360 was standing
+   * in for.
+   */
   const turnSum = segs.reduce((a, s) => a + (s.t === 'corner' ? s.deg : 0), 0)
-  if (Math.abs(Math.abs(turnSum) - 360) > 0.001) {
-    throw new Error(`circuit: corner angles sum to ${turnSum} degrees; they must sum to +/-360 or the heading cannot close`)
+  const turns = Math.abs(turnSum) / 360
+  if (Math.abs(turns - Math.round(turns)) > 1e-6 || turns < 1 || turns > 2) {
+    throw new Error(
+      `circuit: corner angles sum to ${turnSum} degrees. They must sum to a whole ` +
+      `number of turns -- +/-360 for an ordinary lap, or +/-720 for a lap with one ` +
+      `crossover (a looper hung off the circuit) -- or the heading cannot close.`,
+    )
   }
 
   const L0 = segs.filter((s) => s.t === 'straight').map((s) => (s as { len: number }).len)
@@ -404,6 +592,39 @@ export function circuit(segs: Seg[], opts: CircuitOpts = {}): Built {
     throw new Error(`circuit: lap fails to close by ${built.gap.toFixed(2)}m after correction`)
   }
   built.scale = scale
+
+  /**
+   * A CROSSOVER IS A BRIDGE OR IT IS A COLLISION, and the difference is one
+   * `toY` the designer either wrote or forgot. Failing here names both decks
+   * by lap distance, which is the number you need to fix it; discovering the
+   * same thing from probe-selfclear three steps later names neither.
+   *
+   * A winding-2 lap is REQUIRED to have one of these (see the turn-sum guard
+   * above), so a 720 that reports none means the looper closed back onto its
+   * own entry point tangentially instead of crossing past it -- geometrically
+   * the plan-view twin of the "it launches into itself" report that started
+   * all of this, and just as unplayable. Say so rather than shipping it.
+   */
+  built.crossovers = crossovers(built.nodes)
+  const tight = built.crossovers.filter((c) => c.clearance < o.minClearance)
+  if (tight.length) {
+    const c = tight[0]
+    throw new Error(
+      `circuit: the road crosses its own road at (${c.at[0]}, ${c.at[1]}) with only ` +
+      `${c.clearance}m between the decks (floor ${o.minClearance}m). The lower deck is at ` +
+      `${c.under}m round the lap and the upper at ${c.over}m -- give the segment at ${c.over}m ` +
+      `a toY that clears the one at ${c.under}m, or move the crossing.`,
+    )
+  }
+  if (turns === 2 && !built.crossovers.length) {
+    throw new Error(
+      `circuit: the corners sum to ${turnSum} degrees, so this lap has to cross its own ` +
+      `road somewhere -- but no crossing was found. That means the looper returned exactly ` +
+      `onto its own entry instead of past it: a 360-degree corner ends where it began. ` +
+      `Split the looper around a straight, or run its two halves at different radii, so the ` +
+      `exit clears the entry.`,
+    )
+  }
   return built
 }
 
