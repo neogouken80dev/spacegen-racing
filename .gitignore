@@ -12,5 +12,12 @@ shots/
 # text, and there is a new one most sessions.
 *.patch
 
+# Delivery renders. Plan sheets and before/after comparisons built by
+# tools/plot-track.ts and friends to hand to a human -- one or two most
+# sessions, superseded by the next layout change, and reproducible from the
+# track files that ARE committed. Same reasoning as the patches above.
+*-before-after.png
+track-plans*.png
+
 # design benches (tools/bench) build output
 tools/bench/dist/
