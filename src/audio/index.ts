@@ -82,9 +82,29 @@ export const MUSIC: Record<string, { bed: string; final?: string }> = {
   cryostatic: { bed: 'audio/music/frosthelm.mp3' },
   aetherion: { bed: 'audio/music/namaresh.mp3' },
   hollowchoir: { bed: 'audio/music/centurion-prime.mp3' },
-  // No bed of its own yet. `MUSIC` is looked up per track and a miss is
-  // handled upstream, so a circuit without music is silent rather than broken;
-  // pointing it at a neighbour's bed would be worse than silence.
+  emberfall: { bed: 'audio/music/ashkar.mp3' },
+  abyssal: { bed: 'audio/music/meridian-deep.mp3' },
+  halcyon: { bed: 'audio/music/halcyon-bay.mp3' },
+  neonspire: { bed: 'audio/music/zhen-9.mp3' },
+  // All eight circuits now have a bed. The keys are IDS and the filenames are
+  // DISPLAY NAMES, which looks like an inconsistency and is the deliberate one
+  // recorded in `spacegen-racing-music-and-track-names.md`: an id is written
+  // into every saved leaderboard row and four determinism gates, so it cannot
+  // be renamed to match a name the player sees, while a filename is only ever
+  // read by this table.
+  //
+  // THE FOUR NEW BEDS ARE SHORTER THAN THEIR RACES AND THAT IS FINE.
+  // Each runs ~3:00 against a 4:35-4:38 race on Ashkar, Meridian Deep and
+  // Zhen-9 (three 92s laps), so the bed loops once in the back half of lap 2.
+  // `setMusic` loops by default and the loop is seamless -- Chrome strips mp3
+  // encoder padding rather than surfacing it, which `probe-music.mjs` asserts
+  // by checking decoded duration against the container within 100ms. Halcyon
+  // Bay is 3:04 against a 3:04 race and effectively never repeats.
+  //
+  // `final` is still unset everywhere. Nothing crossfades on lap change yet,
+  // so a final-lap variant would have nowhere to be swapped in; the bed keeps
+  // playing. Dropping in a `<name>-final.mp3` and naming it here is the whole
+  // of turning it on once there is a crossfade to turn it on with.
 }
 
 export const MUSIC_TITLE = 'audio/music/title.mp3'

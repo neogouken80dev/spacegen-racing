@@ -36,6 +36,9 @@
 import { chromium } from 'playwright'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
+import { readFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { join, extname } from 'node:path'
 
 const ROOT = new URL('../dist/', import.meta.url).pathname
@@ -46,20 +49,61 @@ const MIME = {
   '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav',
 }
 /**
- * Container durations, from ffprobe on the delivered files. The decoded buffer
- * is compared against these: a mismatch is padding or truncation, and either
- * one is a stutter at the loop.
+ * WHAT THIS PROBE COVERS IS DERIVED, NOT TYPED OUT.
+ *
+ * Two hand-maintained lists used to live here and both rotted the moment the
+ * content moved, in the two ways a hand-maintained list can.
+ *
+ * 1. THE LIST OF FILES WENT STALE SILENTLY. It named the four circuits that
+ *    existed when it was written, under a comment promising "EVERY file, not
+ *    just the three that happen to be on the default path", and four more
+ *    circuits shipped beds that this probe then never opened. A gate that
+ *    claims completeness and quietly covers half is worse than one that covers
+ *    half and says so. The set now comes from `src/audio/index.ts` itself --
+ *    every `audio/....mp3` literal the game names, minus the VO, which is not
+ *    recorded yet (HAS_VO is false) and would 404 by design.
+ *
+ * 2. THE DURATIONS WERE KEYED BY BASENAME, AND TWO REAL FILES COLLIDE.
+ *    `audio/sfx/finish.mp3` is a 1.6s finish-line effect and
+ *    `audio/sting/finish.mp3` is the 14.5s results sting. Keyed by basename
+ *    the effect was measured against the sting's length and the probe reported
+ *    a 12.9s drift on a file that is completely correct -- a false alarm on
+ *    every run, which is exactly how a gate teaches people to ignore it.
+ *    Keys are full URLs now, and the durations are measured with ffprobe at
+ *    run time rather than pasted, so a re-mastered file cannot disagree with a
+ *    number somebody forgot to update. `tools/build-sfx.mjs` already requires
+ *    ffmpeg, so this adds no new dependency.
  */
-const SOURCE_SECONDS = {
-  'title.mp3': 119.088,
-  'garage.mp3': 120.0,
-  'elkarim.mp3': 179.64,
-  'frosthelm.mp3': 179.328,
-  'namaresh.mp3': 119.544,
-  'centurion-prime.mp3': 179.64,
-  'victory.mp3': 14.976,
-  'finish.mp3': 14.544,
+const AUDIO_SRC = readFileSync(new URL('../src/audio/index.ts', import.meta.url), 'utf8')
+const NAMED = [...new Set([...AUDIO_SRC.matchAll(/'(audio\/[^']+\.mp3)'/g)].map((m) => m[1]))]
+  // VO is unrecorded (HAS_VO false). Including it would be 20 deliberate 404s.
+  .filter((u) => !u.startsWith('audio/vo/'))
+
+/**
+ * Container duration of a shipped file, seconds, measured not remembered.
+ *
+ * FROM `dist/`, NOT `public/`, because `dist/` is what the server below
+ * actually serves. Reading the expectation from one tree and the audio from
+ * another is how a probe ends up comparing a file to a different file: a
+ * sabotage run that deleted a bed from `public/` measured nothing, served the
+ * previous build's copy out of `dist/`, and reported zero errors. If the two
+ * trees disagree the build is stale, and that is worth failing on rather than
+ * papering over -- see the missing-source error below.
+ */
+function sourceSeconds(url) {
+  const file = new URL(`../dist/${url}`, import.meta.url)
+  if (!existsSync(file)) return undefined
+  try {
+    const out = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'default=nw=1:nk=1', fileURLToPath(file)], { encoding: 'utf8' })
+    const v = Number.parseFloat(out.trim())
+    return Number.isFinite(v) ? v : undefined
+  } catch {
+    return undefined   // no ffprobe on this machine; reported below, not thrown
+  }
 }
+const SOURCE_SECONDS = Object.fromEntries(
+  NAMED.map((u) => [u, sourceSeconds(u)]).filter(([, v]) => v !== undefined))
 
 const served = []
 const server = createServer(async (req, res) => {
@@ -92,7 +136,7 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
 await page.goto(url, { waitUntil: 'load', timeout: 30000 })
 await page.waitForTimeout(2500)
 
-const out = await page.evaluate(async () => {
+const out = await page.evaluate(async (NAMED_URLS) => {
   const g = window.__GAME__
   const audio = g && g.audio
   if (!audio) return { err: 'no audio system' }
@@ -148,15 +192,11 @@ const out = await page.evaluate(async () => {
   const bedLoaded = await waitFor('audio/music/elkarim.mp3')
   const bed = await peakOver(1500)
 
-  // EVERY file, not just the three that happen to be on the default path. A
+  // EVERY file the game names, derived above rather than listed here. A
   // circuit whose bed is misnamed is silent only on that circuit, which is
-  // exactly the kind of thing that ships.
-  const ALL = [
-    'audio/music/title.mp3', 'audio/music/garage.mp3',
-    'audio/music/elkarim.mp3', 'audio/music/frosthelm.mp3',
-    'audio/music/namaresh.mp3', 'audio/music/centurion-prime.mp3',
-    'audio/sting/victory.mp3', 'audio/sting/finish.mp3',
-  ]
+  // exactly the kind of thing that ships, and a list that has to be edited by
+  // hand when a circuit is added is how it ships anyway.
+  const ALL = NAMED_URLS
   stage.preload(ALL)
   const missing = []
   for (const u of ALL) if (!(await waitFor(u, 25000))) missing.push(u)
@@ -171,7 +211,9 @@ const out = await page.evaluate(async () => {
     for (const [u, lp] of stage.loops) {
       const b = stage.buffers.get(u)
       loops.push({
-        u: u.split('/').pop(),
+        // FULL URL, not the basename. audio/sfx/finish.mp3 and
+        // audio/sting/finish.mp3 are two different real files.
+        u,
         start: +lp.start.toFixed(4),
         end: +lp.end.toFixed(4),
         dur: b ? +b.duration.toFixed(4) : 0,
@@ -181,7 +223,7 @@ const out = await page.evaluate(async () => {
   return { silence: +silence.toFixed(4), title: +title.toFixed(4),
            bed: +bed.toFixed(4), victory: +victory.toFixed(4),
            titleLoaded, bedLoaded, missing, loops }
-})
+}, NAMED)
 
 console.log(JSON.stringify(out, null, 2))
 const audioReqs = served.filter((s) => s.p.startsWith('/audio/'))
@@ -203,7 +245,7 @@ else {
     // The seam. A decoded buffer that does not match its source has either
     // gained padding or lost audio, and both are audible once a minute.
     const src = SOURCE_SECONDS[l.u]
-    if (src === undefined) continue
+    if (src === undefined) continue   // not a file this run is measuring
     const drift = Math.abs(l.dur - src)
     // Up to three mp3 frames of encoder delay plus padding is 72ms at 48kHz,
     // and Chrome strips exactly that. Anything past 100ms is not the codec --
@@ -212,10 +254,24 @@ else {
     if (drift > 0.10) {
       errors.push(`${l.u}: decoded ${l.dur}s against a ${src}s source -- ${drift.toFixed(3)}s adrift`)
     }
-    console.log(`  ${l.u.padEnd(22)} decoded ${l.dur}s vs source ${src}s  (${(drift * 1000).toFixed(0)}ms)`)
+    console.log(`  ${l.u.padEnd(30)} decoded ${l.dur}s vs source ${src}s  (${(drift * 1000).toFixed(0)}ms)`)
   }
 }
 for (const r of audioReqs) if (!r.ok) errors.push(`404 on ${r.p}`)
+
+/**
+ * EVERY FILE THE GAME NAMES MUST HAVE BEEN MEASURABLE.
+ *
+ * Without this the probe's coverage is silently conditional: a bed missing
+ * from the build has no source duration, so the drift check skips it, and if
+ * nothing else happens to request it the run is green. That is precisely the
+ * failure a music probe exists to catch -- a circuit that is silent only on
+ * that circuit -- so a name with no file behind it is an error in its own
+ * right, whatever else the run found.
+ */
+for (const u of NAMED) {
+  if (SOURCE_SECONDS[u] === undefined) errors.push(`no file behind ${u} -- named in src/audio/index.ts, absent from dist/ (stale build?)`)
+}
 
 console.log(`\nerrors: ${errors.length}`, errors.slice(0, 5))
 await browser.close()
