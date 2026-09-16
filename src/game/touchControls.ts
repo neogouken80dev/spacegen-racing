@@ -121,19 +121,55 @@ export function axisCurve(raw: number, deadzone: number): number {
 /**
  * Floating stick travel, CSS px, from origin to full lock.
  *
- * WAS 70, WHICH IS A GAMEPAD'S THROW ON A SURFACE THAT HAS NONE. A thumbstick
- * has a rim you can feel and a spring that tells you how far you have pushed
- * it; a finger on glass has neither, so the only feedback about how much lock
- * is on is the car's response -- and 70px of travel put most of the useful
- * range beyond where a thumb naturally reaches from a resting grip. Reported
- * as the mobile controls feeling slow to respond.
+ * History, because this is the second report of the same feel:
  *
- * 50px is roughly a thumb's comfortable arc from a held position, so full lock
- * is reachable without regripping and half lock lands where a thumb is already
- * going.
+ *   70  A GAMEPAD'S THROW ON A SURFACE THAT HAS NONE. A thumbstick has a rim
+ *       you can feel and a spring that tells you how far you have pushed it; a
+ *       finger on glass has neither, so the only feedback about how much lock
+ *       is on is the car's response -- and 70px put most of the useful range
+ *       beyond where a thumb reaches from a resting grip.
+ *   50  The first answer to "the mobile controls feel slow to respond". It
+ *       halved the travel and straightened the curve, and it was a real gain
+ *       (x2.0-2.4 at 20-25px). It was reported as STILL sluggish.
+ *   38  This pass. 50 was not wrong, it was measured against the wrong
+ *       question: "can a thumb reach full lock" (yes, it always could) rather
+ *       than "where does ORDINARY CORNERING sit in the travel".
+ *
+ * THE MEASUREMENT THAT PICKED 38. `tools/probe-stick.ts` chains the corner
+ * radius of every curved 10m of three circuits to the speed the sim actually
+ * carries there, through the vehicle's own speed falloff, to the lock that
+ * corner demands -- then back through this curve to px of thumb. At 50px:
+ *
+ *   median curved bin   0.28-0.43 lock   19px   38% of travel
+ *   p90                 0.57-0.64        31px   63%
+ *   tightest corners    0.81-0.88        43px   86%
+ *
+ * So the pad's whole working range was its OUTER HALF, and holding a tight
+ * corner meant parking the thumb at 86% of travel for the length of the
+ * corner -- the one part of the range where a thumb with no rim has the least
+ * control and has to work hardest to stay put. That is what "sluggish when
+ * trying to make turns" is: not a slow response and not a missing full lock,
+ * but a gear ratio that puts every corner at the end of the stroke.
+ *
+ * 38 IS DERIVED, NOT PICKED. `.sgtc-base` is a 150px well and `.sgtc-knob` a
+ * 68px knob, so the knob's edge meets the rim at 75 - 34 = 41px of centre
+ * travel. At 50 the drawn well was a LIE -- the player hit the visible rim at
+ * about 0.80 of lock and the last fifth lived past it, which reads exactly
+ * like a stick that has run out. The well is now sized from this constant
+ * (see CSS) so full lock and the rim are the same place and cannot drift
+ * apart again.
  */
-const STICK_RADIUS = 50
-const STICK_DEADZONE = 0.06
+export const STICK_RADIUS = 38
+/**
+ * 0.08 of 38px is 3.0px, which is what 0.06 of 50px was. The rest shoulder is
+ * deliberately unchanged IN ABSOLUTE TERMS: a thumb's jitter while it sits on
+ * the glass is a distance, not a fraction, so shortening the travel without
+ * moving this would have made a resting thumb steer the car.
+ */
+const STICK_DEADZONE = 0.08
+
+/** Knob radius in CSS px. The well is drawn from this plus STICK_RADIUS. */
+const STICK_KNOB_R = 34
 
 /**
  * THE TOUCH STICK'S OWN RESPONSE, and deliberately not `axisCurve`.
@@ -142,27 +178,72 @@ const STICK_DEADZONE = 0.06
  * GAMEPAD: a physical stick self-centres, drifts, and is held under tension, so
  * a soft shoulder out of the deadzone stops a resting thumb steering the car.
  * Applied to a touch surface it is a tax -- a finger is exactly where the
- * player put it, and the softening means a quarter of the travel returns about
- * a seventh of the lock.
+ * player put it.
  *
- * This is 88% linear, which is the "almost 1:1" that was asked for: half travel
- * is half lock to within a percent. The remaining 12% of smoothstep, plus a
- * deadzone cut from 0.10 to 0.06, is the smallest shoulder that still stops a
- * thumb resting on the pad from nudging the nose.
+ * WAS 88% LINEAR + 12% SMOOTHSTEP, and smoothstep is SLOW-EARLY: it takes
+ * slope away from the start of the travel and gives it to the end. That is the
+ * right shape for a self-centring stick and the wrong one here, because the
+ * measurement above says the corners live in the first two thirds and full
+ * lock is the rare case (1-2% of a lap's open-steering frames).
  *
- * Measured, displacement in px -> steer, old against new:
- *   10px  0.023 -> 0.138   (x6.0)     30px  0.328 -> 0.579  (x1.8)
- *   20px  0.149 -> 0.354   (x2.4)     50px  0.730 -> 1.000  (x1.4)
- *   25px  0.233 -> 0.466   (x2.0)     70px  1.000 -> 1.000  (full lock at 50)
+ * So the blend is flipped to FAST-EARLY: 65% linear + 35% of `1-(1-n)^2`,
+ * which is `1.35n - 0.35n^2`. Exactly 1.0 at the rim, monotonic, and slope
+ * 1.35 rather than 0.88 leaving the deadzone. Not an expo curve (`n^g`), which
+ * has infinite slope at zero and would make a thumb that is merely resting
+ * askew into a steering input.
+ *
+ * NOT TAKEN FURTHER. At 40% weight and 36px the low end reaches 2.0-2.3x the
+ * shipped gain, and the roster's drift-charged boost economy is tuned around
+ * the current steering; a twitchy car is a worse outcome than a slightly slow
+ * one. This lands at 1.5-1.8x through the band a corner actually uses.
+ *
+ * Measured, displacement in px -> steer, the 50px build against this one:
+ *    5px  0.038 -> 0.075  (x2.0)    25px  0.466 -> 0.707  (x1.5)
+ *   10px  0.138 -> 0.254  (x1.8)    30px  0.579 -> 0.828  (x1.4)
+ *   15px  0.223 -> 0.383  (x1.7)    38px  0.799 -> 1.000  (full lock at 38)
+ *   20px  0.354 -> 0.573  (x1.6)    50px  1.000 -> 1.000
  */
 export function stickCurve(raw: number, deadzone: number): number {
   const a = raw < 0 ? -raw : raw
   if (a <= deadzone) return 0
   let n = (a - deadzone) / (1 - deadzone)
   if (n > 1) n = 1
-  const s = n * n * (3 - 2 * n)
-  const out = 0.88 * n + 0.12 * s
+  const out = 1.35 * n - 0.35 * n * n
   return raw < 0 ? -out : out
+}
+
+/**
+ * Thumb displacement along the steering axis, CSS px -> steer.
+ *
+ * Exists so the mapping a player actually feels is one call that a test and a
+ * probe can both reach. It used to be spelled out inside the pointermove
+ * handler, which meant the only way to measure it was to drive a browser.
+ */
+export function stickSteerFrom(dx: number): number {
+  return stickCurve(dx / STICK_RADIUS, STICK_DEADZONE)
+}
+
+/**
+ * New origin for ONE AXIS of the floating stick after the thumb reaches `p`.
+ *
+ * The origin drags only once the thumb is past full travel, which is what lets
+ * a long swipe keep steering instead of running out of stroke, and what lets
+ * the stick be re-aimed mid-corner without lifting.
+ *
+ * TAKING ONE AXIS AT A TIME IS THE POINT, not a simplification. This used to
+ * clamp the (dx, dy) VECTOR to a circle of STICK_RADIUS and then steer on the
+ * clamped dx, so the steering ceiling was not 1.0 -- it was cos(angle of the
+ * gesture). A thumb pivots about the knuckle and traces an arc rather than
+ * sliding along a ruler, and `tools/probe-stick.ts` measured that arc capping
+ * full lock at 0.915-0.982, with a deliberate 45-degree push capped at 0.698.
+ * Two independent scalar calls make the coupling structurally impossible
+ * rather than merely absent.
+ */
+export function stickOrigin(origin: number, p: number): number {
+  const d = p - origin
+  if (d > STICK_RADIUS) return p - STICK_RADIUS
+  if (d < -STICK_RADIUS) return p + STICK_RADIUS
+  return origin
 }
 
 /** Tilt steering, degrees of roll. */
@@ -299,11 +380,18 @@ const CSS = `
 .sgtc[data-scheme="tilt"][data-tilt="off"] .sgtc-zone{display:block}
 .sgtc-base,.sgtc-knob{position:absolute;left:0;top:0;border-radius:50%;
   pointer-events:none;opacity:0;transition:opacity .13s ease-out}
-.sgtc-base{width:150px;height:150px;margin:-75px 0 0 -75px;
+/* THE WELL IS SIZED FROM THE TRAVEL, never typed in. The knob's edge has to
+   meet the rim at exactly full lock, or the drawn control lies about how much
+   lock is left: at 50px of travel in a 150px well the player reached the
+   visible rim at about 0.80 and the last fifth of the lock lived outside it,
+   which reads as a stick that has run out of range. */
+.sgtc-base{width:${2 * (STICK_RADIUS + STICK_KNOB_R)}px;height:${2 * (STICK_RADIUS + STICK_KNOB_R)}px;
+  margin:${-(STICK_RADIUS + STICK_KNOB_R)}px 0 0 ${-(STICK_RADIUS + STICK_KNOB_R)}px;
   border:2px solid rgb(var(--cy) / .32);
   background:radial-gradient(circle,rgba(10,26,48,.36),rgba(10,26,48,.04) 72%);
   box-shadow:inset 0 0 30px rgb(var(--cy) / .18)}
-.sgtc-knob{width:68px;height:68px;margin:-34px 0 0 -34px;
+.sgtc-knob{width:${2 * STICK_KNOB_R}px;height:${2 * STICK_KNOB_R}px;
+  margin:${-STICK_KNOB_R}px 0 0 ${-STICK_KNOB_R}px;
   border:2px solid rgb(var(--cy) / .85);
   background:radial-gradient(circle at 50% 34%,rgb(var(--cy) / .55),rgba(10,26,48,.55));
   box-shadow:0 0 26px rgb(var(--cy) / .5)}
@@ -757,21 +845,23 @@ class TouchControlsImpl implements TouchControls {
       const e = ev as PointerEvent
       if (e.pointerId !== this.stickId) return
       e.preventDefault()
-      let dx = e.clientX - this.stickOx
-      let dy = e.clientY - this.stickOy
-      const len = Math.sqrt(dx * dx + dy * dy)
-      if (len > STICK_RADIUS) {
-        const k = STICK_RADIUS / len
-        dx *= k
-        dy *= k
-        // Drag the origin along so a long swipe never runs out of travel.
-        this.stickOx = e.clientX - dx
-        this.stickOy = e.clientY - dy
-        const bx = this.stickOx - this.zoneLeft
-        const by = this.stickOy - this.zoneTop
+      // Each axis clamps and drags on its own -- see stickOrigin for why that
+      // is a fix rather than a tidy-up. dx steers; dy only carries the knob,
+      // which is what the `.sgtc-pad` watermark has always claimed it did.
+      const ox = stickOrigin(this.stickOx, e.clientX)
+      const oy = stickOrigin(this.stickOy, e.clientY)
+      // The well only moves on the frames the origin actually drags, which is
+      // the minority of them; the knob below moves on all of them.
+      if (ox !== this.stickOx || oy !== this.stickOy) {
+        this.stickOx = ox
+        this.stickOy = oy
+        const bx = ox - this.zoneLeft
+        const by = oy - this.zoneTop
         this.base.style.transform = 'translate3d(' + bx + 'px,' + by + 'px,0)'
       }
-      this.stickSteer = stickCurve(dx / STICK_RADIUS, STICK_DEADZONE)
+      const dx = e.clientX - this.stickOx
+      const dy = e.clientY - this.stickOy
+      this.stickSteer = stickSteerFrom(dx)
       const kx = this.stickOx + dx - this.zoneLeft
       const ky = this.stickOy + dy - this.zoneTop
       this.knob.style.transform = 'translate3d(' + kx + 'px,' + ky + 'px,0)'

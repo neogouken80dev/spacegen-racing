@@ -338,11 +338,77 @@ export const HALCYON_THEME: Theme = {
 
   sky: {
     band: 'strata',
-    // The whole planet in one value. This is the band that makes it golden hour
-    // rather than midday, and it is the strongest lever in the file.
-    horizonColor: 0xff9a48,
-    horizonSpan: [0.0, 0.26],
-    horizonGain: 1.10,
+    /**
+     * THE HORIZON BAND, AND WHY IT IS NO LONGER THE BRIGHTEST IN THE GAME.
+     *
+     * Reported from play: "the colour bloom of horizon is quite strong and
+     * really makes it hard to see with the light bloom". It was, and the cause
+     * was not the bloom pass being too strong -- it was THIS BAND PUSHING THE
+     * SKY OVER THE BLOOM GATE, which on this circuit means over the whole width
+     * of the frame at once.
+     *
+     * UnrealBloomPass's high pass is `mix(black, texel, smoothstep(threshold,
+     * threshold + 0.01, luma(texel)))`. That 0.01 makes it a CLIFF, not a ramp,
+     * and it passes the pixel's WHOLE value, not the part above the threshold.
+     * A sky at scene-linear 0.79 contributes nothing; the same sky at 0.80
+     * contributes all 0.80 of itself, blurred over a third of the frame and
+     * added back at strength 0.98.
+     *
+     * MEASURED (tools/probe-horizon.mjs --track=halcyon --aim=sun --sweep, high
+     * tier, camera level at the sun's azimuth, sim frozen, three frames per
+     * condition, `full` re-shot last and repeatable to 0.5/255):
+     *
+     *                              sky mean   ground mean   ground detail
+     *   shipped chain                 186.0         145.9            1.02
+     *   bloom off (glare 0)           124.8          43.1            2.58
+     *   horizon band off              177.4         123.6            1.25
+     *   fog off (density 0)           186.0         144.5            1.03
+     *
+     * Read the second row: the bloom was adding 103/255 to the GROUND -- the
+     * road, the barriers, the boards -- and taking 60% of its local contrast
+     * with it. Read the fourth: the fog was doing nothing at all, so the
+     * separate report that "the fog washes both the arrow and the wall toward
+     * the fog colour" was measured and is false; it is this, spilling off the
+     * sky onto them. And read the third: switching the band off moved the sky
+     * by 8.6/255, which is nothing to look at and was everything to the gate.
+     *
+     * The threshold sweep is what names the layer. Walking the bloom threshold
+     * up from the shipped 0.78 collapses the ground from 145.8 (at 0.78) to
+     * 125.4 (at 0.90) to 117.9 (at 1.05) to 72.6 (at 1.25): most of the energy
+     * is coming from pixels sitting just over the gate, and the sky is the only
+     * thing in this frame with that much area. Halcyon's sky anchors on
+     * `fogColor` 0xa9bcc0, scene-linear luma 0.474 -- the brightest fog anchor
+     * in the roster by a factor of ten -- so the band only had to add 0.31 to
+     * clear a 0.78 gate, and at gain 1.10 it was adding 0.40.
+     *
+     * THE FIX KEEPS GOLDEN HOUR, because it costs the band luminance and not
+     * hue. Three changes, and the third is not a consolation prize:
+     *
+     *   colour  0xff9a48 -> 0xff7a30. A deeper, more saturated orange: 16% less
+     *           scene-linear luma for a hue that reads MORE like a low sun, not
+     *           less. The pale one was halfway to cream.
+     *   gain    1.10 -> 0.68. 0.68 x head(0.735) x 0.417 = 0.208 on top of the
+     *           0.474 anchor = 0.682, which is under the MEDIUM tier's 0.72 gate
+     *           as well as the high tier's 0.78. The phone matters here: its
+     *           threshold is the lower of the two.
+     *   span    [0.0, 0.26] -> [0.0, 0.34]. The warmth now reaches a third
+     *           further up the sky at a lower peak, so the frame keeps the depth
+     *           of colour the band was there for while its brightest point sits
+     *           below the gate.
+     *
+     * This is still the brightest and warmest sky in the game by a distance --
+     * the anchor it sits on is ten times any other planet's and is in the track
+     * def, not here. What it no longer is, is a bloom source the width of the
+     * screen.
+     *
+     * NOT CHANGED, deliberately: the sun's own scatter lobes still clear the
+     * gate within about 25 degrees of the disc. Looking into a low sun and
+     * having it glare is the image this circuit exists for; having the entire
+     * horizon do it at every heading was the bug.
+     */
+    horizonColor: 0xff7a30,
+    horizonSpan: [0.0, 0.34],
+    horizonGain: 0.68,
     celestial: {
       bodies: [
         {

@@ -3088,9 +3088,11 @@
    WHERE THE MOMENT SITS, AND WHY IT MOVED TWICE.
 
    30% read as mid-screen and sat on the car; reported from play on both
-   desktop and phone. It is now 25% on a desktop viewport -- clear of the tools
+   desktop and phone. It went to 25% on a desktop viewport -- clear of the tools
    cluster (y 0.014-0.075) and the crosswind strip (y 0.086-0.115) by a wide
    margin, and high enough that the racing line underneath it is visible.
+   (25% is now the BASE the rise in the next note is taken off, not the
+   shipping value; see there.)
 
    On a phone it goes higher still and the type halves, because the same 25%
    of a 390px-tall landscape viewport is 98px down a screen the car occupies
@@ -3098,10 +3100,71 @@
    enormous. Both are handled in the media block below rather than by a
    different widget.
    =========================================================================== */
+/* ===========================================================================
+   AND WHY IT MOVED A THIRD TIME: 25% WAS STILL ON THE HORIZON.
+
+   Reported from play: the drift block covers the horizon. Measured
+   (tools/probe-ticker.mjs, a real held tier-3 slide so the panel is lit with a
+   real six-figure number in it, horizon row PROJECTED from the camera rather
+   than assumed to be half way down):
+
+     desktop 1440x810   block 25.0%-54.0%   horizon 42.1%   12% OVER it
+     phone   412x915    block 14.0%-27.3%   horizon 42.0%   clear
+     phone   915x412    block 14.0%-52.4%   horizon 37.6%   15% OVER it
+
+   THE MOVE IS 15% OF VIEWPORT HEIGHT, which is the reading of "move it up by
+   15%" that means the same thing on every screen. Not 15% of the element's own
+   height (3-5% of the screen, invisible) and not 15% OF the 25% (3.75%, which
+   would still sit on the horizon).
+
+   IT IS A RISE WITH A FLOOR, because the band above is not empty and 15% is
+   more room than two of the three layouts have. Measured, with the crosswind
+   strip force-shown so it is argued from where it WOULD be rather than from
+   its absence on a track with no wind:
+
+     desktop 1440x810   tools 1.2%-6.7%,  crosswind 7.9%-10.6%
+     portrait 412x915   strip 0.9%-6.1%,  crosswind 5.9%-7.7%
+     landscape 915x412  strip 1.9%-13.4%, crosswind 13.1%-17.0%
+
+   THE FLOOR IS DERIVED, NOT TYPED. The crosswind strip is
+   `padding-top + 50px margin + its own height`, all of which move with the
+   viewport -- `--sg-pad` is `clamp(10px, 1.7vmin, 22px)` and the label inside
+   is `clamp(9px, 1.25vmin, 13px)`. A floor written as a flat percentage is
+   correct at exactly one window size: 11.8% clears the strip at 810px tall and
+   is INSIDE it at 600px tall, where the same 62px of fixed offset is a larger
+   share of the screen. Expressing the floor in the strip's own terms makes it
+   track, and it is why the desktop rise lands on the full 15% on a 1080p
+   screen and a little short of it on a 810px one.
+
+   It matters that the block stops ABOVE the strip rather than merely near it:
+   .sg-moment has z-index 2 and the strip has none, so an overlap is not the
+   number hiding behind the pill -- it is the number painting over a gameplay
+   cue.
+
+   THE LANDSCAPE PHONE GETS NO RISE. Its top strip runs to 13.4% and the block
+   already starts at 14.0%: six tenths of one percent. That layout keeps its
+   horizon problem, and fixing it there is a SIZE change -- the block is 158px
+   tall on a 412px screen -- which is a different decision from this one.
+
+   Everything is a percentage of the HUD, which is `inset: 0`, rather than
+   `vh`: on mobile Safari the visual viewport and the layout viewport disagree
+   while the URL bar is retracting, and a block positioned in `vh` inside a
+   container sized in `%` walks during that animation.
+   =========================================================================== */
 .sg-moment {
   position: absolute;
   left: 50%;
-  top: 25%;
+  /* Where it sat before the rise. Kept as a name so the rise below reads as a
+     rise rather than as a new magic number. */
+  --sg-moment-base: 25%;
+  /* THE ASK: "move it up by 15%". */
+  --sg-moment-rise: 15%;
+  /* ...and the bottom of the crosswind strip, in the strip's own terms:
+     the HUD's top padding, plus the 50px margin .sg-hud__wind sets, plus its
+     own height (21.9px measured at 1440x810, up to 24px where the label's
+     clamp tops out) and a few pixels of air. */
+  --sg-moment-floor: calc(var(--sg-pad) + var(--sg-sat) + 78px);
+  top: max(var(--sg-moment-floor), calc(var(--sg-moment-base) - var(--sg-moment-rise)));
   transform: translateX(-50%);
   width: min(92vw, 980px);
   display: flex;
@@ -3791,11 +3854,42 @@
    multiplier, the caption and all fourteen escalation sizes come down
    together, and because it scales the layout rather than painting a transform
    over it, the callout underneath rises with it.
-   14% clears the tools cluster and the crosswind strip on a landscape phone
-   and leaves the middle of the screen -- where the car is -- alone. */
+   14% clears the tools cluster on a landscape phone and leaves the middle of
+   the screen -- where the car is -- alone. (It does NOT clear the crosswind
+   strip there; that pill lands at 13.1%-17.0% on a 412px-tall screen and has
+   been under this block since before the rise below existed. Measured, not
+   introduced -- see the note under the next media block.)
+
+   THE RISE APPLIES HERE TOO, and is floored here too -- see the long note on
+   .sg-moment. A phone's top strip ends at 6.1% in portrait and its crosswind
+   strip at 7.7%, so the floor resolves to 8.7% and the block goes from 14% to
+   8.7%: a 5.3% rise, all there is. 14% - 15% would be -1%, i.e. off the top of
+   the screen and behind the lap counter. */
 @media (max-width: 860px), (max-height: 560px) {
-  .sg-moment { top: 14%; }
+  .sg-moment {
+    --sg-moment-base: 14%;
+    /* The compact strip's own numbers: `.sg-compact .sg-hud__wind` sets
+       margin-top 46px and the pill measures 16.5px there. Same derivation as
+       the desktop floor, different constants, and it tracks the safe-area
+       inset on a notched phone the way the strip itself does. */
+    --sg-moment-floor: calc(var(--sg-pad) + var(--sg-sat) + 72px);
+  }
   .sg-score { --sgs: 0.5; }
+}
+
+/* THE LANDSCAPE PHONE GETS NO RISE, AND THAT IS THE MEASUREMENT, NOT A SHRUG.
+   On 915x412 the position block, the tool cluster and the item slots run to
+   13.4% and the moment block starts at 14.0%: six tenths of one percent of
+   headroom. Worse, the crosswind strip lands at 13.1%-17.0% on a screen that
+   short -- already under the block before any of this, and the floor above
+   would push the block DOWN to 18% chasing it, which trades a horizon the
+   player can partly see for one they cannot see at all.
+
+   So this layout is pinned exactly where it shipped. It is the one viewport
+   the rise cannot help, and the honest answer is to leave it untouched rather
+   than to move it a token amount and call it done. */
+@media (max-height: 460px) {
+  .sg-moment { --sg-moment-floor: 14%; }
 }
 
 .sg-score__stack {

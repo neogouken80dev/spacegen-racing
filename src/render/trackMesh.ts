@@ -27,6 +27,9 @@
  *     the signed curvature rides in a vec4 lane the wall was already carrying
  *     and paying for, so the whole feature is a second pattern on a face the
  *     driver was already looking at — no geometry, no draw call, no attribute.
+ *     It is the one thing on the barrier that OUTRANKS the rest: inside its
+ *     footprint the bounce pulse is turned down to a tenth, because a sign
+ *     that has to argue with the wall it is bolted to is not a sign.
  *   - booster ramp decks: a raised wedge built from the same cross-section, so
  *     it inherits track width and banking exactly, plus approach chevrons, a
  *     launch gantry, side rails, struts and a landing-zone marker downrange
@@ -712,45 +715,7 @@ vec3  _emit  = vec3(0.0);
     _emit += uSodium * cap * 0.040;   // faint rail so the line still reads far off
     _rough = mix(_rough, 0.55, cap);
 
-    if (kind > 1.5) {
-#ifndef SG_GLACIAL
-      // Bounce wall: a travelling accent pulse laid OVER the same structure.
-      // Narrow bars on the bay pitch, not a 50%-duty flood — a corridor of
-      // solid light is blinding, hides the barrier it is painted on, and gives
-      // the driver nothing to judge closing speed against.
-      float wave = smoothstep(0.45, 1.0, fract(sArc * 0.045 - uTime * 0.45));
-      float bar  = smoothstep(0.78, 0.97, abs(fract(sArc / 2.4 - uTime * 0.55) - 0.5) * 2.0);
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.020, 0.045, 0.062), 0.45);
-      diffuseColor.rgb += uAccent * bar * 0.12;
-      _emit += uAccent * bar * (0.18 + 1.10 * wave) * (0.22 + 0.78 * smoothstep(0.04, 0.60, h));
-      _metal = 0.34;
-      _rough = 0.42;
-#else
-      // BIOLUMINESCENT ICE — beat 3, the lighting showpiece.
-      //
-      // The cavern's bounce walls are the light source in there: near-black
-      // rock overhead, and the only illumination coming out of veins in the
-      // ice you are bouncing off. Organic, so the veins are ridged noise
-      // rather than the industrial bar pattern, and they breathe on a slow
-      // period instead of scrolling — a cave does not travel.
-      //
-      // Held under 2.2 total. Past that the bloom fuses the veins into one
-      // sheet, the rock stops reading as black, and the whole point of putting
-      // emissive ice against near-black rock is lost.
-      float vein = 1.0 - smoothstep(0.0, 0.052, abs(sgFbm(vec2(sArc * 0.19, h * 1.9)) - 0.5));
-      float pulse = 0.5 + 0.5 * sin(uTime * 0.85 + sArc * 0.05);
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.016, 0.070, 0.092), 0.62);
-      diffuseColor.rgb += uAccent * vein * 0.10;
-      _emit += uAccent * vein * (0.20 + 0.62 * pulse) * (0.20 + 0.80 * smoothstep(0.02, 0.55, h));
-      // A dim wash off the whole block, so the wall still reads as ice with
-      // light inside it where there happens to be no vein.
-      _emit += uAccent * 0.045 * (0.25 + 0.75 * h);
-      _metal = 0.0;
-      _rough = 0.22;
-#endif
-    }
-
-    /* ---- THE TURN WARNING BAND ---------------------------------------- */
+    /* ---- THE TURN WARNING BAND: WHERE IT IS ---------------------------- */
     //
     // A chevron board painted into the barrier on the OUTSIDE of every turn,
     // pointing the way the turn goes. No geometry and no draw call: it is a
@@ -777,6 +742,11 @@ vec3  _emit  = vec3(0.0);
     //           and both hairpin bands are past it, so every corner a driver
     //           actually has to slow for reads at full intensity and a sweeper
     //           does not.
+    //
+    // THIS IS COMPUTED HERE, ABOVE THE BOUNCE BRANCH, RATHER THAN WHERE THE
+    // BOARD IS PAINTED. A sign has to be able to turn DOWN the light of the
+    // thing it is bolted to, and '_emit' only ever accumulates -- so the
+    // footprint has to exist before anything adds to it. See 'board'.
     float lean = sign(vTrack.y) * vMix.x;
     float sev  = smoothstep(0.0045, 0.0120, lean);
     // Faded out well beyond the distance it is read at -- 340 m is nearly five
@@ -785,15 +755,108 @@ vec3  _emit  = vec3(0.0);
     // and a corner warning that only appears once you are in the corner is
     // worse than no corner warning at all.
     float warn = smoothstep(0.0018, 0.0045, lean) * (1.0 - smoothstep(160.0, 340.0, dist));
-    if (warn > 0.001) {
-      // The board. h 0.30-0.84 is the clear air on this wall: above the
-      // chevron kerb (which ends at 0.24 and carries the SPEED read, a
-      // different job that has to keep working) and below the cap lamps
-      // (0.86 up). It is also the part of a barrier still in frame on the
-      // approach, where the warning is worth something -- the foot of the
-      // wall 200 m away is behind the crown of the road.
-      float plate = smoothstep(0.30, 0.37, h) * (1.0 - smoothstep(0.77, 0.84, h));
+    // The board. h 0.30-0.84 is the clear air on this wall: above the chevron
+    // kerb (which ends at 0.24 and carries the SPEED read, a different job
+    // that has to keep working) and below the cap lamps (0.86 up). It is also
+    // the part of a barrier still in frame on the approach, where the warning
+    // is worth something -- the foot of the wall 200 m away is behind the
+    // crown of the road.
+    float plate = smoothstep(0.30, 0.37, h) * (1.0 - smoothstep(0.77, 0.84, h));
+    /**
+     * THE BOARD'S FOOTPRINT, AND THE WALL LIGHT IT TAKES BACK.
+     *
+     * A BOUNCE wall lays a travelling accent pulse over this same face, and
+     * both the pulse and the board's arrow used to be drawn out of 'uAccent'.
+     * On seven circuits that costs nothing, because the band almost never
+     * lands on a bounce wall: measured share of band metres that are bounce
+     * wall is 0% on Namaresh, Centurion Prime and Ashkar, 2% on Meridian Deep
+     * and 12-14% on Elkarim, Frosthelm and Halcyon Bay. On Zhen-9 it is 85%
+     * (2,031 m of 2,383 m; 88% of the full-strength metres), because 2,558 of
+     * its 2,882 samples are bounce sections. So Zhen-9 is the circuit where
+     * the warning is essentially ALWAYS painted over the pulse.
+     *
+     * And painted over the pulse it did not read. Lifting this branch and the
+     * composite's ACES curve out into arithmetic and sweeping the board's
+     * whole footprint gives display luminance for every pixel on it; the
+     * number below is the arrow against the brightest NON-arrow pixel on the
+     * same board, over a full cycle of the pulse:
+     *
+     *                            Michelson contrast, arrow vs brightest
+     *                            other thing on the board
+     *                            plain wall    bounce wall
+     *     at a hairpin (sev 1)     +0.48..0.54   -0.04 .. +0.08
+     *     at a bend    (sev 0)     +0.39..0.48   -0.12 .. -0.03
+     *
+     * Negative means the wall's own pulse is BRIGHTER than the warning painted
+     * on it. On Zhen-9 at full severity the arrow measured Y=166 against a bar
+     * at Y=143 -- under 8% of separation, in the same hue, on a wall whose
+     * skyline behind it is that same magenta again. In the rendered frame at
+     * s=631 the two measured 150 and 135, i.e. +0.055. That is not a sign, it
+     * is texture,
+     * and it is exactly what the screenshots showed: arrows you can find if
+     * you know they are there and cannot see if you do not.
+     *
+     * So the board takes the pulse back inside its own footprint. 0.90 was
+     * measured, not chosen: suppression of 0.80/0.85/0.90/0.94 moves Zhen-9 to
+     * +0.49/+0.51/+0.53/+0.54, i.e. the curve has flattened by 0.90 -- past
+     * there the arrow is competing with the dark plate, not with the bar, and
+     * the last tenth buys 0.01. Keeping that tenth matters: the pulse still
+     * ticks through the board, so the barrier still says "this one bounces
+     * you", and it still runs at full strength below 0.30 and above 0.84 and
+     * on the INSIDE wall of every corner, which is where most of it was.
+     */
+    float board = plate * warn;
+    float wallLit = 1.0 - 0.90 * board;
 
+    if (kind > 1.5) {
+#ifndef SG_GLACIAL
+      // Bounce wall: a travelling accent pulse laid OVER the same structure.
+      // Narrow bars on the bay pitch, not a 50%-duty flood — a corridor of
+      // solid light is blinding, hides the barrier it is painted on, and gives
+      // the driver nothing to judge closing speed against.
+      float wave = smoothstep(0.45, 1.0, fract(sArc * 0.045 - uTime * 0.45));
+      float bar  = smoothstep(0.78, 0.97, abs(fract(sArc / 2.4 - uTime * 0.55) - 0.5) * 2.0);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.020, 0.045, 0.062), 0.45);
+      // 'wallLit' is the warning board taking this pulse back inside its own
+      // footprint -- see 'board' above. Off a board it is exactly 1.0, so
+      // every metre of bounce wall that is not the outside of a turn is
+      // untouched, and so is every circuit that has no bounce wall at all.
+      diffuseColor.rgb += uAccent * bar * wallLit * 0.12;
+      _emit += uAccent * bar * wallLit * (0.18 + 1.10 * wave) * (0.22 + 0.78 * smoothstep(0.04, 0.60, h));
+      _metal = 0.34;
+      _rough = 0.42;
+#else
+      // BIOLUMINESCENT ICE — beat 3, the lighting showpiece.
+      //
+      // The cavern's bounce walls are the light source in there: near-black
+      // rock overhead, and the only illumination coming out of veins in the
+      // ice you are bouncing off. Organic, so the veins are ridged noise
+      // rather than the industrial bar pattern, and they breathe on a slow
+      // period instead of scrolling — a cave does not travel.
+      //
+      // Held under 2.2 total. Past that the bloom fuses the veins into one
+      // sheet, the rock stops reading as black, and the whole point of putting
+      // emissive ice against near-black rock is lost.
+      float vein = 1.0 - smoothstep(0.0, 0.052, abs(sgFbm(vec2(sArc * 0.19, h * 1.9)) - 0.5));
+      float pulse = 0.5 + 0.5 * sin(uTime * 0.85 + sArc * 0.05);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.016, 0.070, 0.092), 0.62);
+      // The board takes the ice light back the same way it takes the bar --
+      // the WASH as well as the veins, because on this branch the wash is
+      // what stops the plate ever going dark. Frosthelm only puts 12% of its
+      // band on bounce wall, but where it does, an unsuppressed vein measured
+      // +0.05 of contrast against the arrow against +0.35 with this.
+      diffuseColor.rgb += uAccent * vein * wallLit * 0.10;
+      _emit += uAccent * vein * wallLit * (0.20 + 0.62 * pulse) * (0.20 + 0.80 * smoothstep(0.02, 0.55, h));
+      // A dim wash off the whole block, so the wall still reads as ice with
+      // light inside it where there happens to be no vein.
+      _emit += uAccent * wallLit * 0.045 * (0.25 + 0.75 * h);
+      _metal = 0.0;
+      _rough = 0.22;
+#endif
+    }
+
+    /* ---- THE TURN WARNING BAND: WHAT IS ON IT -------------------------- */
+    if (warn > 0.001) {
       // THE ARROWHEAD. Folding the phase through |h - apex| turns a stripe
       // into a V: the apex leads down-track and both arms trail back from it.
       //
@@ -830,23 +893,49 @@ vec3  _emit  = vec3(0.0);
       // through it and the wall keeps telling a driver how fast they are
       // going while it tells them which way the road bends.
       //
-      // The colour is the theme's accent pushed toward white. Accent is the
-      // one palette slot that is bright on all eight circuits (sodium is
-      // 0x6e3a24 on Ashkar and 0x2f2a55 on Zhen-9 -- a hazard stripe there is
-      // legible only because the kerb is nearly black behind it), and the
-      // push toward white is what separates the arrow from the accent bars of
-      // a BOUNCE wall, which is nearly every wall on Zhen-9.
-      vec3 warnCol = mix(uAccent, vec3(1.0, 0.95, 0.88), 0.26);
-      float lit = chev * plate * warn;
-      diffuseColor.rgb *= mix(1.0, 0.30, plate * warn);
+      //   0.22  the plate. It was 0.30, and 0.30 was set when the only thing
+      //         the plate had to sit under was an unlit barrier. Deepening it
+      //         is the cheapest contrast in this block: measured over the
+      //         board's footprint it moves the arrow-to-plate separation from
+      //         +0.795 to +0.844 on Zhen-9 and from +0.732 to +0.792 on the
+      //         worst circuit, and because it is a multiply the bays and
+      //         seams keep the same RATIO through it. It is not taken lower
+      //         than this -- at 0.18 the structure the multiply is there to
+      //         preserve lands under 5/255 and the speed read goes with it.
+      //
+      // THE ARROW'S COLOUR IS NOT THE ACCENT ANY MORE, AND THAT IS THE FIX.
+      //
+      //   0.58  how far the accent is pushed toward white. It was 0.26, which
+      //         left the arrow at (255,145,189) on Zhen-9 -- a pink sign on a
+      //         magenta wall under a magenta sky. Pushed this far it is
+      //         (255,205,218): still tinted, so a Frosthelm board is mint and
+      //         an Ashkar board is warm, but its LUMINANCE now comes from the
+      //         white it is mixed with rather than from whatever the accent
+      //         happens to be, which is the only way one number works on a
+      //         magenta wall, a cyan wall and an unlit basalt wall alike. It
+      //         is worth 25 of display luminance on Zhen-9 (166 -> 191) for
+      //         nothing, because the accent slot that was carrying the value
+      //         was the dimmest channel of a saturated hue: luminance is 71%
+      //         green, and magenta has no green in it.
+      //
+      // The peak CHANNEL is unchanged at 0.58, so the ceiling this block was
+      // built under -- above the kerb chevron's 0.12, below the cap lamp's
+      // 1.25, under the point where bloom fuses the arrow into a lit box --
+      // still holds. Only the two dim channels came up.
+      vec3 warnCol = mix(uAccent, vec3(1.0, 0.95, 0.88), 0.58);
+      float lit = chev * board;
+      diffuseColor.rgb *= mix(1.0, 0.22, board);
       diffuseColor.rgb = mix(diffuseColor.rgb, warnCol * 0.60, lit * 0.80);
       // Held between the kerb chevron's 0.12 and the cap lamp's 1.25: the
       // band has to out-read the kerb without competing with the cars in
       // front of it. Severity rides on the emission because it is free there
       // -- a tighter corner is a brighter board -- but the floor is low
-      // enough that a gentle bend cannot be mistaken for a hairpin.
+      // enough that a gentle bend cannot be mistaken for a hairpin. The
+      // SCALARS here were deliberately left alone: with the bounce pulse
+      // taken back inside the footprint the arrow no longer has to out-shout
+      // anything, and turning them up would have bought bloom, not contrast.
       _emit += warnCol * lit * (0.22 + 0.36 * sev);
-      _rough = mix(_rough, 0.52, plate * warn * 0.7);
+      _rough = mix(_rough, 0.52, board * 0.7);
     }
 
   } else if (kind < 3.5) {

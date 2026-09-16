@@ -88,11 +88,17 @@ import { circuit, type Seg } from './circuit'
  * +24/-20/+18 wiggle at the TOP RIGHT and preserve the wrong thing. It is not
  * that. Measured on the shipped baked centreline, the box the zigzag occupies
  * (u -1020..-870, v -200..+150) is baked s 1708..2260, which is plan s
- * 1613..2013 -- the `cyclone`. Its helix swings +/-30m sideways three times
- * over a 400m axis and that is what draws as four sharp reversals in plan.
- * Preserving the zigzag therefore means preserving the CORKSCREW, at the same
- * radius, the same turns, the same axis length and the same place, which is
- * what `spiral` below does.
+ * 1613..2013 -- the `cyclone`. Its helix swings sideways by the tube radius
+ * and that is what draws as the reversals in plan. Preserving the zigzag
+ * therefore means preserving the CORKSCREW at the same radius, the same axis
+ * length and the same place, which is what `spiral` below does.
+ *
+ * ITS TURN COUNT IS THE ONE THING THIS PASS COULD NOT PRESERVE, and section 2A
+ * prices that exactly: three turns drew four sharp reversals, two draws two
+ * sharp ones and two shallow, inside an IDENTICAL plan box (u 933..1065,
+ * v -120..244, measured both ways) at an identical +/-30m peak swing. It is
+ * the same wander at half the frequency, and it is what made the set piece
+ * enterable.
  *
  * ---------------------------------------------------------------------------
  * HOW THE SEGMENT LIST WAS SOLVED, AND WHY NOT BY HAND.
@@ -192,21 +198,123 @@ import { circuit, type Seg } from './circuit'
  *
  * `circuit()`'s own plan/closure heading does not turn at all through a
  * cyclone -- it rides a straight axis and coils around it -- which is why the
- * spiral consumes none of the 360-degree budget. But the BAKED road is a real
- * 3-D curve and `Track.curvatureAt` measures curvature about the surface
- * normal, so the spiral reads as a sustained 40-48m radius at its tightest
- * (measured on this build at 0.25m resolution), matching the helix-curvature
- * formula R/(R^2+(pitch/2pi)^2) for r=30 and a 133m pitch. That is tighter
- * than either hairpin, it is not a bug, and it is why the AI takes the
- * corkscrew carefully rather than flat out.
+ * spiral consumes none of the 360-degree budget. The BAKED road is a real 3-D
+ * curve, but `Track.curvatureAt` measures curvature about the SURFACE NORMAL,
+ * and a helix whose `up` points at its own axis is a GEODESIC of the cylinder:
+ * in the plane the car is actually driving in, the barrel is straight. Measured
+ * at 0.25m resolution over the middle 30% of the coil's road span, the barrel
+ * reads 228-521m of radius -- looser than any authored corner on the lap, and
+ * it read 204-434m at the three turns this file shipped with. Everything tight
+ * about a cyclone happens at its MOUTHS, where the tube radius ramps in; that
+ * is section 2A, and until this pass this file had it wrong.
  *
  * ONE ARITHMETIC TRAP THE SKETCH PASS HAD TO FIX. `circuit()` counts a cyclone
  * as `len` metres of lap distance (400 here), but the road it emits is a helix,
- * so its PLAN path is about 480m and its 3-D path longer still. Measured on the
- * shipped circuit: `built.length` says 3151.1m and the baked plan path is
- * 3242.8m, and essentially all of that 92m gap is the spiral. Any fit that
+ * so its PLAN path is longer and its 3-D path longer still. Measured on THIS
+ * build: `built.length` says 3856.5m of plan, the baked plan path is 3902.9m
+ * and the baked road is 3967.9m, so the spiral is worth 46m of plan and 111m
+ * of road that no straight in the segment list accounts for. Any fit that
  * compares `built.length` against a traced drawing has to add it back or the
- * lap comes out 90m short exactly where it can least afford to.
+ * lap comes out short exactly where it can least afford to. (At the three
+ * turns this file shipped with, the same gaps were 92m and 183m -- the number
+ * moves with `turns`, so it is measured here rather than quoted.)
+ *
+ * ===========================================================================
+ * 2A. THE MOUTHS. VINCE SAID THE ENTRY WAS IMPOSSIBLE; HE WAS RIGHT, AND THIS
+ *     FILE'S PREVIOUS HEADER TOLD YOU IT WAS FINE.
+ * ===========================================================================
+ *
+ * The report was "the corkscrew's entry angle is quite impossible to enter into
+ * smoothly". The paragraph this one replaces answered that complaint in advance
+ * and answered it wrongly: it recorded 39.8-40m of curvature at the corkscrew,
+ * against the 45m floor this circuit is held to, and dismissed it as "inside the
+ * corkscrew, where nothing is authored... inherited, not a corner". Both halves
+ * of that dismissal are false. It IS a corner -- it is the tightest reading on
+ * the entire lap, tighter than both hairpins -- and it is not inherited, it is
+ * a consequence of two numbers this file chose.
+ *
+ * WHAT IS ACTUALLY TIGHT, MEASURED. `curvatureAt(s, 20)` on a 0.25m sweep
+ * (probe-newtrack's 1.5m grid misses this; the finer instrument is the only one
+ * that sees it) over the shipped r=30 / turns=3 / len=400 corkscrew:
+ *
+ *      entry ramp   (outer 35%)   tightest 59.3m at s=1767
+ *      barrel       (middle 30%)  tightest 203.6m -- a geodesic, see part 2
+ *      exit ramp    (outer 35%)   tightest 39.8m at s=2191
+ *
+ * So the tight road is the two RAMPS -- the outer 35% of the axis at each end,
+ * where `circuit.ts` smoothsteps the tube radius up from zero -- and the driver
+ * meets the first of them 25m after leaving a 160m sweeper at 76 m/s with a
+ * 44m straight in between. That is the "entry angle": the curvature goes from
+ * nothing to a 59m corner inside 25m of road, with no braking zone in front of
+ * it, and then does it again harder on the way out.
+ *
+ * `neonspire.ts` SOLVED THE SAME DEFECT AND ITS FORMULA DOES NOT TRANSFER. That
+ * header records the mouth's baked radius as 0.0228 * len^2 / r to within 4%
+ * across five (r, len) pairs, and fixed Zhen-9's 37m/41m mouths by trading
+ * radius for length (r 26->22, len 196->240) to reach ~60m. Applied here that
+ * formula predicts 0.0228 * 400^2 / 30 = 122m for a corkscrew that measures
+ * 39.8m -- off by a factor of three. Extending it by `turns` (Zhen-9's cyclone
+ * turns ONCE; this one turned three times) gets 40.5m against 39.8m, which
+ * looks like a fit until you push it: sweeping len at r=30, turns=3 measures
+ *
+ *      len 400  39.8m      len 480  48.4m      len 560  62.5m
+ *      len 440  44.2m      len 520  54.7m
+ *
+ * which is len^1.34, not len^2, so the extended formula over-predicts by 27% at
+ * len=560. Sweeping RADIUS at turns=3 settles it: r=22 reads 39.6m, r=26 38.5m,
+ * r=30 39.8m, r=36 43.5m. The mouth radius is essentially INDEPENDENT of the
+ * tube radius here, which a cubic-mouth term proportional to r/len^2 cannot be.
+ * Neonspire's formula is real and it is not what is binding on this circuit.
+ *
+ * WHAT IS BINDING IS ROLL RESOLUTION. `walk()` emits a cyclone at
+ * `round(len / 13)` nodes -- 31 for a 400m axis, a constant this file cannot
+ * change -- and spends `360 * turns` degrees of helix phase across them. At
+ * turns=3 that is 34.8 degrees of roll PER NODE, and `Track` bakes a uniform
+ * Catmull-Rom through them: the same under-resolution that makes a 2-node
+ * corner read tighter than it is authored. Holding r=30 and sweeping the phase
+ * rate, by either lever, collapses onto one curve:
+ *
+ *      turns/len  3/400 3/440 3/450 3/460 3/560 2/400 2/440 1/400
+ *      deg/node    34.8  31.8  30.9  30.9  25.1  23.2  21.2  11.6
+ *      mouth R     39.8  44.2  45.5  47.1  62.5  61.9  71.6  97.3
+ *
+ * Two levers, one curve. (3/450 and 3/460 share a node count and differ by
+ * 1.6m, which is neonspire's cubic-mouth term still there underneath, an order
+ * of magnitude smaller than the sampling term. 3/560 is measured at the site
+ * scale `circuit()` needs to close it -- scale moves straights, not the coil,
+ * so the reading stands.)
+ *
+ * THE FIX IS `turns` 3 -> 2, AND IT IS THE ONLY LEVER THAT IS FREE. The three
+ * candidates, all measured on this lap:
+ *
+ *   len 400 -> 460, turns 3   mouths 67.8 / 47.1m. Keeps four plan reversals.
+ *     Costs: 460 is the LAST length that closes at scale 1.000 -- 470 tips
+ *     `circuit()` into a 1.04x uniform site inflation, which re-scales all 31
+ *     straights and walks the lap off the drawing it was fitted to. Even at 460
+ *     the tightest straight falls from 43.7m to 40.4m, 1% clear of the 40m
+ *     floor where the header's whole solved-straights argument claims 9%. And
+ *     47.1m is 2m of daylight over the floor. A hairline on three counts.
+ *   r 30 -> anything, turns 3   does nothing. See the radius sweep above.
+ *   turns 3 -> 2                mouths 59.3/39.8 -> 68.2/61.9m.
+ *
+ * Two turns costs NOTHING anywhere else, and that is not a hope, it is what
+ * `walkEnd` does: it advances a cyclone by `s.len` along the heading and never
+ * looks at `turns`, so the plan walk, the closure residual, the 31 solved
+ * straight lengths (tightest still 43.69m), `scale` (1.000), `gap` (0.0000m)
+ * and the node count (31, from `round(len/13)`) are all bit-identical. The plan
+ * box is identical. The +/-30m peak swing is identical. What changes is the
+ * number of reversals drawn inside that box (four sharp -> two sharp, two
+ * shallow: peak laterals go 6, -24.6, 30, -29.9, 24.6, -6 to 11.9, -29.7,
+ * 29.6, -11.8) and the length of the 3-D road, because a lazier helix is a
+ * shorter one: the emitted coil measures 508m for its 400m axis instead of
+ * 571m, and the lap bakes 3967.9m instead of 4033.8m.
+ *
+ * WHAT THE SET PIECE IS NOW. 61.9m at the tighter mouth is a medium-band corner
+ * -- 49 m/s, a real lift, still the thing the AI slows for -- where 39.8m was a
+ * hairpin the driver was given no warning about and no room for. Nothing on the
+ * lap reads under 45m any more: the tightest radius on the circuit is
+ * HAIRPIN-1's 47.5m, an authored corner, which is how it should have been all
+ * along. The `<45m` slice of the curved-sample census goes 0.6% -> 0.0%.
  *
  * ===========================================================================
  * 3. THE BREACH, THE JUMP, AND THE TWO BOOST STRIPS.
@@ -252,14 +360,17 @@ import { circuit, type Seg } from './circuit'
  * is nowhere in either that a following car can use a tow, and a 4km lap with
  * no overtaking spot is a parade.
  *
- * MEASURED, by deleting both `boost: true` flags and changing nothing else:
- * mean lap goes 92.74s -> 93.68s and respawns go 0.0/race -> 1.0/race. The
- * second number is the one that matters and it was not the reason they were
- * added: a pad is `T.boost.padMag` 0.35 for 2.60s, and eight cars arriving at
- * the wave's second shelf and the S's first left-hander with that much more
- * separation stop wedging each other into the outside wall. 1.0 respawns a race
- * would also be outside the 0.7 this circuit is held to, so the strips are
- * load-bearing, not decoration.
+ * MEASURED AGAIN ON THIS BUILD, by deleting both `boost: true` flags and
+ * changing nothing else: respawns go 0.10/race -> 0.40/race over ten seeds
+ * (0.3 -> 0.7 on probe-newtrack's three), and the mean lap goes 88.70s ->
+ * 87.82s -- slightly QUICKER without them, which is the opposite of what the
+ * shipped build measured and is not the point. A pad is `T.boost.padMag` 0.35
+ * for 2.60s, and eight cars arriving at the wave's second shelf and the S's
+ * first left-hander with that much more separation stop wedging each other into
+ * the outside wall. Four times the respawn rate is what they buy, and 0.7 on
+ * the probe's seeds is exactly the line this circuit is held to, so the strips
+ * are load-bearing, not decoration. Widening the lap did not make them
+ * redundant: it made the field faster into the same two pinch points.
  *
  * ===========================================================================
  * 4. ON DIRECTION, AND ON THE BANK SIGN.
@@ -310,6 +421,81 @@ import { circuit, type Seg } from './circuit'
  * turning in unison, and the leviathans holding station in the middle distance.
  * The tube is the only lit thing; the ocean is the dark. This file reshapes the
  * road and repairs the tag contract; it does not touch the theme.
+ *
+ * ===========================================================================
+ * 7. THE WIDTH PASS. x2 EVERYWHERE THE TUBE ALLOWS IT.
+ * ===========================================================================
+ *
+ * Vince, with the corkscrew report: "perhaps widening the track in general by
+ * 100% would help, this will make the track width wider and allow the user to
+ * enter into turns easier and better." Taken literally: every authored `w` on
+ * this lap is doubled, and `defaults.w` with them. Widths never enter
+ * `circuit()`'s closure walk -- `attr()` writes `n.w` and the position update
+ * never reads it -- so this is exactly length-neutral. Plan, closure, straights
+ * and baked length are untouched by it.
+ *
+ * WHERE THAT LANDS ON THE ROSTER, measured as mean FULL width (2 * w) over the
+ * emitted nodes, so Vince can see it rather than take it on trust. A snapshot,
+ * not a contract -- Zhen-9 was being widened by another pass on the same day:
+ *
+ *      Meridian Deep   38.5m -> 71.7m   min 38->42, max 51->102
+ *      Zhen-9                   55.2m
+ *      Ashkar                   48.6m
+ *      Halcyon Bay              47.6m
+ *      Elkarim                  45.1m
+ *      Frosthelm                41.4m
+ *      Centurion Prime          40.2m
+ *      Namaresh                 38.9m
+ *
+ * Second-narrowest circuit to widest by 30% over the next one. That is what
+ * 100% buys and it is what was asked for.
+ *
+ * ONE PLACE TOOK LESS THAN DOUBLE, AND IT IS NOT A JUDGEMENT CALL. The
+ * CORKSCREW is a road inside a tube of radius 30m. Its road is a flat ribbon
+ * lying against the inside of that tube, so its width is bounded by the barrel:
+ * at the authored 38m it spans 63% of the 60m bore, and x2 would ask for a 76m
+ * road inside a 60m hole -- a road wider than the thing it is supposed to be
+ * inside. That alone caps it, and the RENDERER caps it lower and measurably:
+ *
+ *   `trackMesh.ts` decides the corkscrew is a viaduct (it is level enough at
+ *   the mouths and 50m above the seabed) and hangs a cross-head `w * 1.9`
+ *   across under each bay, a flat 1.35m below the CENTRELINE. On a deck that is
+ *   ROLLING -- measured at the entry mouth, 1.81 deg/m here and 2.69 deg/m at
+ *   three turns -- a point 0.95*w out to the side is `0.95 * w * dRoll` higher
+ *   than the deck 3m back. That is Namaresh's bug from `buildViaductPiers`' own
+ *   note, with roll standing in for bank, and it scales with w. Measured against `tools/probe-solidclear.ts`, holding
+ *   everything else at x2:
+ *
+ *      w 19, 20, 21, 22   CLEAR
+ *      w 23   0.64m of cross-head standing in its own road at s=1751m
+ *      w 24   0.71m        w 25   0.79m        w 38   1.56m
+ *
+ *   Diagnosed rather than guessed, at w=25: the structure at
+ *   (1041.1, 20.6, 244.6) belongs to the bay at s=1754 (via 0.52) and comes up
+ *   1.68m through the deck at s=1751, 23.7m off its centre. Vince's standing
+ *   instruction is "do not have any tracks that clip into the track", so this
+ *   cannot ship; Zhen-9 hit the same class of failure an hour earlier and
+ *   resolved it the same way -- widen the set piece less than the street.
+ *
+ *   So the corkscrew goes 19 -> 21 (38m -> 42m, x1.11): two metres inside a
+ *   cliff that is measured, not estimated, and 70% of the bore instead of 63%.
+ *
+ * AND THE TWO STRAIGHTS EITHER SIDE OF IT ARE A FUNNEL, SO THEY ARE TAPERED.
+ * A 76m road meeting a 42m tube mouth across one 22m node gap is 17m of wall
+ * closing at 38 degrees to the direction of travel. The ENTRY straight is
+ * therefore authored at w=30 (60m), which splits it into 8m and 9m steps at 18
+ * and 22 degrees (measured off the emitted nodes) -- and reads as what it is, a
+ * pressure tube's mouth narrowing to take the coil. The EXIT straight is given
+ * the same 30 for symmetry and for the art, though it needs it less: a road
+ * that OPENS in front of a car is not a wall it can hit. It costs nothing
+ * geometric: straights carry no width into closure either.
+ *
+ * WHAT THE WIDENING DID TO THE RACING, over ten seeds rather than
+ * probe-newtrack's three, because one respawn in three races is noise and was
+ * read as a regression on the first look: respawns went 0.20/race (shipped) to
+ * 0.10/race (this file). The lap got quicker -- mean 92.74s -> 88.70s -- because
+ * a wider road is a straighter line through the same corners, and that is
+ * comfortably inside the 55-105s band. 24/24 still finish.
  */
 
 /**
@@ -336,7 +522,8 @@ import { circuit, type Seg } from './circuit'
  *   BLOOM-B          R     66    42    medium    49.0  [kept] second biofilm
  *   FAST-2           R     95    20    fast      58.8  [kept]
  *   SPIRAL-FEED      R    160     9    sweeper   76.3   sets the corkscrew axis
- *   [ the spiral: r=30, 3 turns, 400m axis -- the sketch's zigzag ]
+ *   [ the spiral: r=30, 2 turns, 400m axis -- the sketch's zigzag.
+ *     Mouths bake 68.2m and 61.9m; the barrel is a geodesic. See part 2A. ]
  *   BREACH           R    160    14    sweeper   76.3  [kept] crosswind, bounce
  *   COUNTER-2a       R     85    40    fast      55.6  [kept]
  *   COUNTER-2b       L     72   -20    medium    51.2  [kept]
@@ -390,8 +577,8 @@ const SEGS: Seg[] = [
   // the most forgiving introduction to "the surface changes under you". Split
   // metal/oil at a constant radius and bank, an even 22/22, which is what keeps
   // BOTH halves above the ~24m-arc floor a corner segment needs.
-  { t: 'corner', r: 64, deg: 22, bank: 6, w: 20, tunnel: true, tag: 'bloom' },
-  { t: 'corner', r: 64, deg: 22, bank: 6, w: 21, surface: 'oil', tunnel: true },
+  { t: 'corner', r: 64, deg: 22, bank: 6, w: 40, tunnel: true, tag: 'bloom' },
+  { t: 'corner', r: 64, deg: 22, bank: 6, w: 42, surface: 'oil', tunnel: true },
 
   { t: 'straight', len: 95, toY: 38, tunnel: true },
   // TURN-IN. The shipped circuit's old ESSES-IN, kept at r=72/+24: the drawing
@@ -467,17 +654,17 @@ const SEGS: Seg[] = [
   // top-left hook out until it stops being the shape Vince drew.
   { t: 'corner', r: 86, deg: 37, bank: 6, tunnel: true, tag: 'hook' },
   // HAIRPIN-1 [kept]. 52m -- 43.5 m/s. WIDER than the rest of the circuit
-  // (25m against a 19m default) for the reason the brief calls out: a tight
+  // (50m against a 38m default) for the reason the brief calls out: a tight
   // radius arriving off a fast run needs room for a car that turns in a little
   // hot to still find the apex rather than the wall. Bank +11, the most
   // aggressive on the lap.
-  { t: 'corner', r: 52, deg: 58, bank: 11, w: 25, tunnel: true, tag: 'hairpin-1' },
+  { t: 'corner', r: 52, deg: 58, bank: 11, w: 50, tunnel: true, tag: 'hairpin-1' },
 
   // ---- the left flank: preserved, and the spiral inside it -----------------
   { t: 'straight', len: 55, toY: 24, tunnel: true },
   // BLOOM-B [kept]. 66m, same two-piece construction as BLOOM-A, split 21/21.
-  { t: 'corner', r: 66, deg: 21, bank: 6, w: 20, tunnel: true, tag: 'bloom-b' },
-  { t: 'corner', r: 66, deg: 21, bank: 6, w: 21, surface: 'oil', tunnel: true },
+  { t: 'corner', r: 66, deg: 21, bank: 6, w: 40, tunnel: true, tag: 'bloom-b' },
+  { t: 'corner', r: 66, deg: 21, bank: 6, w: 42, surface: 'oil', tunnel: true },
 
   { t: 'straight', len: 44, toY: 22, tunnel: true },
   { t: 'corner', r: 95, deg: 20, bank: 4, tunnel: true },
@@ -488,21 +675,33 @@ const SEGS: Seg[] = [
   // ~10 degrees of turn in the approach, and putting it in a 160m corner rather
   // than bending the straight keeps the axis dead straight where it matters.
   { t: 'corner', r: 160, deg: 9, bank: 2, tunnel: true },
-  { t: 'straight', len: 44, toY: 14, tunnel: true },
-  // THE SPIRAL [kept]. r=30, three FULL turns over a 400m axis, descending into
-  // the deepest, darkest point of the lap at 10m. `turns: 3` is a whole number,
+  // The tube mouth. w=30 (60m) rather than the doubled 38, so the road steps
+  // 76 -> 60 -> 42 into the corkscrew instead of 76 -> 42 across one node gap.
+  // Part 7 has the wall angles.
+  { t: 'straight', len: 44, w: 30, toY: 14, tunnel: true },
+  // THE SPIRAL. r=30, TWO full turns over a 400m axis, descending into the
+  // deepest, darkest point of the lap at 10m. `turns: 2` is a whole number,
   // which is what keeps the entry and exit seams flush with the flat road on
-  // either side -- at f=0 and f=1 the coil's `up` is exactly world +Y. This is
-  // the sketch's zigzag; see part 0.
-  { t: 'cyclone', r: 30, turns: 3, len: 400, toY: 10, tunnel: true, tag: 'spiral' },
+  // either side -- at f=0 and f=1 the coil's `up` is exactly world +Y. It was
+  // three, and three put 34.8 degrees of roll on every emitted node, which is
+  // what made the mouths bake at 39.8m and what Vince hit as "impossible to
+  // enter into smoothly"; two bakes them at 68.2m and 61.9m and changes no
+  // other number in the file. See part 2A for the sweeps, and part 0 for what
+  // it costs the plan zigzag.
+  //
+  // w=21 rather than the doubled 38: a 76m road does not fit inside a 60m
+  // bore, and `trackMesh.ts`'s viaduct cross-head starts standing in this road
+  // at w=23. Part 7 has the measurement.
+  { t: 'cyclone', r: 30, turns: 2, len: 400, w: 21, toY: 10, tunnel: true, tag: 'spiral' },
 
   // THE BREACH [kept]. The tube is open here -- no `tunnel` on this straight or
   // the corner after it, which is the visual the art pass wants at exactly the
   // spot the sim also stops pretending the tube is sealed. 160m sweeper taken
   // flat out, 15 m/s^2 of lateral push, BOUNCE walls throughout and never
-  // `open`. +1.5m of width over the default for a car that is being shoved.
-  { t: 'straight', len: 44 },
-  { t: 'corner', r: 160, deg: 14, bank: 2, w: 20.5, wind: 15, bounce: true, tag: 'breach' },
+  // `open`. +3m of width over the default for a car that is being shoved.
+  // The far mouth, tapered the same way: 42 -> 60 -> 82 out into the breach.
+  { t: 'straight', len: 44, w: 30 },
+  { t: 'corner', r: 160, deg: 14, bank: 2, w: 41, wind: 15, bounce: true, tag: 'breach' },
 
   { t: 'straight', len: 92.7, toY: 14, tunnel: true },
   // COUNTER-2 [kept]. A right/left pair, net +20, right after the breach lets
@@ -515,8 +714,8 @@ const SEGS: Seg[] = [
   // BLOOM-C [kept]. 62m -- the tightest of the four biofilm radii, and third of
   // four: by this point a driver has met the mechanic twice, so the tightest
   // dose comes when they know what it is. Split 20/20, right at the arc floor.
-  { t: 'corner', r: 62, deg: 20, bank: 6, w: 20, tunnel: true, tag: 'bloom-c' },
-  { t: 'corner', r: 62, deg: 20, bank: 6, w: 21, surface: 'oil', tunnel: true },
+  { t: 'corner', r: 62, deg: 20, bank: 6, w: 40, tunnel: true, tag: 'bloom-c' },
+  { t: 'corner', r: 62, deg: 20, bank: 6, w: 42, surface: 'oil', tunnel: true },
 
   { t: 'straight', len: 55, toY: 22, tunnel: true },
   { t: 'corner', r: 85, deg: 18, bank: 4, tunnel: true },
@@ -535,8 +734,8 @@ const SEGS: Seg[] = [
   // over the floor of any bloom on the lap, and 70 degrees of biofilm corner
   // against BLOOM-A's 44. See part 1 for why the hazard is here and not at the
   // S's apex.
-  { t: 'corner', r: 64, deg: 35, bank: 7, w: 20, tunnel: true, tag: 'bloom-d' },
-  { t: 'corner', r: 64, deg: 35, bank: 7, w: 21, surface: 'oil', tunnel: true },
+  { t: 'corner', r: 64, deg: 35, bank: 7, w: 40, tunnel: true, tag: 'bloom-d' },
+  { t: 'corner', r: 64, deg: 35, bank: 7, w: 42, surface: 'oil', tunnel: true },
 
   // BOOST-S. On the climb out of BLOOM-D, which is the one moment in the S
   // where the road points somewhere for longer than a corner. See part 3.
@@ -580,8 +779,9 @@ const SEGS: Seg[] = [
   // from the shipped circuit at 50m and opened to 54 so it BAKES at 48.1m
   // rather than 44.3m; see [kept*] in the corner table for the node-count
   // reason. Widened and banked like HAIRPIN-1: the tightest radius gets the
-  // most margin, not the least.
-  { t: 'corner', r: 54, deg: 54, bank: 11, w: 25.5, tunnel: true, tag: 'hairpin-2' },
+  // most margin, not the least -- 102m of road at x2, the widest thing on the
+  // roster and deliberately so.
+  { t: 'corner', r: 54, deg: 54, bank: 11, w: 51, tunnel: true, tag: 'hairpin-2' },
 ]
 
 /**
@@ -597,13 +797,13 @@ const SEGS: Seg[] = [
  * segment's node count is `max(1, ceil(deg/30), round(arc/spacing))`. At
  * spacing 18 every authored segment on this lap emits chords between 15.1m and
  * 26.7m -- a ratio of 1.77 before the spiral and the jump add their own, and
- * 2.07 (12.9-26.7m) once they do -- so there is real headroom under the gate.
+ * 2.08 (12.9-26.7m) once they do -- so there is real headroom under the gate.
  */
 const CIRCUIT = circuit(SEGS, {
   spacing: 18,
   start: [0, 30, 0],
   heading: 0,
-  defaults: { w: 19, surface: 'metal' },
+  defaults: { w: 38, surface: 'metal' },
   minStraight: 40,
 })
 
@@ -620,10 +820,10 @@ const nodes: TrackNode[] = CIRCUIT.nodes
  *
  * THAT METHOD IS WRONG ON THIS CIRCUIT, and the spiral is why. `walk()` adds
  * `len` to `dist` for a cyclone -- 400m -- but the road it emits is a helix. A
- * constant-radius one would run `len * sqrt(1 + (2*pi*r*turns/len)^2)` = 693m;
+ * constant-radius one would run `len * sqrt(1 + (2*pi*r*turns/len)^2)` = 550m;
  * this one ramps its radius to zero over the outer 35% at each mouth, and the
- * emitted nodes measure 571m. Either way, plan distance and node distance run
- * at 1:1 for 3456m of this lap and at 1:1.43 for 400m of it, and no single
+ * emitted nodes measure 508m. Either way, plan distance and node distance run
+ * at 1:1 for 3456m of this lap and at 1:1.27 for 400m of it, and no single
  * scale factor maps between them. Measured on the first build that tried it:
  * the `breach` tag landed 86m before the breach and every tag after it was
  * early by more.
@@ -679,7 +879,7 @@ for (const required of ['bloom', 'trench-jump']) {
  * are multiplied by `track.length`, the BAKED length, so a plan fraction
  * (`marks[tag] / CIRCUIT.length`, which is what the other circuit-built tracks
  * use) puts every pickup after the spiral about 4% of a lap early. The node
- * polyline measures 4026.2m against the baked spline's 4033.8m -- 0.19% short,
+ * polyline measures 3963.1m against the baked spline's 3967.9m -- 0.12% short,
  * which is well inside a pickup row's own spread.
  */
 const cum: number[] = [0]
@@ -697,44 +897,79 @@ const LAP = cum[cum.length - 1] + Math.hypot(
 const frac = (tag: string) => cum[tagNode[tag]] / LAP
 
 /**
- * MEASURED against this exact file.
+ * MEASURED against this exact file. The `->` numbers are the shipped build
+ * (turns=3, w x1) against this one (turns=2, w x2 outside the tube).
  *
  * `tools/probe-newtrack.ts --track=abyssal`
- *   plan length 3856.5m, BAKED 4034m, 209 nodes, 2689 samples
+ *   plan length 3856.5m (unchanged), BAKED 4034m -> 3968m, 209 nodes,
+ *     2689 -> 2645 samples, 1.500126 -> 1.500143 m/sample. Both sides of the
+ *     baked-length cliff are above 1.5, so `curvatureAt`'s window holds the
+ *     same sample count and no radius on the lap moved for that reason.
+ *     `src/score/verify.ts`'s TRACK_LENGTH needs 3967.9 for `abyssal`; this
+ *     file does not own that table and has not touched it.
  *   gap 0.0000m, scale 1.000 -- no site inflation, correction <= 0.31m
- *   chord 12.9-26.7m, ratio 2.07                       (gate: < 3.5, brief < 3.0)
- *   52% of the lap reads as curved (|k| > 0.0045)       (gate: >= 12%)
- *   curved-sample radius bands: <45m 0.6%, hairpin 7.9%, medium 19.1%,
- *     fast 32.3%, sweeper 39.1%, >220m 1.0%. Medium+fast -- the 58-110m band
- *     the brief calls the heart of a lap -- is 51.4% here against the shipped
- *     circuit's 45.9%.
- *   tightest read radius 40m, median 94m
+ *   chord 12.9-26.7m, ratio 2.07 -> 2.08                (gate: < 3.5, brief < 3.0)
+ *   52% -> 51% of the lap reads as curved (|k| > 0.0045) (gate: >= 12%)
+ *   curved-sample radius bands: <45m 0.6% -> 0.0%, hairpin 7.9% -> 5.6%,
+ *     medium 19.1% -> 25.2%, fast 32.3% -> 36.2%, sweeper 39.1% -> 32.5%,
+ *     >220m 1.0% -> 0.4%. Medium+fast -- the 58-110m band the brief calls the
+ *     heart of a lap -- is 61.4% here against 51.4% shipped. Opening the
+ *     corkscrew's mouths moved the whole set piece out of the sub-45 and
+ *     sweeper slices and into the medium and fast ones.
+ *   tightest read radius 40m -> 47m, median 94m (unchanged). The tightest
+ *     thing on the lap is now an AUTHORED corner, HAIRPIN-1.
  *   24/24 racers finish, three fixed seeds x eight racers
- *   lap time: best 85.28s, mean 92.74s, worst 102.82s   (gate: mean 55-105s)
- *   0.0 respawns/race, 0.0% off-track                   (gate: <= 3.0/race)
- *   elevation 10m to 72m
+ *   lap time: best 85.28 -> 81.12s, mean 92.74 -> 88.70s, worst
+ *     102.82 -> 97.18s                                  (gate: mean 55-105s)
+ *   0.0 -> 0.3 respawns/race on the probe's three seeds, 0.0% off-track.
+ *     Over TEN seeds, which is the honest sample: 0.20 -> 0.10 respawns/race.
+ *     The single event on seed 2029 is at s=3791m, in the S's exit, not at the
+ *     corkscrew or at either taper.                     (gate: <= 3.0/race)
+ *   elevation 10m to 72m -> 10m to 65m. The lap's high point is the top of the
+ *     corkscrew, and at two turns the top-of-barrel moments fall at f=0.25 and
+ *     0.75, where the radius ramp is only 80% in; at three they fell at f=0.5,
+ *     with the tube at full radius. The coil tops out at 64.7m, not 70.7m.
  *
- * `tools/probe-selfclear.ts`  closest the road comes to itself: infinite -- no
- *   pair of samples 70m+ apart along the lap is even within a road width.
+ * MOUTH CURVATURE, `curvatureAt(s, 20)` on a 0.25m sweep, which is the only
+ *   instrument that sees this -- probe-newtrack's 1.5m grid reported the exit
+ *   mouth as 40m and missed the entry ramp entirely:
+ *      entry mouth   59.3m -> 68.2m    (s=1767)
+ *      barrel       203.6m -> 228.4m  the geodesic middle (its outer 30% each
+ *                                      way is ramp); zone max 434m -> 521m
+ *      exit mouth    39.8m -> 61.9m    (s=2191 -> s=2211)
+ *   Nothing on the lap now reads under 45m. Every corner this file authors
+ *   bakes at 47.5m or wider: HAIRPIN-1 (r=52) reads 47.5, HAIRPIN-2 (r=54)
+ *   reads 48.1, and the next tightest is 51.3.
+ *
+ * `tools/probe-selfclear.ts`  closest the road comes to itself: infinite ->
+ *   21.7m, between s=1365m and s=1437m, 72m apart along the lap. That is the
+ *   hook and HAIRPIN-1 doubling back past each other, and the number fell only
+ *   because both ribbons are twice as wide; the floor is 2.0m, so it is still
+ *   a ten-fold margin. The corkscrew is no longer the closest pair on the lap.
  * `tools/probe-solidclear.ts` CLEAR; no part of the lap comes within 8m (its
  *   own reporting floor) of another part's road, and the viaduct substructure
- *   is clear.
- * SELF-CLEARANCE AGAINST THE 9m RULE THIS SESSION TIGHTENED TO, measured
- *   directly on the baked centreline in 3-space: the closest two stretches
- *   ever come is 101m when they are 150m+ apart along the lap, 147m at 250m+,
- *   and 154m at 400m+. The 101m pair is the corkscrew's own coil passing its
- *   own barrel, which is the set piece working. There is no flyover, no
- *   crossover (`built.crossovers.length === 0`) and nothing anywhere on this
+ *   is clear. It is NOT clear at a corkscrew wider than w=22 -- see part 7,
+ *   which is the one place the x2 could not be applied.
+ * `tools/probe-intrude.ts` 0 intruding pieces.
+ * SELF-CLEARANCE MEASURED DIRECTLY on the baked ribbons in 3-space, by lap
+ *   separation: 67.5m at 150m+ apart, 78.1m at 250m+ and at 400m+. The 78.1m
+ *   pair is the wave against the top of the S (s=740 vs s=3398). There is no
+ *   flyover, no crossover (`built.crossovers.length === 0`) and nothing on this
  *   lap within an order of magnitude of the 9m floor.
  *
- * THE ONE READING UNDER 45m IS THE CORKSCREW, AND IT IS INHERITED. Sampling
- * `curvatureAt(s, 20)` on a 0.25m grid rather than probe-newtrack's 1.5m one
- * finds 39.8m at s=2191 and 47.9m at s=2277 -- both INSIDE the spiral, on its
- * helix, where nothing is authored. That matches the textbook helix curvature
- * R/(R^2 + (pitch/2pi)^2) for r=30 and a 133m pitch, and the SHIPPED circuit
- * measures the same 32-44m there with the same spiral. Every corner this file
- * actually authors bakes at 47.5m or wider: HAIRPIN-1 (r=52) reads 47.5,
- * HAIRPIN-2 (r=54) reads 48.1, and the next tightest is 51.3.
+ * TAG AUDIT, because widening a lap is exactly how a tag silently moves. Every
+ *   one of the nineteen tags below is placed by `nodeCount()` accumulating
+ *   `walk()`'s step rule over the segment list IN ORDER. Not one is derived
+ *   from a width, from a narrowest- or widest-node search, or from a plan
+ *   distance -- so neither the x2 nor the `turns` change can move one, and the
+ *   node indices are bit-identical across this pass: 0, 11, 22, 28, 37, 48, 56,
+ *   70, 73, 79, 90, 123, 140, 148, 154, 158, 163, 189, 206. The assertion above
+ *   still binds if `circuit.ts` ever changes that rule, and `bloom` and
+ *   `trench-jump` -- the two `themes/abyssal.ts` reads -- are still asserted
+ *   present. What DOES move is each tag's lap FRACTION after the spiral, by
+ *   about 1.5%, because the coil is 63m of road shorter; that is `frac()`
+ *   tracking the road, which is the whole reason the pickups are derived from
+ *   tags instead of written as constants.
  */
 export const ABYSSAL: TrackDef = {
   id: 'abyssal',

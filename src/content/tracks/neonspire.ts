@@ -156,12 +156,67 @@ import { circuit, type Seg } from './circuit'
  * distant parts of itself is 98m, and inside the infield the worst pair is
  * 107m -- the "2"'s two diagonals sit 148m apart, its entry run 113m from the
  * bottom hook. So the drawing had no clearance problem to solve, and the built
- * lap inherits that. Measured on the built world, expanding every sample
- * across its own rolled ribbon AND standing a 3m rail at each edge, the
- * closest any two parts of this lap more than 70m apart ever come is 17.3m --
- * and that worst case is the Holo Ring's own entry against its own exit, which
- * is the loop's stagger doing its job. Nothing in the infield needed a bridge,
- * a `toY` step or a nudge off the drawn line.
+ * lap inherits that. Measured on the built world by `probe-selfclear.ts`,
+ * which expands every sample across its own rolled ribbon, the closest any two
+ * parts of this lap more than 70m apart ever come is 8.3m -- and that worst
+ * case is the Holo Ring's own entry against its own exit, which is the loop's
+ * stagger doing its job. The rail is a separate question and a separate
+ * instrument: `probe-solidclear.ts` stands the barrier, skirt and soffit the
+ * mesh actually builds and asks whether any of it is in another deck's
+ * airspace, and it clears the same pair by 4.50m. Nothing in the infield
+ * needed a bridge, a `toY` step or a nudge off the drawn line.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THAT ONE PAIR IS WHERE THE 50% WIDTH PASS RAN OUT OF ROOM.
+ *
+ * That pair is the only place on the lap a width change could break, because
+ * it is the only place two parts of the lap are held apart by a CONSTANT that
+ * does not grow with them. `circuit()` writes it down in its own
+ * comment -- "the loop leaves a FULL stagger across the road, which is also
+ * the clearance between its entry and its exit" -- so 54m is fixed geometry
+ * and every metre of road added to either side is a metre taken out of it.
+ * Take both decks to x1.5 (25.5 and 27.75 half-width) and they want 53.25m of
+ * that 54m plus the 0.67m each barrier reaches outboard of its own edge, and
+ * `probe-solidclear.ts` duly reported the loop's rail 0.31m inside the exit
+ * straight's airspace and a viaduct pier 0.33m inside it.
+ *
+ * THE VERTICAL FIX DOES NOT EXIST HERE, which is worth writing down because it
+ * is the first thing anyone will reach for and it looks like it should work:
+ * the two decks are only 4.0m apart in y where they touch, and
+ * `probe-solidclear`'s own sabotage sweep puts the flip point at 4.55m (1.55m
+ * of skirt plus 3.0m of barrier airspace), so it fails by about a third of a
+ * metre. But a loop's two mouths are at the SAME height by construction --
+ * `circuit()`'s loop branch ends with `y = y0` -- so the separation starts at
+ * ZERO at the mouth and grows only as r*(1 - cos(s/r)). At r=34 it reaches
+ * 4.55m after 17.8m of arc, by which point the road has gone 17.0m forward and
+ * the exit straight has already ramped to full width one node in. To be clear
+ * vertically before that, the mouth would have to rise 4.55m inside about 10m
+ * of forward travel, which is r = 11 -- a third of the r >= 32 the builder
+ * enforces, and a loop that tight reads to `curvatureAt` as a phantom hairpin.
+ * No `toY` reaches this either, and that was measured rather than reasoned
+ * about: a ramp is authored over a whole straight, so the 40.6m exit stub at
+ * this file's own 7.4% grade ceiling is 0.9m down where the conflict starts
+ * and 1.3m down where it ends. Built and run at the x1.5 widths it "passes" by
+ * 0.06m -- the same kind of hairline Frosthelm once cleared this gate by, which
+ * is to say not a pass -- and it still leaves 3.08m of headroom over its own
+ * road, because tilting the EXIT stub does nothing for the mirrored pair on
+ * the other side of the loop, where the descent comes down beside the APPROACH
+ * stub at the same 54m. So the lever is LATERAL, and there are exactly two of
+ * them: `stagger`, and the width of the road at the loop.
+ *
+ * STAGGER WAS TRIED FIRST AND IT RUNS OUT BEFORE IT IS ENOUGH. Swept at the
+ * shipped x1.5 widths, each extra metre of stagger buys 0.67m of solid
+ * clearance -- 54: -0.31 (fail), 55: 0.33, 56: 0.92, 57: 1.66, 58: 2.37 -- and
+ * then it stops, because stagger is LAP GEOMETRY. It shifts everything after
+ * the loop 54m sideways, so `circuit()` re-solves every straight around it,
+ * and at 60 a straight lands under the builder's 40m floor and its silent
+ * uniform auto-grow fires: 4323m becomes 4418m, over 20 more nodes. The usable
+ * range therefore ends at 58, which is 2.37m of clearance and leaves the baked
+ * lap 0.098m under the sample cliff below -- a hairline on both gates at once.
+ * WIDTHS DO NOT ENTER THE CLOSURE WALK AT ALL: `circuit()` reads `w` only when
+ * it writes a node, never when it walks the plan. So a width change at the
+ * loop is exactly length-neutral, cannot move a radius, and cannot trip the
+ * auto-grow. That is what ships -- see the Holo Ring's own segment below.
  *
  * ---------------------------------------------------------------------------
  * IDENTITY, UNCHANGED: HARD FROM GEOMETRY ALONE.
@@ -170,7 +225,7 @@ import { circuit, type Seg } from './circuit'
  * Frosthelm's ice, Meridian Deep's biofilm, Centurion Prime's vacuum. Take the
  * substance away and they are wide, fast and forgiving. Zhen-9 has no hostile
  * surface anywhere: dry maglev deck, grip 1.0, `metal` end to end. It is the
- * hardest lap in the roster because the road is 14-22m half-width and walled
+ * hardest lap in the roster because the road is 22-33m half-width and walled
  * on both sides (`bounce: true` everywhere except the two set pieces), not
  * because anything is slippery. Every wall bounces rather than scrubs, which
  * is what makes a walled street circuit driveable at all: contact costs speed
@@ -354,17 +409,37 @@ import { circuit, type Seg } from './circuit'
  *      not put the second turn back.
  *   4. THE HOLO RING IS 34m BECAUSE `circuit()` REQUIRES >=32m FOR A LOOP. At
  *      25m its crossing read to `curvatureAt` as a phantom 26m corner nobody
- *      authored. `stagger` is 54, inside the builder's [road width+14, 1.9r]
- *      window, and with the builder's current 0 -> stagger crossing there is
- *      no entry/exit self-overlap left for this file to fight.
+ *      authored. `stagger` is 54; with the builder's current 0 -> stagger
+ *      crossing there is no entry/exit self-overlap left for this file to
+ *      fight. WHAT DID NOT SURVIVE THE WIDTH PASS is the rule of thumb that
+ *      54 was picked against -- at least the road's full width plus 14m, at
+ *      most the builder's hard ceiling of 1.9*r. At x1.5 the road wants 65m
+ *      and 1.9*r is 64.6m, so at r=34 that window is EMPTY: there is no legal
+ *      stagger for a 51m-wide road through a 34m loop. Growing the loop
+ *      reopens it (r=36 gives [65, 68.4]) at the price of 2*pi*Dr of baked
+ *      length, a taller apex and a re-solved lap; narrowing the road at the
+ *      loop closes it for nothing. The road narrows. See the clearance
+ *      section above.
  *
  * ---------------------------------------------------------------------------
- * THE SQUEEZE, RELOCATED ONTO THE INFIELD'S LONG DIAGONAL.
+ * THE SQUEEZE, RELOCATED ONTO THE INFIELD'S LONG DIAGONAL -- AND THEN UNDONE
+ * BY THE WIDTH PASS, WHICH IS RECORDED HERE RATHER THAN QUIETLY REVERSED.
  *
- * Three narrow straights ramp the road from the standard 17.5m half-width down
- * to 14m and back -- 15.5 / 14 / 15.5 either side of the pinch, so the change
- * lands in three small steps over three node-to-node spacings rather than one
- * cliff. It used to sit on the anonymous run between old T13 and Maglev C,
+ * Three straights were authored to ramp the road from the standard 17.5m
+ * half-width down to 14m and back -- 15.5 / 14 / 15.5 either side of the
+ * pinch, so the change landed in three small steps over three node-to-node
+ * spacings rather than one cliff. The width pass took the two pinch values to
+ * x2.0 and everything else to x1.5, which INVERTED it: the run now reads
+ * 26.25 -> 31 -> 28 -> 31 -> 26.25, so its "pinch" is 1.75m WIDER than the
+ * street the run is supposed to be pinching, and the only things it is still
+ * narrower than are its own 31m shoulders and the 30m and 33m corners that
+ * bracket the run. It is a lay-by, not a squeeze. Whether the pinch comes back is a separate decision
+ * and is not taken here; what IS taken here is that nothing in this file may
+ * claim a pinch that is not in the node data, and the tagging block near the
+ * bottom may not go looking for one. The paragraph below describes the GROUND
+ * the feature occupies, which is unchanged, and the name it still carries.
+ *
+ * It used to sit on the anonymous run between old T13 and Maglev C,
  * which is precisely the ground the sketch's infield now occupies, so it moved
  * to the closest thing the new shape has to the same role: the "2"'s long
  * diagonal, 216m of straight road between the first hook (70m) and the top
@@ -405,14 +480,25 @@ import { circuit, type Seg } from './circuit'
  *
  *   plan shape        reads as the sketch's right panel; 25.3m mean nearest-
  *                     point error to the traced drawing, on a 4.3km lap
- *   baked length      4323m (was 3231m)
- *   mean lap          93.07s          band 55-105s
+ *   baked length      4322.8823m (was 3231m). Neither the width pass nor the
+ *                     clearance fix moved it by a digit -- and it must not
+ *                     move far: 2882 samples put `length / samples` on 1.5m
+ *                     at 4323.0000m, and `Track.at()` floors, so crossing
+ *                     that shifts every radius the AI reads by ~10% at once
+ *                     (rustfall.ts records the measurement). 0.118m of room.
+ *   mean lap          92.61s          band 55-105s
  *   finishers         24/24
  *   respawns          0.0/race (probe); 0 across 160 races at 20 seeds
  *   tightest radius   49m             floor 45m
  *   chord ratio       1.85            gate 3.5, brief 3.0
  *   corners           20 (was 14): 2 hairpin / 12 medium / 4 fast / 2 sweeper
- *   probe-selfclear   passes; closest surface-or-rail approach 17.3m
+ *   road half-width   22m through the Holo Ring, 24m on its two feed stubs,
+ *                     26.25m of ordinary street, 27-31m on the maglev runs and
+ *                     the infield diagonal, 30m at the tight corners, 33m at
+ *                     the two infield hooks
+ *   probe-selfclear   passes; closest ribbon-to-ribbon approach 8.3m
+ *   probe-solidclear  CLEAR by 4.50m, and still clear with every width on the
+ *                     circuit multiplied by a further 1.10 (fails at 1.15)
  */
 
 /**
@@ -426,8 +512,11 @@ const START_Y = 42
 /**
  * Holo Ring radius -- referenced again below when locating its apex node.
  * `circuit()` REQUIRES >=32m for a loop (a 25m loop was reading as a phantom
- * 26m corner to `curvatureAt`). `stagger` is 54, comfortably inside the
- * builder's own [road width+14, 1.9*r] window for this radius.
+ * 26m corner to `curvatureAt`). `stagger` is 54, inside the builder's hard
+ * ceiling of 1.9*r = 64.6m but NO LONGER clear of the rule of thumb it was
+ * chosen against (at least the road's full width plus 14m): a x1.5 road wants
+ * 65m and there is no room left for it at this radius. The road through the
+ * set piece is narrowed instead -- see the clearance section in the header.
  */
 const LOOP_R = 34
 
@@ -445,14 +534,14 @@ const SEGS: Seg[] = [
   // --- MAGLEV A. The opening sprint: boosted, and comfortably over corner 1's
   // mandatory 180m brake zone. See the header note on why the tight corner
   // lives HERE and not at its narrative "natural" position seven corners later.
-  { t: 'straight', len: 195.62, tag: 'start', boost: true, w: 18.5 },
+  { t: 'straight', len: 195.62, tag: 'start', boost: true, w: 27.75 },
 
   // T1 GRID CORNER -- medium, 62m (77% of top speed). The radius the loop exit
   // corner would have carried in a naive authoring pass; it lives here instead
   // because this is where the lap has a 180m+ mandatory straight to brake on.
-  // Widened to 20m: first-corner braking under a fresh field is the single
+  // Widened to 30m: first-corner braking under a fresh field is the single
   // most contested moment of the lap.
-  { t: 'corner', r: 62, deg: 46, bank: 8, w: 20, tag: 'T1-tight' },
+  { t: 'corner', r: 62, deg: 46, bank: 8, w: 30, tag: 'T1-tight' },
   { t: 'straight', len: 40.92 },
 
   // T2 DOCKSIDE SWEEP -- medium, 60m (76%), opens the esses.
@@ -470,8 +559,8 @@ const SEGS: Seg[] = [
   // reading. Authored at 46m through the first four passes and opened here: at
   // the old 24m spacing 46m baked to 41.6m, under the floor the whole 45m rule
   // is stated against. Six metres plus the spacing change (see the header)
-  // buys the whole margin back. Widened to 20m, fed by a real brake zone.
-  { t: 'corner', r: 52, deg: 122, bank: 11, w: 20, tag: 'T4-hairpin' },
+  // buys the whole margin back. Widened to 30m, fed by a real brake zone.
+  { t: 'corner', r: 52, deg: 122, bank: 11, w: 30, tag: 'T4-hairpin' },
   { t: 'straight', len: 58.83, toY: 33 },
 
   // T5 EXCHANGE KINK -- fast, 80m (88%), the floor of its band -- a lift
@@ -485,20 +574,41 @@ const SEGS: Seg[] = [
   { t: 'corner', r: 110, deg: -22, bank: -3, tag: 'T6' },
 
   // --- MAGLEV B, part 1: the run up to the loop.
-  { t: 'straight', len: 40.61, boost: true, w: 18.5, toY: 36 },
+  //
+  // THE SET PIECE IS THE ONE PLACE ON THIS LAP THE STREET DOES NOT GET 50%
+  // WIDER, and the three `w` values here and below -- 24 / 22 / 24 -- are the
+  // whole of it. Everything else took the width pass in full; the loop and its
+  // two feed stubs took x1.3 instead (18.5 -> 24 and 17 -> 22, which keeps the
+  // tube narrower than its stubs in exactly the proportion they were
+  // authored). The reason is in the header's clearance section: the loop's
+  // entry arc runs alongside its own exit straight at a stagger of 54m, that
+  // 54m is a constant no width change moves, the two mouths are at the same
+  // height by construction so no `toY` can separate them, and 25.5 + 27.75
+  // plus the barriers' own 0.67m reach does not fit inside it. Measured: at
+  // x1.5 `probe-solidclear` found the loop's rail 0.31m inside the exit road
+  // and a pier 0.33m inside it; at x1.3 it reports 4.50m of clearance, the
+  // ribbon gate goes 2.3m -> 8.3m, and the headroom over that road goes 3.06m
+  // -> 19.70m, which takes it back over the flight class's 6.5m ceiling. It is
+  // free: `w` never enters `circuit()`'s closure walk, so the baked lap is
+  // 4322.8822887633m either side of this change and the radius census cannot
+  // move. Both stubs stay `boost: true` and stay 40.61m long.
+  { t: 'straight', len: 40.61, boost: true, w: 24, toY: 36 },
 
   // THE HOLO RING. A staggered vertical loop through an advertising hoop --
   // see circuit.ts's own note on why the crossing is lateral. Not boosted, not
   // `bounce`: the one set piece a driver gets to just enjoy. Its apex node is
   // located and tagged in the post-processing block below. Drawn in both
-  // panels of the sketch and untouched by this pass.
-  { t: 'loop', r: LOOP_R, side: 1, stagger: 54, w: 17, bounce: false, tag: 'holoring' },
+  // panels of the sketch; its plan geometry is untouched, and 22m is the only
+  // thing about it this pass changed -- still 5m wider than the 17m tube this
+  // circuit shipped and raced at 0 respawns, and see the note above for why it
+  // is not 25.5m.
+  { t: 'loop', r: LOOP_R, side: 1, stagger: 54, w: 22, bounce: false, tag: 'holoring' },
 
   // --- MAGLEV B, part 2: the loop's exit straight. This gap and the one above
   // share an identical heading (the loop is a geodesic and does not turn it),
   // so the closure math cannot tell them apart -- both stay short and are
   // simply a good boost burst rather than a long one.
-  { t: 'straight', len: 40.61, boost: true, w: 18.5, tag: 'maglev' },
+  { t: 'straight', len: 40.61, boost: true, w: 24, tag: 'maglev' },
 
   // T7 RING EXIT -- fast, 80m (88%). Carries the radius T1 traded away: fed by
   // the loop's exit rather than a dedicated brake zone, which is fine, because
@@ -521,8 +631,8 @@ const SEGS: Seg[] = [
   // T10 CHINATOWN HAIRPIN -- hairpin, 55m (73%, 104m of arc), baking to 53m.
   // The lap's other hairpin, opposite hand from Founders. Opened from 49m for
   // the same reason as T4: at the old spacing 49m baked to 43.0m. Widened to
-  // 20m.
-  { t: 'corner', r: 55, deg: 108, bank: 11, w: 20, tag: 'T10-hairpin' },
+  // 30m.
+  { t: 'corner', r: 55, deg: 108, bank: 11, w: 30, tag: 'T10-hairpin' },
 
   // Underpass #2, the Podium Undercroft. Deck climbs 3m through it.
   { t: 'straight', len: 59.71, tunnel: true, toY: 33, tag: 'tunnel2' },
@@ -542,7 +652,7 @@ const SEGS: Seg[] = [
   // the tightest curvature on the whole lap (37m); see the header's
   // 0.0228*len^2/r measurement. Two turns over this axis is what an earlier
   // pass traced the Spire's respawns to -- one turn is clean, and faster.
-  { t: 'cyclone', r: 22, turns: 1, len: 240, w: 18, bounce: false, toY: 23, tag: 'spire' },
+  { t: 'cyclone', r: 22, turns: 1, len: 240, w: 27, bounce: false, toY: 23, tag: 'spire' },
 
   // Plain gap. The Spire's exit shares its heading with the infield's Wharf
   // run below, so between the two of them this is the one asked to carry most
@@ -553,9 +663,9 @@ const SEGS: Seg[] = [
   // T12 SPIRE EXIT -- medium, 58m (75%), the floor of its band. The sketch's
   // own trace puts this corner at 60m swept AND 60m circle-fitted, so it is
   // one of the few radii the drawing and the shipped lap already agreed on.
-  // Widened to 20m and fed by the gap above, which comfortably clears the 180m
+  // Widened to 30m and fed by the gap above, which comfortably clears the 180m
   // a corner this tight needs.
-  { t: 'corner', r: 58, deg: 60, bank: 9, w: 20, tag: 'T12-tight' },
+  { t: 'corner', r: 58, deg: 60, bank: 9, w: 30, tag: 'T12-tight' },
 
   // ==================== THE INFIELD, AS DRAWN ====================
   //
@@ -572,8 +682,8 @@ const SEGS: Seg[] = [
   // T13 SUMP TURN-IN -- medium, 58m (75%), the floor of its band. The sketch's
   // hardest single stroke: the elbow where the road leaves the bottom run and
   // climbs into the infield. Traces at 55m swept / 42m circle-fitted -- see
-  // the header on why 58m is what got authored. Widened to 20m.
-  { t: 'corner', r: 58, deg: 75, bank: 9, w: 20, tag: 'T13-tight' },
+  // the header on why 58m is what got authored. Widened to 30m.
+  { t: 'corner', r: 58, deg: 75, bank: 9, w: 30, tag: 'T13-tight' },
   { t: 'straight', len: 53.72 },
 
   // T14 UNDERCROFT OPENING -- sweeper, 130m (flat out). The second half of the
@@ -591,17 +701,25 @@ const SEGS: Seg[] = [
   // three changes of direction that is not a hook: the road turns away from
   // the outer lap and sets up the long diagonal. Traces between 59m and 85m
   // depending on the window -- 70m is the middle of that and of its band.
-  // Widened to 20m.
-  { t: 'corner', r: 70, deg: -92, bank: -9, w: 20, tag: 'T15' },
+  // Widened to 30m.
+  { t: 'corner', r: 70, deg: -92, bank: -9, w: 30, tag: 'T15' },
 
-  // THE SQUEEZE, on the "2"'s long diagonal. 17.5 -> 15.5 -> 14 -> 15.5 ->
-  // 17.5, ramped across three node-to-node spacings rather than stepped. All
-  // three share a heading, so the closure correction cannot tell them apart
-  // and they were balanced to roughly equal spans afterwards. See the header
-  // for why the pinch moved here from the old T13-to-Maglev-C run.
-  { t: 'straight', len: 68.47, w: 15.5, tag: 'squeeze' },
-  { t: 'straight', len: 78.47, w: 14 },
-  { t: 'straight', len: 68.47, w: 15.5, toY: 32 },
+  // THE SQUEEZE, on the "2"'s long diagonal -- OR WHAT THE WIDTH PASS LEFT OF
+  // IT. Authored 17.5 -> 15.5 -> 14 -> 15.5 -> 17.5, ramped across three
+  // node-to-node spacings rather than stepped; the width pass doubled the two
+  // pinch values and multiplied the street by 1.5, so it now reads
+  // 26.25 -> 31 -> 28 -> 31 -> 26.25 and the pinch is a lay-by. The three
+  // straights are left exactly as that pass set them -- restoring the pinch is
+  // a design call, not a clearance one -- and what IS fixed this pass is the
+  // tagging block near the bottom of the file, which used to find this stretch
+  // by searching for the narrowest node on the lap and had silently started
+  // finding the Holo Ring instead. All three share a heading, so the closure
+  // correction cannot tell them apart and they were balanced to roughly equal
+  // spans afterwards. See the header for why the feature moved here from the
+  // old T13-to-Maglev-C run.
+  { t: 'straight', len: 68.47, w: 31, tag: 'squeeze' },
+  { t: 'straight', len: 78.47, w: 28 },
+  { t: 'straight', len: 68.47, w: 31, toY: 32 },
 
   // ---- THE HOLLOW LOOPBACK, the "2"'s top hook: 66m / 40.5m / 66m, -172
   // degrees in total. Two 86-degree corners rather than one 172-degree arc --
@@ -611,27 +729,27 @@ const SEGS: Seg[] = [
   // what keeps the hook inside the ground the drawing gives it. This is the
   // outermost point of the infield: 121m from Maglev C and 210m from the start
   // straight, both measured on the drawing before it was authored. Banked 10
-  // degrees and widened to 22m -- eight cars are in here together, at 45 m/s,
+  // degrees and widened to 33m -- eight cars are in here together, at 45 m/s,
   // for four seconds, which is longer than anywhere else on the lap. ----
-  { t: 'corner', r: 66, deg: -86, bank: -10, w: 22, tag: 'T16-hairpin' },
+  { t: 'corner', r: 66, deg: -86, bank: -10, w: 33, tag: 'T16-hairpin' },
   // The hook's middle straight, banked with the corners either side so the
   // road does not roll flat and back again across 40m.
-  { t: 'straight', len: 40.50, bank: -10, w: 22, tag: 'hollow-mid' },
-  { t: 'corner', r: 66, deg: -86, bank: -10, w: 22, tag: 'T16b' },
+  { t: 'straight', len: 40.50, bank: -10, w: 33, tag: 'hollow-mid' },
+  { t: 'corner', r: 66, deg: -86, bank: -10, w: 33, tag: 'T16b' },
 
   // MAGLEV D, the infield strip. 149m of boost between the lap's two hooks --
   // the one piece of boost the sketch does not draw in yellow. See the header
   // for the justification and for what removing it measured.
-  { t: 'straight', len: 149.17, boost: true, w: 18.5, toY: 30, tag: 'maglevD' },
+  { t: 'straight', len: 149.17, boost: true, w: 27.75, toY: 30, tag: 'maglevD' },
 
   // ---- THE CISTERN HOOK, the "2"'s bottom hook: 68m / 40.5m / 68m, +172
   // degrees, mirroring the top hook in angle and opposite in hand, 2m wider in
   // radius so the pair reads as a matched pair rather than a repeat. Traces at
   // 82m swept over its whole length and 69m circle-fitted over its core. This
   // is the corner the respawn investigation in the header is about. ----
-  { t: 'corner', r: 68, deg: 86, bank: 10, w: 22, tag: 'T17-hairpin' },
-  { t: 'straight', len: 40.50, bank: 10, w: 22, tag: 'cistern-mid' },
-  { t: 'corner', r: 68, deg: 86, bank: 10, w: 22, tag: 'T17b' },
+  { t: 'corner', r: 68, deg: 86, bank: 10, w: 33, tag: 'T17-hairpin' },
+  { t: 'straight', len: 40.50, bank: 10, w: 33, tag: 'cistern-mid' },
+  { t: 'corner', r: 68, deg: 86, bank: 10, w: 33, tag: 'T17b' },
 
   // The infield's exit, back onto the drawn line of the old bottom diagonal.
   { t: 'straight', len: 73.47, tag: 'cistern-exit' },
@@ -639,18 +757,18 @@ const SEGS: Seg[] = [
   // --- MAGLEV C. The last boost run, and the lead-in to the final corner --
   // boost hard, then brake hard, one more time before the line. The lap's one
   // deliberately LONG straight, well clear of T18's mandatory 180m.
-  { t: 'straight', len: 238.47, boost: true, w: 18.5, toY: 42, tag: 'maglevC' },
+  { t: 'straight', len: 238.47, boost: true, w: 27.75, toY: 42, tag: 'maglevC' },
 
   // T18 GRID RETURN -- medium, 58m (75%), the floor of its band, closing onto
-  // the start/finish straight. The sketch traces it at 57m. Widened to 20m.
-  { t: 'corner', r: 58, deg: 56, bank: 8, w: 20, tag: 'T18-tight' },
+  // the start/finish straight. The sketch traces it at 57m. Widened to 30m.
+  { t: 'corner', r: 58, deg: 56, bank: 8, w: 30, tag: 'T18-tight' },
 ]
 
 const built = circuit(SEGS, {
   spacing: SPACING,
   start: [0, START_Y, 0],
   heading: 0,
-  defaults: { w: 17.5, surface: 'metal', bounce: true },
+  defaults: { w: 26.25, surface: 'metal', bounce: true },
   minStraight: 40,
 })
 
@@ -700,9 +818,12 @@ function nodeNear(dist: number): number {
  * here. The theme's contract (`render/themes/neonspire.ts`) is exactly four
  * names: `holoring` and `holoring-apex` locate the advertising hoop, `maglev`
  * anchors the sign-gantry cluster and `squeeze` the street-plant cluster. All
- * four survive this pass on real nodes. `squeeze` moved to different GROUND --
- * see the header -- but is still a real 14m pinch on straight road, which is
- * the only thing the cluster cares about.
+ * four survive on real nodes -- which was NOT true between the width pass and
+ * this one, when `squeeze` was overwriting `holoring` and the hoop stopped
+ * being built; see the note under `squeeze` below. `squeeze` moved to
+ * different GROUND when the infield was drawn -- see the header -- and after
+ * the width pass it is no longer a pinch at all, which the prop cluster does
+ * not care about: all it needs is a node on the infield's long diagonal.
  */
 nodes[0].tag = 'start'
 nodes[nodeNear(built.marks['maglev'])].tag = 'maglev'
@@ -710,23 +831,37 @@ const iHoloring = nodeNear(built.marks['holoring'])
 nodes[iHoloring].tag = 'holoring'
 
 /**
- * THE SQUEEZE'S TAG GOES ON THE PINCH ITSELF, NOT ON ITS `marks` DISTANCE.
+ * THE SQUEEZE'S TAG IS PLACED FROM ITS `marks` DISTANCE, LIKE EVERY OTHER TAG,
+ * AND THE "NARROWEST NODE ON THE LAP" TRICK THAT USED TO PLACE IT IS GONE.
  *
- * `built.marks` is a PLAN distance and `cum` above is the emitted 3-D
- * distance, and the two drift apart by about 1% over a lap: the cyclone's
- * helix and every elevation ramp add 3-D length that the plan walk never
- * counted. By the time the lap reaches the infield that is most of a node
- * spacing, which is enough to land the tag on the corner BEFORE the pinch --
- * measured, `nodeNear` picked a 20m-wide node two places early. For a 260m
- * prop cluster that is harmless, but the Squeeze is a specific piece of 14m
- * road and its tag should be standing on it. The narrowest node of the lap is
- * that piece of road by definition, and it cannot drift.
+ * That trick read: walk every node, take the one with the smallest `w`, call it
+ * the Squeeze. It was correct exactly while the pinch was the narrowest road on
+ * the circuit -- 14m against a 17m Holo Ring and a 17.5m street. The width pass
+ * broke that premise and nothing noticed, because a search that always returns
+ * SOMETHING cannot fail loudly:
+ *
+ *   as authored      pinch 14   Holo Ring 17     -> narrowest is the pinch
+ *   after the widths  pinch 28   Holo Ring 25.5   -> narrowest is the loop
+ *   as it ships now   pinch 28   Holo Ring 22     -> narrowest is the loop
+ *
+ * -- so the tag moved 2100m along the lap onto the loop's FIRST node, which is
+ * the node tagged `holoring` on the line immediately above this comment. Being
+ * an assignment rather than a merge it overwrote that tag; `loopHoop()` returns
+ * null when its entry tag is missing; and the advertising hoop the whole set
+ * piece is named after stopped being built. The street-plant cluster went with
+ * it, scattering 260m of ground-level city furniture along a vertical loop.
+ *
+ * `nodeNear` drifts -- `built.marks` is a PLAN distance and `cum` is the
+ * emitted 3-D distance, and the cyclone's helix plus every elevation ramp put
+ * about 1% between them, which by the infield is most of a node spacing. That
+ * is the cost of going back to it, and it was measured rather than assumed:
+ * the tag lands on node 161 at s=3063m, two nodes early, on the tail of T15,
+ * where the first straight of the run starts at s=3101m. For a 260m prop
+ * cluster 38m is nothing, and all four of the tags the theme's contract names
+ * are on real nodes again. Whether the pinch itself comes back is a separate
+ * decision; if it does, this line needs no change.
  */
-{
-  let narrowest = 0
-  for (let i = 1; i < nodes.length; i++) if (nodes[i].w < nodes[narrowest].w) narrowest = i
-  nodes[narrowest].tag = 'squeeze'
-}
+nodes[nodeNear(built.marks['squeeze'])].tag = 'squeeze'
 
 /**
  * THE HOLO RING'S APEX. The loop emits `steps+1` nodes (see circuit.ts's own

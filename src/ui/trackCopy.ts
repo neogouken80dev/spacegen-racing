@@ -149,12 +149,22 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
     // circuit used to be; Vince's redraw put a wave across the top and an S
     // through the bottom and took the lap to 4033.8m. Four blooms now, not
     // three -- BLOOM-D came in with the S.
+    //
+    // 3967.9m SINCE. Vince reported the corkscrew's entry as "quite
+    // impossible to enter into smoothly" and asked for double the width. He
+    // was right about the entry and the width was not the cause: the mouths
+    // were baking at 39.8m against a 45m floor, and this file's own header
+    // had dismissed them as "nothing is authored there". Three turns became
+    // two, which halves the roll per node and opens the mouths to 62-68m;
+    // the coil got 63m shorter, which is where the length went. The road did
+    // double as asked -- 42-102m, the widest on the roster.
     note:
       'Nine hundred metres down, inside the glass, with the trench on the ' +
       'other side of it. The plan wanders, and is meant to: a long wave ' +
       'across the top, a descent down the right flank, a big S driven ' +
-      'through the bottom, and two hairpins holding the ends of four ' +
-      'kilometres together. Four corners run over biofilm -- grip 0.30, ' +
+      'through the bottom, and two hairpins holding the ends of it ' +
+      'together, on the widest road anywhere on the roster. Four corners ' +
+      'run over biofilm -- grip 0.30, ' +
       'lower than ice -- and every bloom sits where the corner already ' +
       'wanted you slow, so it costs a tidy driver almost nothing and takes ' +
       'everything off one who arrived hot. Watch the amber posts; ' +
@@ -183,21 +193,34 @@ export const TRACK_COPY: Record<string, TrackCopy> = {
     hook: 'Dry deck, grip 1.0, and the hardest lap in the game.',
     // THE SHAPE SENTENCE WAS FOUR CIRCUITS OUT OF DATE. "A squared-off block:
     // four flat sides and four real corners, 14-21m of road" described neither
-    // the circuit this file rebuilt from the sketch (twenty corners, 4322.9m,
-    // 14-22m) nor the fourteen-corner one before it, which is the version the
-    // line was already stale for when it was written. Re-read off the built
-    // lap this time, not off the last thing anyone remembered about it.
+    // the circuit this file rebuilt from the sketch (twenty corners, 4322.9m)
+    // nor the fourteen-corner one before it, which is the version the line was
+    // already stale for when it was written. Re-read off the built lap this
+    // time, not off the last thing anyone remembered about it.
+    //
+    // TWICE MORE SINCE, AND THE SECOND ONE IS A LESSON ABOUT UNITS. The
+    // rewrite quoted "14-22m of road", which were the authored HALF-widths --
+    // the street was 28-44m across and a player reading that line was told
+    // half the truth in the literal sense. Then Vince widened the circuit
+    // (+50% generally, +100% on the pinches) because it drove too narrow, and
+    // both the figure and the Squeeze went with it: at 56m the Squeeze is
+    // now WIDER than the 52m street it was supposed to pinch, because you
+    // cannot double the narrow thing, add half to the wide thing, and keep
+    // the narrow one narrow. It is a lay-by now, and the copy says so rather
+    // than advertising a corner the player will not find.
     difficulty: 'Hard',
     note:
       'Every other Hard circuit is hard because of a substance -- ice, ' +
       'biofilm, vacuum. Take it away and they are wide and forgiving. This ' +
       'one has no hostile surface at all. Twenty corners over 4.3km of ' +
-      'walled street, 14-22m of road, and an infield that folds a double ' +
+      'walled street, 44-66m across, and an infield that folds a double ' +
       'hairpin through the middle of the city -- two hooks that each turn ' +
-      'you the whole way back on yourself, down a diagonal where the Squeeze ' +
-      'pinches the street to 14m. It only works because contact no longer ' +
-      'ends a drift -- leaning on a barrier through a corner this tight is a ' +
-      'line you can choose now. Three maglev runs are the compensation, so ' +
+      'you the whole way back on yourself. The street is wide now and the ' +
+      'corners are still the tightest sequence on the roster, which is a ' +
+      'different kind of hard: room to get it wrong in. It helps that ' +
+      'contact no longer ends a drift -- leaning on a barrier through a ' +
+      'hook is a line you can choose. Three maglev runs are the ' +
+      'compensation, so ' +
       'the lap alternates real top speed with hard braking and never gives ' +
       'you both. One loop and one spiral: the Holo Ring and the Spire, the ' +
       'only two places on the lap you stop working.',

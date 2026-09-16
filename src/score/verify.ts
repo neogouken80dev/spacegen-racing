@@ -44,7 +44,7 @@ export const TRACK_LENGTH: Record<string, number> = {
   aetherion: 3212.5,
   hollowchoir: 3255.2,
   emberfall: 4481.6,
-  abyssal: 4033.8,
+  abyssal: 3967.9,
   halcyon: 2860.3,
   neonspire: 4322.9,
 }
