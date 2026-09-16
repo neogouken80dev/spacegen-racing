@@ -22,6 +22,11 @@
  *     than a continuous strip light, which smears into one flat band and tells
  *     peripheral vision nothing. `bounce` segments add a travelling pulse ON
  *     TOP of that structure instead of replacing it.
+ *   - a turn-warning chevron board painted into the barrier on the OUTSIDE of
+ *     every turn and bend, pointing the way the road goes. Painted, not built:
+ *     the signed curvature rides in a vec4 lane the wall was already carrying
+ *     and paying for, so the whole feature is a second pattern on a face the
+ *     driver was already looking at — no geometry, no draw call, no attribute.
  *   - booster ramp decks: a raised wedge built from the same cross-section, so
  *     it inherits track width and banking exactly, plus approach chevrons, a
  *     launch gantry, side rails, struts and a landing-zone marker downrange
@@ -249,9 +254,20 @@ class ChunkBuilder {
   /**
    * @param s     arc length along the lap, metres (unwrapped, so the final
    *              row of the final chunk reads `track.length`, not 0)
-   * @param uM    lateral offset in metres (road) — unused elsewhere
+   * @param uM    lateral offset in metres. On the road it is where across the
+   *              ribbon this vertex sits. On a wall or a lip it is
+   *              `side * width`, so its MAGNITUDE is the half-width and its
+   *              SIGN is which barrier this is — which is what the turn
+   *              warning band reads to tell the outside of a corner from the
+   *              inside, at no cost, because the wall already carried it.
    * @param uN    road: lateral/width in [-1,1]. Wall/lip: height fraction 0..1.
    * @param kind  KIND_* constant
+   *
+   * The last four are `aMix`. On the road they are the crossfaded surface
+   * blend they are named for. Everything else reuses the lane: KIND_RAMP packs
+   * the deck's own frame into all four (see the ramp branch of the fragment
+   * shader) and a wall puts its signed curvature in the first and leaves the
+   * other three at zero (see `emitWall`).
    */
   vert(
     px: number, py: number, pz: number,
@@ -732,6 +748,105 @@ vec3  _emit  = vec3(0.0);
       _metal = 0.0;
       _rough = 0.22;
 #endif
+    }
+
+    /* ---- THE TURN WARNING BAND ---------------------------------------- */
+    //
+    // A chevron board painted into the barrier on the OUTSIDE of every turn,
+    // pointing the way the turn goes. No geometry and no draw call: it is a
+    // second pattern on the inner face a driver was already looking at.
+    //
+    // ONE SMOOTHSTEP DOES BOTH JOBS. 'aMix.x' carries the sample's SIGNED
+    // curvature (see 'emitWall'), and 'vTrack.y' is 'side * width', so its
+    // sign is the side of the road this barrier stands on. Their product is
+    // positive on exactly the outside wall of a turn and negative on the
+    // inside one -- so ramping that single signed number selects the wall AND
+    // fades the band in with curvature, with no branch on the side and no
+    // second uniform. At an inflection it also crossfades for free: 'lean'
+    // passes through zero on BOTH walls at once, so an S hands the band over
+    // rather than strobing it across.
+    //
+    //   0.0018  R = 555 m. Below this a bend is not a bend and nothing paints.
+    //           Straights on all eight circuits measure under 0.0006 away
+    //           from their joins, so this floor keeps them clean.
+    //   0.0045  R = 222 m, full strength. Not a taste number: it is the gate
+    //           stepAI holds a drift above, i.e. the line the SIM itself draws
+    //           between a bend and a corner. Bends were asked for too, so the
+    //           ramp starts well below that line rather than at it.
+    //   0.0120  R = 83 m, where severity saturates. The medium band (58-80 m)
+    //           and both hairpin bands are past it, so every corner a driver
+    //           actually has to slow for reads at full intensity and a sweeper
+    //           does not.
+    float lean = sign(vTrack.y) * vMix.x;
+    float sev  = smoothstep(0.0045, 0.0120, lean);
+    // Faded out well beyond the distance it is read at -- 340 m is nearly five
+    // seconds at racing speed -- because a 10 m pattern goes sub-pixel long
+    // before that and would boil. It is NOT on lodM: lodM is gone by 260 m,
+    // and a corner warning that only appears once you are in the corner is
+    // worse than no corner warning at all.
+    float warn = smoothstep(0.0018, 0.0045, lean) * (1.0 - smoothstep(160.0, 340.0, dist));
+    if (warn > 0.001) {
+      // The board. h 0.30-0.84 is the clear air on this wall: above the
+      // chevron kerb (which ends at 0.24 and carries the SPEED read, a
+      // different job that has to keep working) and below the cap lamps
+      // (0.86 up). It is also the part of a barrier still in frame on the
+      // approach, where the warning is worth something -- the foot of the
+      // wall 200 m away is behind the crown of the road.
+      float plate = smoothstep(0.30, 0.37, h) * (1.0 - smoothstep(0.77, 0.84, h));
+
+      // THE ARROWHEAD. Folding the phase through |h - apex| turns a stripe
+      // into a V: the apex leads down-track and both arms trail back from it.
+      //
+      // That is what makes it point at the corner, and it needs no per-side
+      // mirroring to do it. The outside wall of a turn recedes TOWARD the
+      // corner -- its far end is where the road is going -- so an apex that
+      // leads down-track is an apex that aims at the turn, and because the
+      // left and right barriers are mirror images on screen the same painted
+      // arrow reads "left" on one and "right" on the other. Measured at a
+      // 30 m viewing distance on a 12 m half-width: the apex sits about 0.06
+      // of frame width toward the turn from the arms, against a 0.06 arm
+      // spread -- a 45-degree arrowhead, not a sliver.
+      //
+      //   16.0  metres of down-track lead per unit height. 0.27 of usable
+      //         board half-height makes that a 4.3 m lead.
+      //   10.0  the pitch. It must exceed the lead or the phase wraps
+      //         vertically and the arrow comes back as a herringbone -- the
+      //         same trap the boost pad and the ramp deck are commented for.
+      //         It is also deliberately long: at 2.4 m (the bay pitch) or
+      //         7.2 m (the lamp pitch) this would beat against the barrier's
+      //         own rhythm and read as more texture. Ten metres is a SIGN
+      //         that ticks past, which is what a chevron board is.
+      float wd   = abs(h - 0.57);
+      float cp   = fract((sArc + wd * 16.0) / 10.0);
+      float e    = abs(fract(cp + 0.5) - 0.5);
+      float aw   = 0.075 + 0.045 * sev;      // 1.5 m of arrow at a bend, 2.4 at a hairpin
+      float chev = 1.0 - smoothstep(aw * 0.45, aw, e);
+
+      // VALUE FIRST. The board is a dark plate and the arrow is bright on it;
+      // that contrast is what carries at 200 m through fog and bloom, and it
+      // is the barrier art direction here (see the wall header) rather than
+      // more saturated light on a wall that already has lamps on it. The
+      // plate is a MULTIPLY, so the bays, corrugation and seams still run
+      // through it and the wall keeps telling a driver how fast they are
+      // going while it tells them which way the road bends.
+      //
+      // The colour is the theme's accent pushed toward white. Accent is the
+      // one palette slot that is bright on all eight circuits (sodium is
+      // 0x6e3a24 on Ashkar and 0x2f2a55 on Zhen-9 -- a hazard stripe there is
+      // legible only because the kerb is nearly black behind it), and the
+      // push toward white is what separates the arrow from the accent bars of
+      // a BOUNCE wall, which is nearly every wall on Zhen-9.
+      vec3 warnCol = mix(uAccent, vec3(1.0, 0.95, 0.88), 0.26);
+      float lit = chev * plate * warn;
+      diffuseColor.rgb *= mix(1.0, 0.30, plate * warn);
+      diffuseColor.rgb = mix(diffuseColor.rgb, warnCol * 0.60, lit * 0.80);
+      // Held between the kerb chevron's 0.12 and the cap lamp's 1.25: the
+      // band has to out-read the kerb without competing with the cars in
+      // front of it. Severity rides on the emission because it is free there
+      // -- a tighter corner is a brighter board -- but the floor is low
+      // enough that a gentle bend cannot be mistaken for a hairpin.
+      _emit += warnCol * lit * (0.22 + 0.36 * sev);
+      _rough = mix(_rough, 0.52, plate * warn * 0.7);
     }
 
   } else if (kind < 3.5) {
@@ -1932,6 +2047,10 @@ export function buildTrackVisual(track: Track, quality: RenderQuality): TrackVis
   // Shared between the wall skirt, the soffit and the piers: all three have to
   // agree about which sections are standing over open air.
   const { via: viaW, base: viaBase } = viaductWeights(track)
+  // Signed curvature per sample, for the barrier's turn-warning band. One
+  // array for the whole lap: both barriers and both ends of every segment read
+  // it, and it is two spline evaluations per sample, once, at build time.
+  const curv = cornerCurvature(track)
   const { mat, uniforms } = makeSurfaceMaterial(track)
   const hw = makeHardwareMaterial()
 
@@ -2010,7 +2129,7 @@ export function buildTrackVisual(track: Track, quality: RenderQuality): TrackVis
         } else {
           emitWall(b, sa, sb, arcA, arcB, side,
             fragile ? KIND_FWALL : bounce ? KIND_BOUNCE : KIND_WALL, ia,
-            viaW[ia], viaW[ib])
+            viaW[ia], viaW[ib], curv[ia], curv[ib])
           if (fragile) emitLip(b, sa, sb, arcA, arcB, side, ia, KIND_FLIP)
         }
       }
@@ -2173,12 +2292,107 @@ export function viaductWeight(track: Track): Float64Array {
   return viaductWeights(track).via
 }
 
+/**
+ * WHICH WAY THE ROAD BENDS, PER SAMPLE, FOR THE BARRIER'S WARNING BAND.
+ *
+ * `Track.curvatureAt(s, 20)` -- the same quantity, over the same 20 m window,
+ * that `stepAI` gates its drift hold on (`|k| > 0.0045`) -- smoothed along the
+ * lap with a +/- 9 m triangular kernel.
+ *
+ * Looking AHEAD is the point, not an artefact: the barrier at s carries the
+ * curvature of s..s+20, so a driver reading the wall 60 m up the road is
+ * reading a sign about the road at 60 m. The band therefore leads a corner's
+ * entry by up to 20 m and stops leading it at the exit, which is the behaviour
+ * a warning wants and the opposite of what a trailing average would give.
+ *
+ * THE SMOOTHING IS NOT TIDINESS, AND IT WAS ADDED AGAINST AN ARGUMENT.
+ *
+ * This shipped unsmoothed first, on the reasoning that a filtered copy of the
+ * curvature is a SECOND definition of "this is a corner" sitting next to the
+ * sim's, free to drift away from it. That reasoning is still right about the
+ * threshold, and the threshold is still the sim's. It was wrong about the
+ * signal. `curvatureAt` carries a ripple of roughly +/- 0.001 on road whose
+ * frame is rolling -- Meridian Deep's barrel and Halcyon Bay's wall-ride, where
+ * the surface normal sweeps through 90 degrees in 25 m -- and +/- 0.001 is a
+ * third of the band's whole ramp. Measured on the raw signal, the worst case
+ * was Meridian Deep at s=1847: the board went to full, out to nothing, and back
+ * to full inside SIX METRES, which at 60 m/s is a hundred-millisecond blink on
+ * the one wall a driver is looking at.
+ *
+ * So the kernel width was measured rather than guessed, across all eight
+ * circuits, as (worst brightness swing inside 6 m) against (weakest peak the
+ * band reaches on a stretch the AI already calls a corner):
+ *
+ *     none      0.79 blink      every corner peaks at 1.00
+ *     +/- 6 m   0.32 blink      0.93
+ *     +/- 9 m   0.11 blink      0.86
+ *     +/-12 m   0.11 blink      0.85
+ *     +/-16 m   0.11 blink      0.68   <- short corners start losing their board
+ *
+ * 9 m is where the blink stops paying and the erosion has not started. The 0.86
+ * is not a corner losing its sign either: it is a 5 m ripple over the AI's gate
+ * on Meridian Deep's roll, i.e. the same artefact seen from the other side.
+ * Every corner anyone authored still reaches 1.00.
+ *
+ * THE SIGN, MEASURED, BECAUSE GUESSING IT PAINTS ARROWS ON THE WRONG WALL.
+ * Two independent measurements on Ashkar's caldera-hook (the lap's tightest
+ * corner, authored `deg: +45`, baked R = 49 m at s = 250 m), plus one on the
+ * sim:
+ *
+ *   1. `dot(tangent x worldUp, right)` is 1.000 at every sample on the lap, so
+ *      `sample.right` IS the driver's right hand (r = f x u in a right-handed
+ *      world with +Y up, which is what three gives us). `placePart` below says
+ *      the same thing from the other end -- local +x is LEFT, and local +x is
+ *      -right.
+ *   2. At that corner `curvatureAt` reads +0.0206, and the OFFSET PATH on the
+ *      +right side is the longer of the two (42.6 m against 19.6 m over 30 m
+ *      of centreline). Longer offset path is the outside of a turn. So the
+ *      centre of curvature is on -right and the road turns to the driver's
+ *      LEFT.
+ *   3. `src/sim/ai.ts` agrees without being asked: its apex bias is
+ *      `-sign(curveFar) * ...`, applied as a lateral in the same `right`
+ *      frame, and an apex is on the INSIDE. For k > 0 it aims at -right.
+ *
+ * So: **k > 0 turns toward -right (the driver's left) and its outside wall is
+ * side = +1; k < 0 turns right and its outside wall is side = -1.** In both
+ * cases `side * k > 0` on the outside wall, which is the whole test the shader
+ * needs and is why the value carried per-vertex is SIGNED.
+ *
+ * (`src/sim/track.ts` documents this as "Positive turns right". Nothing in the
+ * sim reads that word -- the AI uses the sign arithmetically and is consistent
+ * with the measurement above -- but the comment is the wrong way round for the
+ * rendered world, and it is the exact trap this note exists to stop. That file
+ * is not this pass's to edit.)
+ *
+ * `tools/probe-warnband.ts` is the gate on all of it.
+ */
+function cornerCurvature(track: Track): Float64Array {
+  const m = track.samples.length
+  const raw = new Float64Array(m)
+  for (let i = 0; i < m; i++) raw[i] = track.curvatureAt((i / m) * track.length, 20)
+  // Half-width in samples, from metres, so a future change of sample spacing
+  // keeps the filter the same LENGTH of road rather than the same sample count.
+  const half = Math.max(1, Math.round(9 / (track.length / m)))
+  const out = new Float64Array(m)
+  for (let i = 0; i < m; i++) {
+    let acc = 0, wsum = 0
+    for (let d = -half; d <= half; d++) {
+      const w = 1 - Math.abs(d) / (half + 1)
+      acc += raw[((i + d) % m + m) % m] * w
+      wsum += w
+    }
+    out[i] = acc / wsum
+  }
+  return out
+}
+
 function emitWall(
   b: ChunkBuilder,
   sa: Track['samples'][number], sb: Track['samples'][number],
   arcA: number, arcB: number,
   side: number, kind: number, seed: number,
   viaA: number, viaB: number,
+  kA: number, kB: number,
 ): void {
   // Base / top / cap / skirt for both ends of the segment.
   const pts: number[][] = []
@@ -2223,7 +2437,29 @@ function emitWall(
     [2, 3, 1.0, 0.30, 1],
   ]
 
-  for (const [lo, hi, hLo, hHi, ns] of faces) {
+  for (let fi = 0; fi < faces.length; fi++) {
+    const [lo, hi, hLo, hHi, ns] = faces[fi]
+    /**
+     * THE WARNING BAND'S INPUT RIDES IN aMix.x, AND COSTS NOTHING.
+     *
+     * A wall vertex writes 0 into all four `aMix` channels and the wall branch
+     * of the fragment shader reads none of them -- the channels are the road's
+     * surface blend and, under KIND_RAMP, the deck's own frame. So the barrier
+     * had a free vec4 sitting on every one of its vertices, and the signed
+     * curvature goes in the first lane of it. A fifth attribute would have
+     * cost 16 bytes on every vertex of every chunk INCLUDING the road, which
+     * is most of the mesh and has no use for it.
+     *
+     * It is written on the INNER FACE ONLY (fi 0; the cap and the outer skirt
+     * get zero). That is not a saving, it is the mask: the skirt's height
+     * coordinate runs 1.0 down to 0.30 and so overlaps the board's h range,
+     * and without this the warning would paint down the OUTSIDE of every
+     * barrier on the circuit, where no driver can see it and the infield can
+     * see nothing else. Zero here means `lean` is zero there, which the
+     * shader's own ramp already rejects -- so it needs no separate face flag.
+     */
+    const kLo = fi === 0 ? kA : 0
+    const kHi = fi === 0 ? kB : 0
     // Flat normal from the quad edges.
     const ax = pts[0][lo * 3], ay = pts[0][lo * 3 + 1], az = pts[0][lo * 3 + 2]
     const bx = pts[0][hi * 3], by = pts[0][hi * 3 + 1], bz = pts[0][hi * 3 + 2]
@@ -2239,13 +2475,13 @@ function emitWall(
     const refz = ns === 0 ? sa.normal.z : sa.right.z * side * ns
     if (nx * refx + ny * refy + nz * refz < 0) { nx = -nx; ny = -ny; nz = -nz }
 
-    const v0 = b.vert(ax, ay, az, nx, ny, nz, r, g, bl, arcA, side * sa.width, hLo, kind, 0, 0, 0, 0)
-    const v1 = b.vert(bx, by, bz, nx, ny, nz, r, g, bl, arcA, side * sa.width, hHi, kind, 0, 0, 0, 0)
+    const v0 = b.vert(ax, ay, az, nx, ny, nz, r, g, bl, arcA, side * sa.width, hLo, kind, kLo, 0, 0, 0)
+    const v1 = b.vert(bx, by, bz, nx, ny, nz, r, g, bl, arcA, side * sa.width, hHi, kind, kLo, 0, 0, 0)
     const v2 = b.vert(
       pts[1][hi * 3], pts[1][hi * 3 + 1], pts[1][hi * 3 + 2],
-      nx, ny, nz, r, g, bl, arcB, side * sb.width, hHi, kind, 0, 0, 0, 0,
+      nx, ny, nz, r, g, bl, arcB, side * sb.width, hHi, kind, kHi, 0, 0, 0,
     )
-    const v3 = b.vert(cx, cy, cz, nx, ny, nz, r, g, bl, arcB, side * sb.width, hLo, kind, 0, 0, 0, 0)
+    const v3 = b.vert(cx, cy, cz, nx, ny, nz, r, g, bl, arcB, side * sb.width, hLo, kind, kHi, 0, 0, 0)
     // Wind so the computed normal is the front face.
     if (side > 0) b.quad(v0, v1, v2, v3)
     else b.quad(v0, v3, v2, v1)

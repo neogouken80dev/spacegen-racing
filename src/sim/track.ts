@@ -677,7 +677,26 @@ export class Track {
   }
 
   /**
-   * Signed curvature at s. Positive turns right. Used by the AI and by VFX.
+   * Signed curvature at s. **POSITIVE TURNS LEFT.** Used by the AI and by VFX.
+   *
+   * This comment said "turns right" for a long time and it was backwards, which
+   * is worth more than a one-word correction because a sign convention nobody
+   * can check is how a feature gets built mirrored. Measured three ways on
+   * Ashkar's caldera-hook (baked R = 49m at s = 250m, `curvatureAt(s,20)` =
+   * +0.0206):
+   *
+   *   - the tangent's swing projected onto `sample.right` is NEGATIVE there,
+   *     so the road turns away from the driver's right;
+   *   - the +right offset path is the LONGER one (42.6m against 19.6m over 30m
+   *     of centreline), and the longer offset path is the outside of a turn, so
+   *     the centre of curvature is on -right;
+   *   - `ai.ts` already agreed without being asked: `apexBias = -sign(curveFar)`
+   *     applied in this same frame, and an apex is on the INSIDE.
+   *
+   * Nothing read the word, so nothing was broken by it -- the AI uses the sign
+   * arithmetically and is consistent. `trackMesh.ts`'s corner warning boards are
+   * the first thing to depend on the direction by name, and they are painted
+   * where `side * k > 0`, which is the outside wall in both directions.
    *
    * Flat, this is the turn measured about world +Y: the XZ cross product over
    * the XZ dot. That is the whole corner on a track that never leaves the
