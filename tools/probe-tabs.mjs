@@ -405,8 +405,22 @@ if (last?.p !== 'results') errors.push(`never reached the results screen (phase 
 else if (before.missing) errors.push('the results screen has no tablist')
 else {
   if (before.role !== 'tablist') errors.push(`tab strip role is "${before.role}", not tablist`)
+  /**
+   * THREE TABS IN A SINGLE RACE, AND A FOURTH PANEL THAT IS NOT ONE.
+   *
+   * Circuit Mode added a Circuit page, and the requirement was that it be
+   * ABSENT outside a circuit rather than present and empty -- so tabs.ts
+   * detaches the button from the tablist while leaving the panel built and
+   * `hidden`. That is what these two numbers now mean: the tablist a screen
+   * reader counts still has three tabs, and the fourth panel is out of the
+   * accessibility tree rather than out of memory. `panelCount` was `=== 3`
+   * here and is deliberately not any more.
+   */
   if (before.labels.length !== 3) errors.push(`${before.labels.length} tabs, expected 3`)
-  if (before.panelCount !== 3) errors.push(`${before.panelCount} panels, expected 3`)
+  if (before.labels.includes('Circuit')) {
+    errors.push('the Circuit tab is in the tablist during a single race')
+  }
+  if (before.panelCount !== 4) errors.push(`${before.panelCount} panels built, expected 4`)
   if (before.visiblePanels !== 1) errors.push(`${before.visiblePanels} panels visible at once`)
   if (before.tabbable !== 1) errors.push(`${before.tabbable} tabs in the focus order, expected 1`)
   if (!before.visibleHasStandings) errors.push('does not open on the race standings')

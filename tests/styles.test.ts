@@ -71,4 +71,54 @@ describe('styles.css', () => {
     expect(block, 'the bare `.sg-score` rule was not found').toBeTruthy()
     expect(block![1]).toMatch(/font-family:\s*var\(--sg-display\)/)
   })
+
+  /**
+   * THE BUG VINCE REPORTED, PINNED SO IT CANNOT COME BACK.
+   *
+   * `.sg-row.is-you` used to set the `border-color` SHORTHAND, and
+   * `.sg-row.is-win` sets `border-left-color` later in the file at equal
+   * specificity -- so a player who WON lost the cyan left edge that was the
+   * only thing saying the row was theirs. The two states have to touch
+   * disjoint longhands, and the only way to keep that true is to forbid the
+   * shorthand here.
+   *
+   * Same for the circuit standings row, which carries the same marker.
+   */
+  it('never lets the winner’s colour overwrite the player’s own row', () => {
+    for (const sel of ['.sg-row', '.sg-crow']) {
+      const esc = sel.replace('.', '\\.')
+      const you = new RegExp(`^${esc}\\.is-you\\s*\\{([\\s\\S]*?)^\\}`, 'm').exec(CLEAN)
+      const win = new RegExp(`^${esc}\\.is-win\\s*\\{([\\s\\S]*?)^\\}`, 'm').exec(CLEAN)
+      expect(you, `${sel}.is-you was not found`).toBeTruthy()
+      expect(win, `${sel}.is-win was not found`).toBeTruthy()
+      // Neither may use the shorthand, which would set all four edges.
+      expect(you![1], `${sel}.is-you uses the border-color shorthand`)
+        .not.toMatch(/(^|[;{\s])border-color\s*:/)
+      expect(win![1], `${sel}.is-win uses the border-color shorthand`)
+        .not.toMatch(/(^|[;{\s])border-color\s*:/)
+      // "You" owns the left edge; "1st" owns the other three and must not
+      // name the left one except behind :not(.is-you).
+      expect(you![1]).toMatch(/border-left-color\s*:/)
+      expect(win![1]).not.toMatch(/border-left-color\s*:/)
+      expect(CLEAN).toMatch(new RegExp(`${esc}\\.is-win:not\\(\\.is-you\\)`))
+    }
+  })
+
+  /**
+   * AND THE MARKER IS NOT COLOUR ALONE.
+   *
+   * A row a colourblind player cannot pick out is the bug that was reported,
+   * not a lesser version of it, so the three non-colour channels are checked
+   * as structure rather than trusted to a screenshot: the "YOU" chip exists as
+   * a rule, the caret pseudo-element exists, and the rail changes WIDTH and not
+   * only hue.
+   */
+  it('marks the player’s row with more than a colour', () => {
+    expect(CLEAN, 'no .sg-you chip rule').toMatch(/^\.sg-you\s*\{/m)
+    expect(CLEAN, 'no caret pseudo-element on the player’s row')
+      .toMatch(/\.sg-row\.is-you::before/)
+    const you = /^\.sg-row\.is-you\s*\{([\s\S]*?)^\}/m.exec(CLEAN)
+    expect(you![1], 'the rail does not change width, so the marker is hue only')
+      .toMatch(/border-left-width\s*:/)
+  })
 })

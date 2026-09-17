@@ -1588,6 +1588,58 @@
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
 }
 
+/* A second-tier primary: smaller than --huge, wider than default, for the
+   Grand Circuit button that sits under PLAY without competing with it. */
+.sg-btn--wide {
+  font-size: clamp(14px, 2.4vmin, 22px);
+  padding: 0.5em 1.9em;
+  letter-spacing: 0.12em;
+}
+
+/* ---------------------------------------------------------------------------
+   OFF-SCREEN, BUT NOT HIDDEN.
+
+   `display: none` and `visibility: hidden` both remove an element from the
+   accessibility tree, which is exactly what a live region must not be -- the
+   announcement would never happen. This is the clip-rect idiom: laid out, one
+   pixel, painted nowhere, still read.
+   --------------------------------------------------------------------------- */
+.sg-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   THE TITLE SCREEN'S CIRCUIT BLOCK.
+
+   Under PLAY and quieter than it. A single race is still one button with
+   nothing in front of it; this is a second mode, and it carries its own state
+   line so a returning player reads where they got to without pressing
+   anything.
+   --------------------------------------------------------------------------- */
+.sg-title__circuit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.sg-title__cline {
+  font-size: clamp(10px, 1.45vmin, 13px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sg-dim);
+}
+
+.sg-title__cline:empty { display: none; }
+
 /* --- title -------------------------------------------------------------- */
 
 .sg-screen--title {
@@ -2579,7 +2631,61 @@
   min-height: 96px;
 }
 
+/* ===========================================================================
+   ONE MARKER LANGUAGE FOR "THIS ROW IS YOU", ON EVERY TABLE ON THE SCREEN.
+   ---------------------------------------------------------------------------
+   Reported by Vince: "it is not clear which line item is the player." It was
+   not, and the reason is worth writing down because it is not "the tint was
+   too faint".
+
+   TWO CAUSES. The first is that the marker was COLOUR ONLY -- a cyan border
+   and a cyan-to-dark gradient -- which is invisible to a player with a red-green
+   or blue-yellow deficiency at these saturations, invisible in a photograph of
+   a phone in daylight, and invisible to a screen reader. The second is worse:
+   the marker was DESTROYED BY WINNING. `.sg-row.is-you` set the `border-color`
+   SHORTHAND and `.sg-row.is-win` set `border-left-color` after it, so a player
+   who finished first got the winner's gold on the left edge and lost the only
+   edge that said the row was theirs. The one race where you most want to find
+   yourself was the one race the highlight did not work.
+
+   FOUR CHANNELS NOW, AND ONLY ONE OF THEM IS COLOUR:
+
+     1. THE WORD "YOU" (.sg-you). Text survives greyscale, every form of colour
+        blindness, a bad screen, and being read aloud.
+     2. A SHAPE. A caret grows out of the left rail into the row -- geometry no
+        other row has, at any colour.
+     3. A THICKER RAIL. 6px -> 10px, with the row's left padding reduced by the
+        same 4px so the content does NOT shift and the position column stays
+        tabular. A luminance and width step, not a hue step.
+     4. THE TINT AND THE RAIL COLOUR. The channel that was doing all the work
+        alone, now doing a quarter of it.
+
+   Plus `aria-current="true"` on the row from frontend.ts, so assistive tech is
+   told rather than left to infer a background.
+
+   AND THE TWO STATES NO LONGER SHARE A PROPERTY. "You" owns border-LEFT; "1st"
+   owns border-top/right/bottom, and takes the left edge only when the winner is
+   not also the player (`:not(.is-you)`). A winning player therefore reads as a
+   gold-ringed row with a cyan spiked rail, which is both facts at once.
+
+   CYAN MEANS YOU, GOLD MEANS FIRST -- and that had to be settled, because the
+   sheet previously said "gold means this is yours" on the board and records
+   rows while the standings said it in cyan and ALSO used gold for the winner.
+   Two meanings for gold in one screen is the ambiguity being reported. The
+   board and records rows moved to cyan to match; see .sg-board__row.is-you.
+   =========================================================================== */
+
+/* The rail geometry, shared by the two table row shapes so the marker is one
+   thing rather than two that look similar. */
+:root {
+  --sg-you-rail: 6px;
+  --sg-you-rail-on: 10px;
+  /* Half-height of the caret. 7px gives a 14px spike on a ~34px row. */
+  --sg-you-notch: 7px;
+}
+
 .sg-row {
+  position: relative;
   display: grid;
   grid-template-columns: 2.4em 1fr auto auto;
   align-items: center;
@@ -2588,22 +2694,78 @@
   border-radius: var(--sg-r-md);
   background: rgba(14, 22, 40, 0.82);
   border: 2px solid rgba(122, 190, 255, 0.16);
-  border-left-width: 6px;
+  border-left-width: var(--sg-you-rail);
+}
+
+/* ---------------------------------------------------------------------------
+   THE ENTRANCE RUNS ONCE PER RESULT, NOT ONCE PER REVEAL.
+
+   This used to sit on `.sg-row` itself, and a hidden tab panel is
+   `display: none`, which CANCELS a running animation and restarts it from zero
+   when the panel comes back. With `fill: both` the first second of that restart
+   is the `from` keyframe -- opacity 0 -- so tabbing away and back left the top
+   of the finishing order INVISIBLE for about a second while the eight delays
+   (150ms apart, winner last) played out again.
+
+   It was a rare annoyance with three tabs. Circuit Mode makes it certain: the
+   results screen now moves itself to the standings after every race, so every
+   trip back to the race result went through a table that was not there yet.
+   Measured at 1440x810: 800ms after returning, the top three rows reported
+   opacity 0.
+
+   Carried on a class instead, added by showResults() and dropped by it once the
+   last row has landed, so the animation is tied to "a race just finished"
+   rather than to "this element got a box". The resting state -- no class -- is
+   the fully drawn row, which is the same contract .sg-trk__map already uses.
+   --------------------------------------------------------------------------- */
+.sg-row.is-in {
   animation: sgRowIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-delay: var(--d, 0ms);
 }
 
 .sg-row.is-you {
-  border-color: var(--sg-cyan);
+  /* LONGHAND, DELIBERATELY. The shorthand is what let the winner's gold
+     overwrite this edge -- see the block comment above. */
+  border-left-color: var(--sg-cyan);
+  border-left-width: var(--sg-you-rail-on);
+  /* The 4px the rail took back, so nothing in the row moves. */
+  padding-left: calc(clamp(8px, 1.6vmin, 16px) - (var(--sg-you-rail-on) - var(--sg-you-rail)));
   background: linear-gradient(
     90deg,
-    rgba(34, 211, 255, 0.2),
-    rgba(14, 22, 40, 0.85) 55%
+    rgba(34, 211, 255, 0.26),
+    rgba(14, 22, 40, 0.85) 58%
   );
 }
 
 .sg-row.is-win {
+  border-top-color: var(--sg-gold);
+  border-right-color: var(--sg-gold);
+  border-bottom-color: var(--sg-gold);
+}
+
+/* A winner who is not the player takes the left edge too, so the row is ringed
+   rather than gold on three sides and faint on the fourth. */
+.sg-row.is-win:not(.is-you) {
   border-left-color: var(--sg-gold);
+}
+
+/* THE SHAPE CHANNEL. A caret standing on the rail and pointing into the row.
+   Absolutely positioned, so it costs no layout and cannot move a column; the
+   containing block is the row's PADDING box, so `left: -10px` is the outer
+   edge of the widened rail. */
+.sg-row.is-you::before,
+.sg-crow.is-you::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--sg-you-rail-on));
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-top: var(--sg-you-notch) solid transparent;
+  border-bottom: var(--sg-you-notch) solid transparent;
+  border-left: calc(var(--sg-you-rail-on) + 4px) solid var(--sg-cyan);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .sg-row__p {
@@ -2625,12 +2787,57 @@
 }
 
 .sg-row__pilot {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
   font-family: var(--sg-display);
   font-size: clamp(12px, 1.8vmin, 18px);
   letter-spacing: 0.06em;
   white-space: nowrap;
+  min-width: 0;
+}
+
+/* The name itself, so the YOU chip beside it is not swallowed by the ellipsis
+   that used to live on the whole line. */
+.sg-row__who,
+.sg-crow__who {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sg-row.is-you .sg-row__who,
+.sg-crow.is-you .sg-crow__who {
+  color: var(--sg-white);
+}
+
+/* ---------------------------------------------------------------------------
+   THE "YOU" CHIP.
+
+   A filled chip rather than outlined text: at 9px an outline is a rectangle
+   with something inside it and a fill is a block of ink, and a block of ink is
+   what gets noticed while a player's eye is still moving down the table.
+   `flex: none` because it must never be the thing that gets compressed -- the
+   pilot name shortens first, which is the right trade.
+   --------------------------------------------------------------------------- */
+.sg-you {
+  flex: none;
+  font-family: var(--sg-ui);
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  padding: 3px 5px 2px;
+  border-radius: 3px;
+  background: var(--sg-cyan);
+  /* Near-black rather than pure: 10.7:1 against the chip, and it keeps the
+     chip reading as a painted label rather than a hole. */
+  color: #04121a;
+  text-transform: uppercase;
+  /* Lifts the chip off a bright row tint without adding a second hue. */
+  box-shadow: 0 0 0 1px rgba(4, 18, 26, 0.5);
 }
 
 .sg-row__chassis {
@@ -3592,6 +3799,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* The animation now lives on `.sg-row.is-in` (see that block), but
+     `!important` beats a normal declaration whatever its specificity, so this
+     still switches it off -- and it stays written against `.sg-row` so it also
+     covers anything else that class ever grows. With the animation gone the
+     `both` fill goes with it, so the rows simply start drawn. */
   .sg-row {
     animation: none !important;
   }
@@ -4222,12 +4434,17 @@
   color: var(--sg-dim);
 }
 
-/* Gold means "this is yours", on every tab. */
+/* CYAN MEANS YOU, on every tab, and gold means first -- see the marker block
+   above .sg-row. These rows used to say "yours" in gold while the standings
+   said it in cyan and used gold for the winner, which is one of the two
+   reasons the player's row was hard to find. The rail is 3px here rather than
+   10px because these rows are 12px tall, not 34px: the marker scales with the
+   row it marks, which is what keeps it the same marker. */
 .sg-board__row.is-you,
 .sg-rec__row.is-you {
-  background: rgba(255, 210, 63, 0.12);
+  background: rgba(34, 211, 255, 0.16);
   color: var(--sg-ink);
-  box-shadow: inset 2px 0 0 var(--sg-gold);
+  box-shadow: inset 3px 0 0 var(--sg-cyan);
 }
 
 .sg-board__n { font-variant-numeric: tabular-nums; color: var(--sg-mute); }
@@ -4257,6 +4474,168 @@
   color: var(--sg-ink);
   text-align: right;
 }
+
+/* ===========================================================================
+   THE GRAND CIRCUIT — championship standings
+   ---------------------------------------------------------------------------
+   Same section grammar as the other three pages (one title, one column of
+   rows, one note), and the same "you" marker as the race standings above, so
+   the two tables a player reads back to back after every round are one thing.
+
+   FOUR COLUMNS, AND THE ORDER IS THE ARGUMENT: place, who, what this round
+   just paid, total. The gain column is what turns a table of totals into an
+   answer to "did I gain or lose ground", which is the question a player
+   arrives at this page with.
+   =========================================================================== */
+/* THE ROWS ARE THE PART THAT GIVES WAY.
+
+   Same contract `.sg-results__rows` already had, and for the same reason it
+   was needed there. A landscape phone is 412px tall; the title, the tab rail,
+   the panel head, the "you are 8th" line and the button row take most of it,
+   and eight standings rows do not fit in what is left. Measured at 915x412 the
+   panel simply ran off the bottom and the row the player came to read -- 8th,
+   theirs -- was the one clipped away, which is the reported bug wearing a
+   different hat.
+
+   So the ROWS scroll inside themselves while the head and the sentence above
+   them stay put, and fillStandings() scrolls the player's row to the middle of
+   it. The flex chain has to be unbroken for that to work: a flex item's
+   default `min-height: auto` refuses to shrink below its content, so the
+   panel needs it too or the shrink never reaches here. */
+.sg-crows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-height: 72px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sg-results__circuit {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.sg-crow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr) 3.1em 2.8em;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  /* Same rail as .sg-row so `.is-you` is one rule for both. */
+  border: 1px solid transparent;
+  border-left: var(--sg-you-rail) solid rgba(122, 190, 255, 0.16);
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--sg-dim);
+}
+
+.sg-crow.is-you {
+  border-left-color: var(--sg-cyan);
+  border-left-width: var(--sg-you-rail-on);
+  padding-left: calc(8px - (var(--sg-you-rail-on) - var(--sg-you-rail)));
+  background: linear-gradient(
+    90deg,
+    rgba(34, 211, 255, 0.26),
+    rgba(255, 255, 255, 0.03) 58%
+  );
+  color: var(--sg-ink);
+}
+
+.sg-crow.is-win {
+  border-top-color: var(--sg-gold);
+  border-right-color: var(--sg-gold);
+  border-bottom-color: var(--sg-gold);
+}
+
+.sg-crow.is-win:not(.is-you) {
+  border-left-color: var(--sg-gold);
+}
+
+/* The caret is smaller here because the row is: 5px gives a 10px spike on a
+   ~24px row, the same proportion the 14px spike has on a race standings row. */
+.sg-crow.is-you::before {
+  --sg-you-notch: 5px;
+}
+
+.sg-crow__p {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: 15px;
+  color: var(--sg-ink);
+  text-align: center;
+}
+
+.sg-crow.is-win .sg-crow__p {
+  color: var(--sg-gold);
+}
+
+.sg-crow__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sg-crow__pilot {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  min-width: 0;
+  font-family: var(--sg-display);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.sg-crow__chassis {
+  font-size: 10px;
+  color: var(--sg-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What this round paid. Green because it is a gain; the DNF variant is the one
+   case where nothing was gained and it says the word rather than "+0". */
+.sg-crow__gain {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--sg-green);
+  text-align: right;
+}
+
+.sg-crow__gain.is-dnf {
+  color: var(--sg-red);
+  font-size: 10px;
+}
+
+.sg-crow__pts {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--sg-ink);
+  text-align: right;
+}
+
+/* The sentence above the table: where you are, and what the gap is. This is
+   the one line a player who reads nothing else should still be able to read,
+   so it is the largest type on the page. */
+.sg-circuit__you {
+  font-family: var(--sg-display);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--sg-cyan);
+  text-align: center;
+  padding: 1px 0 2px;
+}
+
+.sg-circuit__you:empty { display: none; }
 
 .sg-board__empty,
 .sg-board__note {

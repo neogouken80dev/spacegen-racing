@@ -28,6 +28,10 @@ import { TRACKS } from '../content/tracks'
 import { Track, type SurfaceKind, type TrackDef } from '../sim/track'
 import { copyFor, DIFFICULTY_RANK } from './trackCopy'
 import { createGaragePreview, type GaragePreview } from './garagePreview'
+import {
+  CIRCUIT_ROUNDS, isComplete, pointsFor, roundsDone, standings, trackIdForRound,
+  type CircuitState,
+} from '../game/circuit'
 
 export type QualityTier = 'low' | 'medium' | 'high'
 export type ScreenId = 'title' | 'track' | 'garage' | 'results' | 'paused'
@@ -47,6 +51,16 @@ export interface FrontEnd {
    * circuit's music while the player is still in the menus.
    */
   readonly selectedTrackId: string
+  /**
+   * The car and pilot currently chosen, restored-from-storage value included.
+   *
+   * Same contract as selectedTrackId and added for the same reason: the host
+   * has to build a circuit's grid around whatever the player is driving BEFORE
+   * they press Start, and the only other way to learn it is to wait for
+   * onStart -- which is one screen too late.
+   */
+  readonly selectedChassisId: string
+  readonly selectedPilotId: string
   show(screen: ScreenId): void
   hide(): void
   onStart: (sel: StartSelection) => void
@@ -55,6 +69,10 @@ export interface FrontEnd {
   onResume: () => void
   onRestart: () => void
   onQuit: () => void
+  /** Start a Grand Circuit from round 1, discarding any saved one. */
+  onCircuitNew: () => void
+  /** Resume the saved Grand Circuit at the round it left off. */
+  onCircuitResume: () => void
   /**
    * Fired on every screen change, hide() included (which reports null).
    *
@@ -64,7 +82,14 @@ export interface FrontEnd {
    * every frame, the front end says so once, when it changes.
    */
   onScreen: (screen: ScreenId | null) => void
-  showResults(state: RaceState, localId: number, run?: RunScore | null): void
+  /**
+   * @param trackId the circuit this race was actually run on. Optional only
+   *        for compatibility: the front end's own remembered selection is the
+   *        right answer for a single race and the WRONG one in circuit mode,
+   *        where the series picks the track and the track screen is skipped --
+   *        which put "ELKARIM — JUNKYARD PLANET" over a result from Namaresh.
+   */
+  showResults(state: RaceState, localId: number, run?: RunScore | null, trackId?: string): void
   /**
    * Fill the top-ten panel. Separate from showResults because the store is
    * async by design -- a local board answers instantly, a server one will not,
@@ -79,6 +104,16 @@ export interface FrontEnd {
   setRecords(records: TrackRecords, broken: readonly RecordId[]): void
   /** Fill the global page. An offline board renders as a stated fact. */
   setGlobal(board: GlobalBoard): void
+  /**
+   * The Grand Circuit, or null for no circuit at all.
+   *
+   * ONE ENTRY POINT FOR EVERY SCREEN THE CIRCUIT TOUCHES, because they have to
+   * agree: the title screen's Continue button, the garage head, the primary
+   * button on the results screen and whether the Circuit standings page exists
+   * are four views of the same fact, and four setters is four chances for them
+   * to disagree. Call it whenever the circuit changes; it is idempotent.
+   */
+  setCircuit(status: CircuitStatus | null): void
   /** The player named a qualifying run. */
   onSaveScore: (name: string) => void
   dispose(): void
@@ -88,6 +123,20 @@ export interface FrontEnd {
 export interface RunScore {
   score: number
   bestCombo: number
+}
+
+/** Everything the front end needs to know about the Grand Circuit. */
+export interface CircuitStatus {
+  state: CircuitState
+  /** The player's grid slot, which is also their racer id in every round. */
+  localId: number
+  /**
+   * True while the player is IN the circuit -- racing its rounds, looking at
+   * its standings. False for a saved circuit sitting on the title screen
+   * waiting to be resumed, which must not put a Circuit page on the results of
+   * an unrelated single race.
+   */
+  active: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +168,39 @@ const LS_QUALITY = 'sg.quality'
 const LS_TRACK = 'sg.track'
 
 const ORD = ['-', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th']
+
+/**
+ * The standings entrance, mirrored from the `sgRowIn` rule in styles.css.
+ *
+ * Duplicated rather than read back because this file has to know when the last
+ * row has landed -- to drop the class that plays it, and to decide when the
+ * circuit auto-switch is allowed to take the screen. Two numbers in two files
+ * is worth less than a getComputedStyle on every result.
+ */
+const ROW_STAGGER_MS = 150
+const ROW_ENTER_MS = 420
+
+/**
+ * HOW LONG THE RACE RESULT GETS BEFORE THE STANDINGS TAKE OVER.
+ *
+ * Vince asked for the results screen to open on the race and then switch
+ * itself to the circuit table, which means picking a number, and the number is
+ * derived rather than felt: the standings rows land on a stagger of
+ * ROW_STAGGER_MS each, last place first, so the winner's row settles at
+ * (8-1)*150 + 420 = 1470ms after the screen appears. Switching before that
+ * pulls the table away mid-animation and the player never sees the finish they
+ * just earned.
+ *
+ * 3000ms leaves 1530ms of a fully settled table -- measured against reading a
+ * single highlighted row, not the whole eight -- which is why the highlight
+ * work and this number are the same feature. Anything past about 4s and the
+ * player has started reaching for Next Race and the switch feels like a
+ * misclick they did not make.
+ *
+ * History: 1800ms first, which landed 330ms after the winner's row and read as
+ * a glitch; 3000 since.
+ */
+const CIRCUIT_AUTOSWITCH_MS = 3000
 
 // --- track preview ---------------------------------------------------------
 
@@ -233,6 +315,8 @@ interface ResultRow {
   chassis: HTMLElement
   time: HTMLElement
   best: HTMLElement
+  /** The "YOU" chip. Shown on exactly one row. */
+  you: HTMLElement
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +536,8 @@ class FrontEndImpl implements FrontEnd {
   onRestart: () => void = () => {}
   onQuit: () => void = () => {}
   onScreen: (screen: ScreenId | null) => void = () => {}
+  onCircuitNew: () => void = () => {}
+  onCircuitResume: () => void = () => {}
 
   private screen: ScreenId = 'title'
 
@@ -524,6 +610,31 @@ class FrontEndImpl implements FrontEnd {
   private readonly tabs: TabStrip
   private readonly boardNote: HTMLElement
 
+  // --- Grand Circuit ------------------------------------------------------
+  private readonly cirWrap: HTMLElement
+  private readonly cirTitle: HTMLElement
+  private readonly cirYou: HTMLElement
+  private readonly cirRows: HTMLElement
+  private readonly cirNote: HTMLElement
+  /** Polite announcement of the auto-switch. See armCircuitSwitch(). */
+  private readonly cirLive: HTMLElement
+  private readonly circuitBtn: HTMLButtonElement
+  private readonly circuitNewBtn: HTMLButtonElement
+  private readonly circuitLine: HTMLElement
+  private circuit: CircuitStatus | null = null
+  /** The player's standings row, so opening the page can bring it into view. */
+  private cirYouRow: HTMLElement | null = null
+  /** window.setTimeout handle for the auto-switch, 0 when nothing is pending. */
+  private switchTimer = 0
+  /** Drops the row entrance class once the last row has landed. */
+  private rowsInTimer = 0
+  /** Set the moment the player touches the tab strip; disarms the switch. */
+  private tabTouched = false
+  /** The garage head's resting text, restored when the circuit is not on. */
+  private readonly garageHeadTitle: HTMLElement
+  /** "Discard standings?" state on the New-circuit button. */
+  private discardArmed = 0
+
   private readonly playBtn: HTMLButtonElement
   private readonly toGarageBtn: HTMLButtonElement
   private readonly startBtn: HTMLButtonElement
@@ -573,6 +684,18 @@ class FrontEndImpl implements FrontEnd {
     el('span', '', sub, 'RACING')
     el('span', 'sg-logo__rule sg-logo__rule--r', sub)
     this.playBtn = button('sg-btn sg-btn--huge', title, 'Play')
+    // THE CIRCUIT IS A SECOND MODE, NOT A SETTING ON THE FIRST.
+    //
+    // A single race is still one button and nothing in front of it, which is
+    // the contract this screen has always had. The circuit sits below it as
+    // its own block with its own state line, so a returning player sees where
+    // they got to without opening anything -- and a player who only ever wants
+    // one race never has to read past PLAY.
+    const cirBlock = el('div', 'sg-title__circuit', title)
+    this.circuitBtn = button('sg-btn sg-btn--gold sg-btn--wide', cirBlock, 'Grand Circuit')
+    this.circuitLine = el('div', 'sg-title__cline', cirBlock, '')
+    this.circuitNewBtn = button('sg-btn sg-btn--ghost sg-btn--small', cirBlock, 'New circuit')
+    this.circuitNewBtn.hidden = true
     el('div', 'sg-hint', title, 'Enter or Space to launch')
 
     // =====================================================================
@@ -652,6 +775,7 @@ class FrontEndImpl implements FrontEnd {
     const backBtn = button('sg-btn sg-btn--ghost', head, 'Back')
     const headTitle = el('div', 'sg-head__title', head)
     headTitle.textContent = 'GARAGE'
+    this.garageHeadTitle = headTitle
     const headSpacer = el('div', '', head)
     headSpacer.style.width = '1px'
 
@@ -760,12 +884,28 @@ class FrontEndImpl implements FrontEnd {
     // navigated away from would mean a tab click can hide the way forward.
     this.tabs = createTabs(results, [
       { id: 'results', label: 'Results' },
+      { id: 'circuit', label: 'Circuit' },
       { id: 'records', label: 'Records' },
       { id: 'global', label: 'Global' },
     ])
     const tabResults = this.tabs.panel('results')
+    const tabCircuit = this.tabs.panel('circuit')
     const tabRecords = this.tabs.panel('records')
     const tabGlobal = this.tabs.panel('global')
+    // ABSENT UNTIL THERE IS A CIRCUIT. Not empty -- see tabs.ts setPresent.
+    // A Circuit page on a single race would be a page that has nothing to say,
+    // and a tab that opens onto nothing is worse than no tab.
+    this.tabs.setPresent('circuit', false)
+    // A tab the player chose is a tab the player keeps. See armCircuitSwitch.
+    this.tabs.onUserSelect = () => {
+      this.tabTouched = true
+      this.cancelCircuitSwitch()
+    }
+    // A hidden panel has no layout, so the standings cannot be scrolled to the
+    // player's row until the page is actually opened. See scrollStandingsToYou.
+    this.tabs.onSelect = (id) => {
+      if (id === 'circuit') this.scrollStandingsToYou()
+    }
 
     const rowHost = el('div', 'sg-results__rows', tabResults)
     this.rowHost = rowHost
@@ -773,12 +913,24 @@ class FrontEndImpl implements FrontEnd {
       const row = el('div', 'sg-row', rowHost)
       const pos = el('span', 'sg-row__p', row, '-')
       const name = el('span', 'sg-row__name', row)
-      const pilot = el('span', 'sg-row__pilot', name, '')
+      const pilotWrap = el('span', 'sg-row__pilot', name)
+      const pilot = el('span', 'sg-row__who', pilotWrap, '')
+      // THE "YOU" AFFORDANCE, AND WHY IT IS A WORD.
+      //
+      // The bug Vince reported is that the player cannot tell which line is
+      // theirs, and the row already had a cyan tint -- so the tint is not the
+      // answer. A word is: it survives greyscale, it survives every form of
+      // colour blindness, it survives a photograph of a phone screen in
+      // daylight, and it is the one channel a screen reader can also read. The
+      // tint, the rail and the weight are the three that make it findable
+      // without reading; this is the one that makes it unambiguous once found.
+      const youTag = el('span', 'sg-you', pilotWrap, 'YOU')
+      youTag.hidden = true
       const chassis = el('span', 'sg-row__chassis', name, '')
       const time = el('span', 'sg-row__time', row, '--:--.--')
       const best = el('span', 'sg-row__best', row, '')
       row.hidden = true
-      this.rows.push({ root: row, pos, pilot, chassis, time, best })
+      this.rows.push({ root: row, pos, pilot, chassis, time, best, you: youTag })
     }
     const meta = el('div', 'sg-results__meta', tabResults)
     const m1 = el('div', 'sg-meta', meta)
@@ -816,6 +968,27 @@ class FrontEndImpl implements FrontEnd {
     this.nameInput.setAttribute('aria-label', 'Name for the leaderboard')
     this.nameRow.appendChild(this.nameInput)
     this.nameSave = button('sg-btn sg-btn--small', this.nameRow, 'Save')
+
+    // --- CIRCUIT PAGE -----------------------------------------------------
+    // The championship table. Same section shape as the other three pages --
+    // one title, one column of rows, one note -- so the four read as one
+    // screen rather than as a bolted-on mode.
+    this.cirWrap = el('div', 'sg-results__circuit sg-panel sg-table', tabCircuit)
+    this.cirTitle = el('div', 'sg-board__title', this.cirWrap, 'GRAND CIRCUIT')
+    // THE SENTENCE, ABOVE THE TABLE. "You are 3rd on 34 points, 4 behind
+    // AEGIS" is the thing a player actually wants from a standings screen, and
+    // reading it out of eight rows is work. It is also the text the live region
+    // announces, so a screen-reader user gets the same answer the sighted
+    // player gets from the highlight.
+    this.cirYou = el('div', 'sg-circuit__you', this.cirWrap, '')
+    this.cirRows = el('div', 'sg-crows', this.cirWrap)
+    this.cirNote = el('div', 'sg-board__note', this.cirWrap, '')
+    // Off-screen, polite, and OUTSIDE the panels so it is never inside a
+    // `hidden` subtree -- a live region in a hidden panel announces nothing,
+    // which is the silent half of this bug class.
+    this.cirLive = el('div', 'sg-sr', results, '')
+    this.cirLive.setAttribute('aria-live', 'polite')
+    this.cirLive.setAttribute('role', 'status')
 
     // --- RECORDS PAGE -----------------------------------------------------
     // The four bests first and the board second, because they answer different
@@ -881,6 +1054,37 @@ class FrontEndImpl implements FrontEnd {
       })
     })
     this.rematchBtn.addEventListener('click', () => this.onRematch())
+    // The gold button on the title screen: resume if there is something to
+    // resume, otherwise begin. One button, because "Grand Circuit" and
+    // "Continue Circuit" are the same intent and the state line says which.
+    this.circuitBtn.addEventListener('click', () => {
+      if (this.circuit && !isComplete(this.circuit.state) && roundsDone(this.circuit.state) > 0) {
+        this.onCircuitResume()
+      } else {
+        this.onCircuitNew()
+      }
+    })
+    // DISCARDING FIVE ROUNDS OF STANDINGS TAKES TWO PRESSES.
+    //
+    // This is the only destructive control in the front end and it sits one
+    // button away from the one a returning player wants, so a mis-tap on a
+    // phone would silently throw away half an hour of racing. The second press
+    // is the confirmation; the label says so, and it disarms itself after four
+    // seconds so the button is never left sitting in a scary state.
+    this.circuitNewBtn.addEventListener('click', () => {
+      if (this.discardArmed) {
+        window.clearTimeout(this.discardArmed)
+        this.discardArmed = 0
+        this.circuitNewBtn.textContent = 'New circuit'
+        this.onCircuitNew()
+        return
+      }
+      this.circuitNewBtn.textContent = 'Discard standings? Press again'
+      this.discardArmed = window.setTimeout(() => {
+        this.discardArmed = 0
+        this.circuitNewBtn.textContent = 'New circuit'
+      }, 4000)
+    })
     const saveName = (): void => {
       // Trimmed, capped and upper-cased here rather than trusted: this string
       // goes straight into a row the board renders as text for every later run.
@@ -957,6 +1161,10 @@ class FrontEndImpl implements FrontEnd {
     this.screen = screen
     this.root.dataset.screen = screen
     this.root.classList.remove('is-hidden')
+    // Leaving the results screen cancels a pending auto-switch. Without this a
+    // player who hit Next Race inside the three seconds would come back from
+    // the race to find the previous timer had moved the tab under them.
+    if (screen !== 'results') this.cancelCircuitSwitch()
     // The route bake is deferred to the first view so it never sits between
     // page load and the title screen.
     if (screen === 'track') this.refreshTrack()
@@ -992,6 +1200,8 @@ class FrontEndImpl implements FrontEnd {
   }
 
   get selectedTrackId(): string { return this.trackId }
+  get selectedChassisId(): string { return this.chassisId }
+  get selectedPilotId(): string { return this.pilotId }
 
   onSaveScore: (name: string) => void = () => {}
 
@@ -1117,7 +1327,253 @@ class FrontEndImpl implements FrontEnd {
     }
   }
 
-  showResults(state: RaceState, localId: number, run?: RunScore | null): void {
+  // -------------------------------------------------------------------------
+  // THE GRAND CIRCUIT
+  // -------------------------------------------------------------------------
+
+  setCircuit(status: CircuitStatus | null): void {
+    this.circuit = status
+    const active = status !== null && status.active
+    // The page exists exactly while the circuit does.
+    this.tabs.setPresent('circuit', active)
+    if (!active) this.cancelCircuitSwitch()
+
+    // --- the title screen's circuit block ---------------------------------
+    const saved = status !== null && roundsDone(status.state) > 0
+    const done = status ? roundsDone(status.state) : 0
+    const over = status !== null && isComplete(status.state)
+    if (saved && !over) {
+      this.circuitBtn.textContent = 'Continue Circuit'
+      const rows = standings(status!.state)
+      const me = rows.find((r) => r.entrant.id === status!.localId)
+      const place = me ? (ORD[me.place] || String(me.place)) : '-'
+      this.circuitLine.textContent =
+        `Round ${done + 1} of ${CIRCUIT_ROUNDS} · you are ${place} on ${me ? me.points : 0} pts`
+      this.circuitNewBtn.hidden = false
+    } else {
+      this.circuitBtn.textContent = 'Grand Circuit'
+      this.circuitLine.textContent = over
+        ? `Circuit complete · ${CIRCUIT_ROUNDS} rounds`
+        : `${CIRCUIT_ROUNDS} rounds · every circuit · points for every place`
+      // Nothing to lose once the series is over, so the confirm-to-discard
+      // button is not offered -- the gold button above already starts a fresh
+      // one and a confirmation nobody needs is a control that teaches players
+      // to click through confirmations.
+      this.circuitNewBtn.hidden = true
+    }
+    // Never leave the confirm half-pressed across a state change.
+    if (this.discardArmed) {
+      window.clearTimeout(this.discardArmed)
+      this.discardArmed = 0
+      this.circuitNewBtn.textContent = 'New circuit'
+    }
+
+    // --- the garage, which is where a round is entered from ---------------
+    if (active && !over) {
+      const next = done
+      const def = TRACKS.find((t) => t.id === trackIdForRound(next))
+      this.garageHeadTitle.textContent =
+        `GARAGE — ROUND ${next + 1}/${CIRCUIT_ROUNDS}` + (def ? ' · ' + def.name.toUpperCase() : '')
+      this.startBtn.textContent = `Start Round ${next + 1}`
+    } else {
+      this.garageHeadTitle.textContent = 'GARAGE'
+      this.startBtn.textContent = 'Start Race'
+    }
+
+    // --- the primary button on the results screen -------------------------
+    // Rematch is the wrong word inside a series: the next round is a different
+    // circuit, and "Rematch" would read as re-running the one just finished.
+    this.rematchBtn.textContent = !active ? 'Rematch' : over ? 'Done' : 'Next Race'
+
+    if (active) this.fillStandings(status!)
+  }
+
+  /**
+   * Draw the championship table.
+   *
+   * Rebuilt from scratch on each call rather than pooled the way the standings
+   * rows are: this runs once per race, not once per frame, and eight rows of
+   * five spans is not worth the bookkeeping of a pool that has to be kept in
+   * sync with a row count that can change.
+   */
+  private fillStandings(status: CircuitStatus): void {
+    const { state, localId } = status
+    const rows = standings(state)
+    const done = roundsDone(state)
+    const over = isComplete(state)
+    const last = state.rounds[done - 1] ?? null
+    const lastDef = last ? TRACKS.find((t) => t.id === last.trackId) : null
+
+    this.cirTitle.textContent = over
+      ? 'GRAND CIRCUIT — FINAL'
+      : `GRAND CIRCUIT — ROUND ${done} OF ${CIRCUIT_ROUNDS}`
+
+    const me = rows.find((r) => r.entrant.id === localId) ?? null
+    const meIdx = me ? rows.indexOf(me) : -1
+    if (me) {
+      const place = ORD[me.place] || String(me.place)
+      if (over) {
+        this.cirYou.textContent = me.place === 1
+          ? `CHAMPION — ${me.points} points`
+          : `Finished ${place} on ${me.points} points`
+      } else if (meIdx > 0) {
+        // The gap that matters when you are not leading: the car in front.
+        const ahead = rows[meIdx - 1]
+        const gap = ahead.points - me.points
+        this.cirYou.textContent = `You are ${place} on ${me.points} pts · `
+          + (gap === 0
+            ? `level with ${FrontEndImpl.pilotName(ahead.entrant.pilotId)}`
+            : `${gap} behind ${FrontEndImpl.pilotName(ahead.entrant.pilotId)}`)
+      } else {
+        const chase = rows[1]
+        const gap = chase ? me.points - chase.points : 0
+        this.cirYou.textContent = `You lead on ${me.points} pts`
+          + (chase && gap > 0
+            ? ` · ${gap} clear of ${FrontEndImpl.pilotName(chase.entrant.pilotId)}`
+            : '')
+      }
+    } else {
+      this.cirYou.textContent = ''
+    }
+
+    this.cirRows.textContent = ''
+    let youRow: HTMLElement | null = null
+    for (const r of rows) {
+      const row = el('div', 'sg-crow', this.cirRows)
+      const isYou = r.entrant.id === localId
+      if (isYou) {
+        youRow = row
+        row.setAttribute('aria-current', 'true')
+      }
+      row.classList.toggle('is-you', isYou)
+      row.classList.toggle('is-win', r.place === 1)
+      el('span', 'sg-crow__p', row, String(r.place))
+      const name = el('span', 'sg-crow__name', row)
+      const who = el('span', 'sg-crow__pilot', name)
+      el('span', 'sg-crow__who', who, FrontEndImpl.pilotName(r.entrant.pilotId) || 'UNIT')
+      if (isYou) el('span', 'sg-you', who, 'YOU')
+      el('span', 'sg-crow__chassis', name, FrontEndImpl.carName(r.entrant.chassisId))
+      // What this round did to the table. A standings screen that only shows
+      // totals cannot answer "did I just gain or lose ground", which is the
+      // question a player arrives with.
+      const f = last ? last.finishes.find((x) => x.id === r.entrant.id) : null
+      const gained = f ? pointsFor(f.position, f.finished) : 0
+      const gain = el('span', 'sg-crow__gain', row,
+        f ? (f.finished ? '+' + gained : 'DNF') : '')
+      if (f && !f.finished) gain.classList.add('is-dnf')
+      el('span', 'sg-crow__pts', row, String(r.points))
+    }
+
+    this.cirNote.textContent = over
+      ? 'Points: 15-12-10-8-6-4-2-1 by place. A car that does not finish scores nothing.'
+      : (lastDef ? `Last round: ${lastDef.name}. ` : '')
+        + `Next: ${TRACKS.find((t) => t.id === trackIdForRound(done))?.name ?? '—'}.`
+
+    this.cirYouRow = youRow
+    this.scrollStandingsToYou()
+  }
+
+  /**
+   * YOUR ROW, ON SCREEN, WITHOUT SCROLLING FOR IT.
+   *
+   * Exactly the problem the race standings already solved, and the same
+   * answer, for the same measured reason: at 915x412 only five of the eight
+   * rows fit and the list opens at the top, so a player lying 8th arrives at a
+   * table that does not contain them. Centred rather than merely scrolled into
+   * view, so the cars either side are visible too -- a championship position
+   * means nothing without the ones it is being taken from.
+   *
+   * CALLED FROM TWO PLACES, and it needs both. A hidden tab panel is
+   * `display: none`, so at fill time the rows report clientHeight 0 and the
+   * arithmetic silently resolves to "scroll to the top" -- which is the bug,
+   * not the fix. So it also runs when the page is actually opened, whether
+   * that was the auto-switch or a click. scrollTop is clamped by the browser,
+   * so it is a no-op wherever everything already fits.
+   */
+  private scrollStandingsToYou(): void {
+    const row = this.cirYouRow
+    if (!row) return
+    requestAnimationFrame(() => {
+      const host = this.cirRows
+      if (!host || host.clientHeight <= 0 || !host.contains(row)) return
+      host.scrollTop = Math.max(0, row.offsetTop - (host.clientHeight - row.offsetHeight) / 2)
+    })
+  }
+
+  /**
+   * AUTO-SWITCH TO THE STANDINGS, WITHOUT TAKING THE SCREEN OFF THE PLAYER.
+   *
+   * Vince asked for the race result first and the circuit table "automatically"
+   * second. Three things make that a courtesy rather than a hijack:
+   *
+   *   1. IT DOES NOT MOVE FOCUS. tabs.ts only focuses a button from its own
+   *      arrow-key handler; select() changes `aria-selected` and which panel is
+   *      hidden and nothing else. Moving focus on a timer is the hostile
+   *      version of this pattern -- a player mid-way through tabbing to Next
+   *      Race would be thrown somewhere they did not go.
+   *   2. IT LOSES TO THE PLAYER, ALWAYS. Any click or arrow press on the strip
+   *      sets `tabTouched` and cancels the pending switch for this results
+   *      screen. Choosing a page is a statement, and the screen does not argue.
+   *   3. IT WILL NOT FIRE INTO A FOCUSED TABLIST. If focus is sitting on a tab
+   *      button when the timer comes up -- a keyboard player exploring the
+   *      strip -- the switch is abandoned, because changing the selection under
+   *      a focused tablist is the case where "focus did not move" stops being a
+   *      good enough defence.
+   *
+   * The tab is marked either way, so a player whose switch was cancelled still
+   * sees that there is something new behind it.
+   */
+  private armCircuitSwitch(): void {
+    this.cancelCircuitSwitch()
+    this.tabTouched = false
+    if (!this.tabs.isPresent('circuit')) return
+    this.tabs.setMarked('circuit', true)
+    this.switchTimer = window.setTimeout(() => {
+      this.switchTimer = 0
+      if (this.tabTouched) return
+      if (this.screen !== 'results') return
+      if (this.tabs.selected !== 'results') return
+      const active = document.activeElement
+      if (active instanceof HTMLElement && active.getAttribute('role') === 'tab') return
+      this.tabs.select('circuit')
+      // Said out loud, once, for anyone who cannot see the panel change.
+      this.cirLive.textContent = 'Circuit standings. ' + this.cirYou.textContent
+    }, CIRCUIT_AUTOSWITCH_MS)
+  }
+
+  private cancelCircuitSwitch(): void {
+    if (!this.switchTimer) return
+    window.clearTimeout(this.switchTimer)
+    this.switchTimer = 0
+  }
+
+  /**
+   * Play the standings entrance once, for THIS result.
+   *
+   * See the `.sg-row.is-in` block in styles.css for why the animation is on a
+   * class rather than on the row: leaving it there meant every return to this
+   * tab replayed it, and a replayed entrance is a table that is not there.
+   *
+   * Removing and re-adding the class is also what restarts it on a rematch,
+   * which is what the per-row `style.animation = 'none'` dance used to do --
+   * one reflow for the whole list now instead of eight.
+   */
+  private playRowEntrance(n: number): void {
+    if (this.rowsInTimer) { window.clearTimeout(this.rowsInTimer); this.rowsInTimer = 0 }
+    for (const row of this.rows) row.root.classList.remove('is-in')
+    // One forced reflow, so the browser sees the class genuinely leave and
+    // come back rather than coalescing the two into no change at all.
+    void this.rowHost.offsetWidth
+    for (let i = 0; i < n; i++) this.rows[i].root.classList.add('is-in')
+    // The winner's row is the last to land: (n-1) staggers plus its own run.
+    const settled = Math.max(0, n - 1) * ROW_STAGGER_MS + ROW_ENTER_MS
+    this.rowsInTimer = window.setTimeout(() => {
+      this.rowsInTimer = 0
+      for (const row of this.rows) row.root.classList.remove('is-in')
+    }, settled + 120)
+  }
+
+  showResults(state: RaceState, localId: number, run?: RunScore | null, trackId?: string): void {
     const racers = state.racers
     const order: RacerState[] = racers.slice()
     order.sort((a, b) => (a.position - b.position) || (b.totalS - a.totalS))
@@ -1141,16 +1597,19 @@ class FrontEndImpl implements FrontEnd {
       row.chassis.textContent = chassisDef ? chassisDef.name : r.chassisId
       row.time.textContent = r.finished ? fmtTime(r.finishTime) : 'DNF'
       row.best.textContent = r.bestLap > 0 ? 'best ' + fmtTime(r.bestLap) : ''
-      row.root.classList.toggle('is-you', r.id === localId)
+      const isYou = r.id === localId
+      row.root.classList.toggle('is-you', isYou)
       row.root.classList.toggle('is-win', r.position === 1)
+      row.you.hidden = !isYou
+      // A screen reader gets the same fact the chip gives a sighted player,
+      // rather than having to infer it from a colour it cannot see.
+      if (isYou) row.root.setAttribute('aria-current', 'true')
+      else row.root.removeAttribute('aria-current')
       row.root.hidden = false
       // Last place lands first, the winner lands last.
-      row.root.style.setProperty('--d', ((n - 1 - i) * 150) + 'ms')
-      // Restart the entrance animation on every rematch.
-      row.root.style.animation = 'none'
-      void row.root.offsetWidth
-      row.root.style.animation = ''
+      row.root.style.setProperty('--d', ((n - 1 - i) * ROW_STAGGER_MS) + 'ms')
     }
+    this.playRowEntrance(n)
 
     // YOUR ROW, ON SCREEN, WITHOUT SCROLLING FOR IT.
     //
@@ -1167,8 +1626,13 @@ class FrontEndImpl implements FrontEnd {
     // this is a no-op when everything already fits.
     const localRow = local ? this.rows[order.findIndex((r) => r.id === localId)] : null
 
-    const def = TRACKS.find((t) => t.id === this.trackId)
-    const c = copyFor(this.trackId)
+    // The circuit this race was run on, which in circuit mode is NOT the one
+    // the track screen remembers -- the series picks it and that screen is
+    // skipped. Falls back to the selection so a caller that does not say still
+    // gets the behaviour it had.
+    const ranOn = trackId ?? this.trackId
+    const def = TRACKS.find((t) => t.id === ranOn)
+    const c = copyFor(ranOn)
     this.resWhere.textContent = def
       ? (c.world ? def.name + ' — ' + c.world : def.name)
       : ''
@@ -1197,6 +1661,11 @@ class FrontEndImpl implements FrontEnd {
     // Always open on the race that just happened, whichever page was left
     // selected last time. select() also clears that page's marker.
     this.tabs.select('results')
+    // And, if this race was a circuit round, hand the screen over to the
+    // standings a moment later. Armed AFTER the select above, so the timer
+    // cannot be cancelled by its own setup. See armCircuitSwitch.
+    this.cirLive.textContent = ''
+    this.armCircuitSwitch()
 
     this.show('results')
 
@@ -1220,6 +1689,9 @@ class FrontEndImpl implements FrontEnd {
 
   dispose(): void {
     window.removeEventListener('keydown', this.onKey)
+    this.cancelCircuitSwitch()
+    if (this.discardArmed) { window.clearTimeout(this.discardArmed); this.discardArmed = 0 }
+    if (this.rowsInTimer) { window.clearTimeout(this.rowsInTimer); this.rowsInTimer = 0 }
     this.preview.dispose()
     this.padStop()
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root)

@@ -38,6 +38,11 @@ import { createFrontEnd, type FrontEnd } from '../ui/frontend'
 import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
 import { installCompactLayout, type CompactLayout } from '../ui/compact'
 import { createInput, isTouchScheme, type InputManager } from './input'
+import {
+  applyRound, clearCircuit, CIRCUIT_GRID, gridMismatch, isComplete, loadCircuit,
+  newCircuit, resultFromRace, roundsDone, saveCircuit, trackIdForRound,
+  type CircuitState,
+} from './circuit'
 import { ChaseCamera } from './camera'
 import { themeFor } from '../render/themes'
 import {
@@ -141,6 +146,21 @@ export class Game {
   private lastTime = 0
   private localId = 0
   private selection = { chassisId: 'solaire', pilotId: 'socket' }
+
+  /**
+   * THE GRAND CIRCUIT.
+   *
+   * `circuit` is the series, saved or in progress; `circuitActive` is whether
+   * the player is IN it right now. The two are deliberately separate: a saved
+   * circuit has to survive being ignored -- a player who comes back, races a
+   * one-off on Zhen-9 and then presses Continue must find their standings
+   * exactly where they left them, and a single race must not be able to score
+   * a round. Every path that starts a race asks `circuitActive`, and the only
+   * things that set it false are the title screen's Play and walking into the
+   * track list. See game/circuit.ts for the series itself.
+   */
+  private circuit: CircuitState | null = null
+  private circuitActive = false
   private raf = 0
   private reduceMotion = false
   /**
@@ -286,14 +306,75 @@ export class Game {
 
     this.tools = this.buildTools(container)
 
+    // The saved circuit, read once at boot. A blocked or partitioned
+    // localStorage returns null here and the game simply has no circuit to
+    // resume -- see the storage note in game/circuit.ts.
+    this.circuit = loadCircuit()
+    this.publishCircuit()
+
     this.frontEnd.onStart = (sel) => {
       this.selection = { chassisId: sel.chassisId, pilotId: sel.pilotId }
-      this.setTrack(sel.trackId)
+      // A FINISHED SERIES HAS NO NEXT ROUND. Reachable by walking back into the
+      // garage from the final results and pressing Start: without this the race
+      // would run on the frozen grid and be scored by nothing, which is a mode
+      // that looks like circuit mode and is not one.
+      if (this.circuitActive && this.circuit && isComplete(this.circuit)) {
+        this.circuitActive = false
+        this.publishCircuit()
+      }
+      if (this.circuitActive && this.circuit) {
+        // THE CIRCUIT PICKS THE TRACK, NOT THE PLAYER. The track screen is
+        // skipped entirely in this mode, so `sel.trackId` is whatever was last
+        // chosen for a single race and is not the round being started.
+        //
+        // And the grid is frozen on the way INTO round 1 rather than when the
+        // circuit was created, so it is built around the car the player
+        // actually pressed Start in -- they may have changed it in the garage
+        // between pressing Grand Circuit and pressing Start.
+        if (this.circuit.rounds.length === 0) {
+          this.circuit = newCircuit(sel.pilotId, sel.chassisId)
+          saveCircuit(this.circuit)
+        }
+        this.setTrack(trackIdForRound(roundsDone(this.circuit)))
+      } else {
+        this.setTrack(sel.trackId)
+      }
       this.setTier(sel.quality)
       this.startRace()
     }
-    this.frontEnd.onRematch = () => this.startRace()
+    // The gold button on the results screen. Inside a series it is the next
+    // ROUND -- a different circuit -- so "rematch" would be the wrong promise;
+    // frontend.ts relabels it and this is the other half of that.
+    this.frontEnd.onRematch = () => {
+      if (!this.circuitActive || !this.circuit) { this.startRace(); return }
+      if (isComplete(this.circuit)) {
+        // The series is over. Stay out of it, keep the standings, and let the
+        // title screen offer a fresh one.
+        this.circuitActive = false
+        this.publishCircuit()
+        this.frontEnd.show('title')
+        return
+      }
+      this.setTrack(trackIdForRound(roundsDone(this.circuit)))
+      this.startRace()
+    }
     this.frontEnd.onRestart = () => this.startRace()
+    this.frontEnd.onCircuitNew = () => {
+      clearCircuit()
+      this.circuit = newCircuit(this.frontEnd.selectedPilotId, this.frontEnd.selectedChassisId)
+      this.circuitActive = true
+      saveCircuit(this.circuit)
+      this.publishCircuit()
+      // Straight to the garage: the circuit owns the track list, so the only
+      // decision left before round 1 is what to drive.
+      this.frontEnd.show('garage')
+    }
+    this.frontEnd.onCircuitResume = () => {
+      if (!this.circuit) { this.frontEnd.onCircuitNew(); return }
+      this.circuitActive = true
+      this.publishCircuit()
+      this.frontEnd.show('garage')
+    }
     this.frontEnd.onResume = () => this.resume()
     this.frontEnd.onQuit = () => this.toMenu()
     this.input.onPause = () => {
@@ -340,6 +421,15 @@ export class Game {
     this.frontEnd.onScreen = (screen) => {
       if (screen === 'title') this.startAttract()
       else this.stopAttract()
+      // WALKING INTO THE TRACK LIST LEAVES THE CIRCUIT. It is the one screen
+      // whose whole purpose is choosing a circuit yourself, so being on it and
+      // being in a series are contradictory -- and a player who ends up there
+      // mid-circuit and starts a race must not have it scored as a round. The
+      // save is untouched, so Continue still works from the title.
+      if (screen === 'track' && this.circuitActive) {
+        this.circuitActive = false
+        this.publishCircuit()
+      }
       this.audio.menuMusic(screen === 'title' ? 'title'
         : screen === 'track' || screen === 'garage' ? 'garage' : null)
       // Start pulling the race bed while the player is still choosing. It is
@@ -347,7 +437,7 @@ export class Game {
       // music should already be playing, and on a phone the first stretch of
       // the race runs in silence with the bed fading in over it.
       if (screen === 'track' || screen === 'garage') {
-        this.audio.preloadTrack(this.frontEnd.selectedTrackId)
+        this.audio.preloadTrack(this.nextTrackId())
       }
     }
 
@@ -431,6 +521,27 @@ export class Game {
   private setTrack(id: string): void {
     if (id === this.track.def.id) return
     this.track = new Track(TRACKS_BY_ID[id] ?? RUSTFALL)
+  }
+
+  /**
+   * The circuit the next race will actually run on.
+   *
+   * In circuit mode the player never sees the track list, so the front end's
+   * remembered selection is the last SINGLE race's circuit and preloading its
+   * music would fetch two to four megabytes of the wrong bed.
+   */
+  private nextTrackId(): string {
+    if (this.circuitActive && this.circuit && !isComplete(this.circuit)) {
+      return trackIdForRound(roundsDone(this.circuit))
+    }
+    return this.frontEnd.selectedTrackId
+  }
+
+  /** Push the circuit's state at every screen that shows part of it. */
+  private publishCircuit(): void {
+    this.frontEnd.setCircuit(this.circuit
+      ? { state: this.circuit, localId: 0, active: this.circuitActive }
+      : null)
   }
 
   private setTier(tier: QualityTier): void {
@@ -620,12 +731,47 @@ export class Game {
 
     const chassisIds: string[] = []
     const pilotIds: string[] = []
-    const pool = CHASSIS.filter((c) => c.id !== this.selection.chassisId)
-    for (let i = 0; i < RACER_COUNT; i++) {
-      if (i === 0) { chassisIds.push(this.selection.chassisId); pilotIds.push(this.selection.pilotId) }
-      else {
-        chassisIds.push(pool[(i - 1) % pool.length].id)
-        pilotIds.push(PILOTS[i % PILOTS.length].id)
+    const aiSkill: number[] = []
+    /**
+     * THE FIELD, AND THE ONE THING CIRCUIT MODE COULD NOT REUSE.
+     *
+     * The single-race generator below derives the opponents' chassis from a
+     * pool that EXCLUDES the player's car, so it answers differently for every
+     * car the player might be driving. That is fine for a one-off race and
+     * fatal for a series: a player who switches from a Solaire to a Bulwark
+     * between rounds 3 and 4 would find the same seven pilot names sitting in
+     * different cars, and the standings would still look perfectly consistent
+     * while ranking a field that had been swapped out underneath them. That is
+     * the single most likely way this feature ships looking finished and being
+     * hollow, so in circuit mode the grid is read from the frozen one instead.
+     *
+     * Slot 0 always follows the player's current garage choice -- their car is
+     * theirs to change, and circuit.ts's applyRound writes it back into the
+     * grid so the standings show what they last drove. Slots 1-7 come from the
+     * save, aiSkill included, so even a later change to the skill formula
+     * cannot re-tune a series someone is halfway through.
+     */
+    const grid = this.circuitActive && this.circuit ? this.circuit.grid : null
+    if (grid && grid.length === RACER_COUNT) {
+      for (let i = 0; i < RACER_COUNT; i++) {
+        if (i === 0) {
+          chassisIds.push(this.selection.chassisId)
+          pilotIds.push(this.selection.pilotId)
+        } else {
+          chassisIds.push(grid[i].chassisId)
+          pilotIds.push(grid[i].pilotId)
+        }
+        aiSkill.push(grid[i].aiSkill)
+      }
+    } else {
+      const pool = CHASSIS.filter((c) => c.id !== this.selection.chassisId)
+      for (let i = 0; i < RACER_COUNT; i++) {
+        if (i === 0) { chassisIds.push(this.selection.chassisId); pilotIds.push(this.selection.pilotId) }
+        else {
+          chassisIds.push(pool[(i - 1) % pool.length].id)
+          pilotIds.push(PILOTS[i % PILOTS.length].id)
+        }
+        aiSkill.push(i === 0 ? 0 : 2 + (i % 3))
       }
     }
 
@@ -636,7 +782,7 @@ export class Game {
       trackId: this.track.def.id,
       chassisIds, pilotIds,
       localRacerIndex: 0,
-      aiSkill: Array.from({ length: RACER_COUNT }, (_, i) => (i === 0 ? 0 : 2 + (i % 3))),
+      aiSkill,
     }
 
     this.race = new Race(this.track, config)
@@ -833,12 +979,49 @@ export class Game {
     this.input.setPadsVisible(false)
     this.audio.endRace()
     this.audio.music(null, false)
+    // THE ROUND IS SCORED BEFORE THE SCREEN IS BUILT, in that order, because
+    // showResults() arms the auto-switch to the standings page and that page
+    // has to exist and be filled by then. setCircuit is what creates it.
+    this.scoreCircuitRound()
     this.frontEnd.showResults(this.race.state, this.localId, {
       score: this.lastScore,
       bestCombo: this.lastBestCombo,
-    })
+    }, this.track.def.id)
     void this.publishScore()
     this.frontEnd.show('results')
+  }
+
+  /**
+   * Bank the round that just finished into the circuit standings.
+   *
+   * A no-op outside circuit mode, which is the whole of "single-race mode is
+   * unaffected": nothing on the single-race path reads or writes the circuit.
+   *
+   * THE GRID IS CHECKED, NOT ASSUMED. gridMismatch is the assertion this
+   * feature lives and dies by, and checking it here -- in the shipping path,
+   * on every round -- is worth more than checking it in a test, because the
+   * failure it catches is a wiring failure and wiring is what tests fixture
+   * away. It cannot refuse the round (the race happened; throwing the result
+   * away would be the worse bug) so it reports and carries on.
+   */
+  private scoreCircuitRound(): void {
+    if (!this.circuitActive || !this.circuit || !this.race) return
+    if (isComplete(this.circuit)) return
+    const racers = this.race.state.racers
+    if (racers.length !== CIRCUIT_GRID) return
+    const bad = gridMismatch(this.circuit.grid, racers)
+    if (bad.length > 0) console.warn('circuit grid drifted:', bad.join('; '))
+    const trackId = trackIdForRound(roundsDone(this.circuit))
+    this.circuit = applyRound(this.circuit, resultFromRace(trackId, racers.map((r) => ({
+      id: r.id,
+      position: r.position,
+      finished: r.finished,
+      finishTime: r.finishTime,
+      pilotId: r.pilotId,
+      chassisId: r.chassisId,
+    }))))
+    saveCircuit(this.circuit)
+    this.publishCircuit()
   }
 
   /**
