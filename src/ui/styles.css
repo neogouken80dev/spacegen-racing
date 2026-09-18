@@ -5283,3 +5283,366 @@
   .sg-cheer__line::after,
   .sg-cheer__wave::after { animation: none !important; opacity: 0 !important; }
 }
+
+/* ==========================================================================
+   THE ROUND CARD — which race of the circuit this is
+   ==========================================================================
+   Lives in the HUD's centre stack with the countdown and the FINAL LAP
+   banner, and is deliberately the quietest thing there. It sits ABOVE the
+   count: the number is what a driver is reading in those three seconds and
+   nothing is allowed to stand in front of it.
+
+   Single-race mode never sets it, so none of this is ever on screen there. */
+
+.sg-ctr__round {
+  align-self: start;
+  /* Clear of the in-race tool bar, which is centred at the top of the frame:
+     at 26px the eyebrow sat directly under the gear and the pause button and
+     the two read as one cluster. */
+  transform: translateY(clamp(46px, 8.5vmin, 104px));
+  opacity: var(--k, 1);
+}
+
+.sg-ctr__roundNum {
+  font-family: var(--sg-ui);
+  font-size: clamp(11px, 1.7vmin, 17px);
+  font-weight: 700;
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  color: var(--sg-gold);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.8), 0 0 26px rgba(255, 210, 63, 0.55);
+}
+
+.sg-ctr__roundName {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(22px, 4.6vmin, 54px);
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+  color: var(--sg-ink);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.6), 0 0 42px rgba(122, 190, 255, 0.45);
+}
+
+/* ==========================================================================
+   THE CHAMPIONSHIP PODIUM
+   ==========================================================================
+   Same skeleton as .sg-fin, and for the same reason: the middle of the frame
+   is the picture. Rows at the top, the player's own result and the skip at
+   the bottom, nothing across the centre band where the steps and the cars
+   are. The scene says who won; this says their names. */
+
+.sg-pod {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  /* FIVE ROWS, ONE PER ITEM. The head and the rows used to share row 1 with
+     the rows set to align-self: end, which works only while the head is the
+     taller of the two -- on a portrait phone the rows are taller, so they
+     filled the track and were drawn straight over the title. Giving each item
+     its own row makes the stack impossible to invert. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr auto auto;
+  justify-items: center;
+  padding: calc(var(--sg-pad) + var(--sg-sat)) var(--sg-pad)
+    calc(var(--sg-pad) + var(--sg-sab));
+  z-index: 4;
+  animation: sg-fin-in 720ms cubic-bezier(0.16, 0.9, 0.28, 1) both;
+}
+
+.sg-pod__head {
+  grid-row: 1;
+  text-align: center;
+}
+
+.sg-pod__eyebrow {
+  font-family: var(--sg-ui);
+  font-size: clamp(10px, 1.4vmin, 14px);
+  font-weight: 700;
+  letter-spacing: 0.44em;
+  text-indent: 0.44em;
+  color: var(--sg-dim);
+}
+
+.sg-pod__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(26px, 5.2vmin, 60px);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--sg-gold);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.6), 0 0 52px rgba(255, 210, 63, 0.55);
+}
+
+.sg-pod__tied {
+  font-family: var(--sg-ui);
+  font-size: clamp(9px, 1.25vmin, 13px);
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: var(--sg-orange);
+  margin-top: 2px;
+}
+
+.sg-pod__rows {
+  grid-row: 2;
+  display: grid;
+  gap: 4px;
+  margin-top: clamp(22px, 5vmin, 58px);
+  min-width: min(360px, 82vw);
+  max-width: min(420px, 94vw);
+}
+
+.sg-pod__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px 5px 9px;
+  border-radius: var(--sg-r-sm);
+  border-left: 4px solid var(--mc, var(--sg-line));
+  background: rgba(6, 11, 22, 0.66);
+}
+
+.sg-pod__row[data-place="1"] { --mc: var(--sg-gold); }
+.sg-pod__row[data-place="2"] { --mc: #d8e4ef; }
+.sg-pod__row[data-place="3"] { --mc: #d08a4a; }
+
+.sg-pod__row.is-you {
+  border-left-width: 9px;
+  border-left-color: var(--sg-cyan);
+  background: rgba(16, 38, 62, 0.82);
+}
+
+.sg-pod__place {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(19px, 3vmin, 32px);
+  line-height: 1;
+  color: var(--mc, var(--sg-ink));
+  min-width: 1.6em;
+  text-align: right;
+}
+
+.sg-pod__ord {
+  font-size: 0.5em;
+  letter-spacing: 0.02em;
+}
+
+.sg-pod__pilot {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(13px, 2vmin, 22px);
+  line-height: 1.05;
+  color: var(--sg-ink);
+}
+
+.sg-pod__chassis {
+  font-family: var(--sg-ui);
+  font-size: clamp(9px, 1.25vmin, 13px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sg-dim);
+}
+
+.sg-pod__pts {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(11px, 1.6vmin, 17px);
+  color: var(--sg-ink);
+}
+
+.sg-pod__you {
+  grid-row: 4;
+  font-family: var(--sg-ui);
+  font-size: clamp(12px, 1.9vmin, 19px);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-align: center;
+  color: var(--sg-ink);
+  margin-bottom: 10px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 10px rgba(2, 5, 12, 0.95);
+}
+
+.sg-pod__skip {
+  grid-row: 5;
+}
+
+/* A landscape phone is ~390px tall: the rows drop to two lines of nothing if
+   they keep the desktop gap, and the player's own line lands on the cars. */
+@media (max-width: 860px), (max-height: 540px) {
+  .sg-pod__rows {
+    margin-top: clamp(14px, 3.5vmin, 34px);
+    min-width: min(300px, 92vw);
+    gap: 3px;
+  }
+
+  .sg-pod__row {
+    padding: 3px 9px 3px 7px;
+  }
+
+  .sg-pod__you {
+    margin-bottom: 6px;
+  }
+}
+
+/* ==========================================================================
+   THE CARD MOVES OFF THE CHAMPION'S HEAD
+   ==========================================================================
+   THE MIDDLE-TOP OF THE FRAME IS WHERE THE WINNER IS, ON FOUR BEATS OUT OF
+   FIVE. The stacked layout above puts the standings rows across the top
+   centre, and photographed, the REVEAL had the champion tangled in the panel
+   and the CHAMPION close-up had the gold head immediately under it -- the one
+   shot in the whole celebration that is about a person, with a table parked on
+   their face.
+
+   RE-FRAMING CANNOT FIX IT AND THAT IS WHY THE CARD MOVED. The subject tops
+   out around 7.5 m up (a figure on the 3 m step, plus 1.6 m of hop) and the
+   REVEAL's lens is 1-2 m up: holding a subject that high below the top quarter
+   of the frame means aiming at y = 5 from y = 1, which throws away the ground,
+   the cars and the reveal itself. On the CHAMPION beat it would mean a medium
+   shot instead of a close-up. The card is the thing with somewhere else to be.
+
+   SO: A RAIL. Title and standings go to the top LEFT and the centre column is
+   left to the scene. The player's own result and the skip stay centred at the
+   bottom where they already were. Nothing shrinks and nothing fades -- the
+   final table is legible for the whole celebration, which is the one thing the
+   HOLD beat needs from it.
+
+   760px, not a media-feature guess: it is the width at which a 300px rail
+   still leaves 60% of the frame clear, and it takes in the landscape phone
+   (915x412) that had the worst overlap of the lot. A portrait phone keeps the
+   stacked layout, where the subject sits well below the card already -- the
+   scene's own aspect bias in render/podium.ts drops it -- and where a rail
+   would be most of the screen. */
+@media (min-width: 760px) {
+  .sg-pod {
+    grid-template-columns: min(30vw, 340px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    justify-items: start;
+  }
+
+  .sg-pod__head {
+    grid-row: 1;
+    grid-column: 1;
+    text-align: left;
+  }
+
+  .sg-pod__rows {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    margin-top: clamp(14px, 2.2vmin, 26px);
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+  }
+
+  /* Both of these stay CENTRED ON THE FRAME, not on the rail: they are the
+     player's own result and the way out, and the bottom centre is where this
+     game has put those since the finish card. Spanning both columns is what
+     keeps them there while the rail owns column one. */
+  .sg-pod__you,
+  .sg-pod__skip {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
+
+  .sg-pod__you { grid-row: 3; }
+  .sg-pod__skip { grid-row: 4; }
+
+  /* The rail is read against the scene rather than against a backdrop, so the
+     head needs the same contrast the rows get from their own panel. */
+  .sg-pod__eyebrow,
+  .sg-pod__title {
+    text-shadow: 0 2px 10px rgba(2, 5, 12, 0.95), 0 0 52px rgba(255, 210, 63, 0.4);
+  }
+}
+
+/* A landscape phone is a rail viewport by width and a cramped one by height,
+   so it gets the rail AND the short-viewport shrink below. Pinning the rows to
+   the top of their track (rather than letting a 1fr track centre them) is what
+   keeps the rail a rail instead of a floating block. */
+@media (min-width: 760px) and (max-height: 540px) {
+  .sg-pod {
+    grid-template-columns: min(34vw, 300px) minmax(0, 1fr);
+  }
+}
+
+/* Reduced motion: the card arrives, it does not fly in. The scene's own
+   suppression lives in game/podium.ts (still framings) and render/podium.ts
+   (no strobing bursts); this is the DOM's share of the same rule. */
+.sg-hud[data-reduced="1"] .sg-pod {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-pod { animation: none; }
+  .sg-ctr__round { transition: none; }
+}
+
+/* Everything in the HUD except the podium card describes a race that no longer
+   exists by the time this class is set -- the world has been torn down. The
+   finish card's `is-ceremony` keeps the minimap on purpose; this does not. */
+.sg-hud.is-podium > *:not(.sg-pod) {
+  display: none;
+}
+
+/* A LANDSCAPE PHONE IS 412px TALL, and the podium card as composed for a
+   desktop is 150px of that -- 36% of the frame, sitting exactly where the
+   pilots' heads are. Measured off a 915x412 photograph: the champion was
+   behind the standings panel. So on a short viewport the whole card shrinks
+   rather than moving, because there is no corner of a 2.22 aspect frame that
+   is reliably empty across five different camera angles. */
+@media (max-height: 540px) {
+  .sg-pod {
+    padding-top: calc(6px + var(--sg-sat));
+  }
+
+  .sg-pod__eyebrow {
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    text-indent: 0.3em;
+  }
+
+  .sg-pod__title {
+    font-size: 20px;
+  }
+
+  .sg-pod__tied {
+    font-size: 8px;
+    letter-spacing: 0.16em;
+  }
+
+  .sg-pod__rows {
+    margin-top: 3px;
+    min-width: min(320px, 62vw);
+    gap: 2px;
+  }
+
+  .sg-pod__row {
+    padding: 1px 8px 1px 6px;
+    gap: 8px;
+  }
+
+  .sg-pod__place {
+    font-size: 17px;
+  }
+
+  .sg-pod__pilot {
+    font-size: 12px;
+  }
+
+  .sg-pod__chassis {
+    font-size: 8px;
+    letter-spacing: 0.1em;
+  }
+
+  .sg-pod__pts {
+    font-size: 11px;
+  }
+
+  .sg-pod__you {
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+}

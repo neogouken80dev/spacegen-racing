@@ -24,36 +24,20 @@ import { TUNING } from '../content/tuning'
 import { ITEMS, ITEM_PARAMS } from '../content/items'
 import { CHASSIS_BY_ID, getLocomotion } from '../content/chassis'
 import { surfaceSprayAt, type SurfaceSpray } from './themes'
+import {
+  ParticlePool,
+  K_BEAD, K_BEAM, K_GROUND, K_RING, K_SHELL, K_SMOKE, K_SPARK, K_SPRITE,
+} from './particles'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Particle kinds. Must match the branch order in the shaders below. */
-const K_SPRITE = 0 // soft round glow with a hot core
-const K_SPARK = 1 // velocity-stretched streak
-const K_RING = 2 // camera-facing expanding annulus
-const K_GROUND = 3 // ground-aligned expanding annulus
-const K_SHELL = 4 // bright annulus with a punched-out dark core
-const K_SMOKE = 5 // soft low-contrast puff
-const K_BEAM = 6 // world-Y aligned light column
 /**
- * A SHINY GLOWING MARBLE: a filled round body with a rim and an off-centre
- * specular highlight, billboarded, and — the whole point — NOT stretched along
- * its velocity the way K_SPARK is.
- *
- * K_SPARK's stretch is `1 + min(|v_view| * 0.085, 6)`, so a 0.62 m quad thrown
- * at 25 m/s draws as a 1.8 m beam. That is correct for a struck spark grinding
- * off a floor pan and it is exactly wrong for an impact that is supposed to
- * scatter beads across the road: photographed at a real chase distance, forty
- * of them fanning out read as a light rig, not as an impact.
- *
- * The profile is split on purpose (see PARTICLE_FRAG): a LARGE body at modest
- * luminance carries the colour, a TINY specular carries the brightness. That
- * is the only way this file has found to obey "make it brighter" and "make it
- * more colourful" at once — put them in different pixels.
+ * Particle kinds and the pooled quad buffer they are drawn from now live in
+ * render/particles.ts, because the podium scene needs the same shader. Nothing
+ * about them changed in the move; see that file's header for why.
  */
-const K_BEAD = 7
 
 const MAX_RACERS = 12
 /**
@@ -544,248 +528,6 @@ const rnd2 = (): number => Math.random() * 2 - 1
 // Shaders
 // ---------------------------------------------------------------------------
 
-const PARTICLE_VERT = `
-uniform float uTime;
-uniform vec3  uCamPos;
-
-attribute vec3 aPos;
-attribute vec3 aVel;
-attribute vec3 aCol;
-attribute vec4 aMisc;   // birth, life, size0, growth
-attribute vec4 aMisc2;  // gravity, drag, kind, seed
-/**
- * THE PARTICLE'S UP.
- *
- * World +Y for everything on a flat track, and for anything that genuinely
- * belongs to the world rather than to the road. On a gravity track it carries
- * the surface normal of the road the effect was born on, and three things read
- * it: the drag/gravity arc, the ground-aligned annulus, and the light column.
- * Every one of those used to be a literal .y in this shader, which is why a
- * ramp launch on a wall-ride threw a vertical searchlight into the sky while
- * the car went sideways.
- *
- * With aAxis = (0,1,0) every expression below reduces to EXACTLY the world-Y
- * arithmetic it replaces -- the cross products are written in the order that
- * makes that true, not merely true up to a mirror.
- */
-attribute vec3 aAxis;
-
-varying vec3  vCol;
-varying float vA;
-varying float vKind;
-varying vec2  vQ;
-varying float vSeed;
-
-void main() {
-  float birth = aMisc.x;
-  float life  = aMisc.y;
-  float age   = uTime - birth;
-  float u     = (life > 0.0) ? age / life : 2.0;
-
-  vKind = aMisc2.z;
-  vSeed = aMisc2.w;
-  vQ    = position.xy;
-  vCol  = aCol;
-  vA    = 0.0;
-
-  if (u < 0.0 || u >= 1.0) {
-    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    return;
-  }
-
-  // Analytic exponential drag plus a gravity term. No CPU integration.
-  float k = aMisc2.y;
-  float integ = (k > 0.001) ? (1.0 - exp(-k * age)) / k : age;
-  vec3 wp = aPos + aVel * integ;
-  wp += aAxis * (0.5 * aMisc2.x * age * age);
-
-  float size = aMisc.z + aMisc.w * age;
-  float kind = vKind;
-  float a;
-
-  if (kind < 0.5) {              // sprite
-    a = smoothstep(0.0, 0.06, u) * pow(1.0 - u, 1.6);
-    size *= 0.55 + 0.45 * smoothstep(0.0, 0.20, u);
-  } else if (kind < 1.5) {       // spark
-    // ^1.7 rather than ^2.2: at 2.2 the mean particle spends its life at 31%
-    // brightness, which is why a stream of 50 drift sparks registered as a
-    // faint haze instead of a spray.
-    a = pow(1.0 - u, 1.7) * (0.74 + 0.26 * sin(vSeed * 97.0 + age * 63.0));
-  } else if (kind < 3.5) {       // rings
-    a = pow(1.0 - u, 1.7);
-  } else if (kind < 4.5) {       // shell
-    a = pow(1.0 - u, 1.3) * smoothstep(0.0, 0.05, u);
-  } else if (kind < 5.5) {       // smoke
-    a = sin(u * 3.14159265) * 0.8;
-  } else if (kind < 6.5) {       // beam
-    a = sin(u * 3.14159265);
-  } else {                       // bead
-    // A marble does not fade the moment it is thrown. ^1.25 rather than the
-    // spark's ^1.7 keeps the mean bead at 55% of its brightness across its
-    // life instead of 37%, which is what lets one that lands and settles still
-    // be worth looking at a second later. The sine is a slow TWINKLE, not a
-    // flicker: half the spark's rate and a fifth of its depth, so it reads as
-    // a highlight catching the light rather than as a strobe.
-    a = smoothstep(0.0, 0.035, u) * pow(1.0 - u, 1.25)
-      * (0.88 + 0.12 * sin(vSeed * 61.0 + age * 31.0));
-  }
-
-  // Far fade, and a NEAR fade. The chase camera sits nine metres directly
-  // behind the exhaust, so everything the vehicle throws backwards — plume,
-  // drift sparks, wall sparks, dust — flies straight at the lens and, a metre
-  // out, one quad covers a third of the screen. Dissolving them before they
-  // arrive is what keeps the vehicle visible during a boost.
-  //
-  // SMOKE GETS ITS OWN, MUCH WIDER WINDOW. It is the only kind that is both
-  // large (a metre across by the end of its life) and slow (drag-stalled, so
-  // it hangs where it was made), which means it is the only kind the camera
-  // genuinely flies THROUGH rather than past: at 60 m/s everything the wheels
-  // leave on the road reaches the lens about a sixth of a second later, at
-  // which age a puff is at its brightest and widest. Measured, this was a soft
-  // white disc a third of the frame across passing on the outside of every
-  // corner. Fading from 9.5 m instead of 4.2 m dissolves the plume as the
-  // camera arrives while leaving it at full strength where it is made — the
-  // spray at the wheels is 9 m out, so it loses nothing at all.
-  //
-  // BEADS GET A THIRD WINDOW, and it was MEASURED, not assumed. An impact
-  // bead is a FILLED disc up to 0.9 m across thrown backwards down the road,
-  // and the chase camera is nine metres behind the car: solid angle goes as
-  // (size/distance)^2, so the same bead that is 70 px tall where it is made is
-  // 260 px tall at 2.5 m. Photographed at the default 1.1-4.2 window, a slam
-  // put a dozen of those over the lens and the frame went flat magenta --
-  // additive, so it tinted the sky and the horizon too.
-  //
-  // 2.4-8.5, which is very nearly the SMOKE window, and for the same reason
-  // smoke has one: a bead is the only other kind that is both large and left
-  // BEHIND the car, so it is the only other kind the camera genuinely flies
-  // through rather than past. Every settled marble on the road passes within a
-  // couple of metres of a lens that is nine metres behind the car. Measured at
-  // 1.8-5.6 a slam photographed 0.82% of the frame and 3.52% of the ROAD BAND
-  // blown a quarter-second in -- a boost's numbers, for an impact -- and
-  // almost all of it came from four beads close enough to fill a sixth of the
-  // frame each. At 2.4-8.5 the burst where it is MADE is untouched: the
-  // contact point is eleven metres from the lens.
-  float dcam = distance(wp, uCamPos);
-  float near = (kind > 4.5 && kind < 5.5)
-    ? smoothstep(2.6, 9.5, dcam)
-    : (kind > 6.5)
-      ? smoothstep(2.4, 8.5, dcam)
-      : smoothstep(1.1, 4.2, dcam);
-  vA = a * near * (1.0 - smoothstep(230.0, 420.0, dcam));
-
-  vec4 mv;
-  if (kind > 2.5 && kind < 3.5) {
-    // Surface-aligned quad: it lies in the plane perpendicular to aAxis, so a
-    // shockwave on a wall spreads ACROSS the wall instead of standing on its
-    // edge in world XZ. With aAxis = +Y, gt is exactly +X and gb exactly +Z,
-    // which is the vec3(x, 0, z) offset this replaces.
-    vec3 gt = (abs(aAxis.z) > 0.999)
-      ? normalize(cross(aAxis, vec3(1.0, 0.0, 0.0)))
-      : normalize(cross(aAxis, vec3(0.0, 0.0, 1.0)));
-    vec3 gb = cross(gt, aAxis);
-    vec3 wo = wp + gt * (position.x * size) + gb * (position.y * size);
-    mv = modelViewMatrix * vec4(wo, 1.0);
-  } else if (kind > 5.5 && kind < 6.5) {
-    // Light column along aAxis, billboarded around it. cross(aAxis, f) with
-    // aAxis = +Y is exactly (f.z, 0, -f.x), the vector this replaces.
-    vec3 f = uCamPos - wp;
-    vec3 rw = normalize(cross(aAxis, f) + vec3(1e-5, 0.0, 0.0));
-    vec3 wo = wp + rw * (position.x * size) + aAxis * (position.y * size * 9.0);
-    mv = modelViewMatrix * vec4(wo, 1.0);
-  } else if (kind > 0.5 && kind < 1.5) {
-    // Spark: stretch along the screen-space velocity direction.
-    mv = modelViewMatrix * vec4(wp, 1.0);
-    vec3 vv = (modelViewMatrix * vec4(aVel * exp(-k * age), 0.0)).xyz;
-    vec2 d = vv.xy;
-    float dl = length(d);
-    vec2 dir = (dl > 1e-4) ? d / dl : vec2(0.0, 1.0);
-    vec2 pp = vec2(-dir.y, dir.x);
-    float st = 1.0 + min(dl * 0.085, 6.0);
-    mv.xy += dir * (position.y * size * st) + pp * (position.x * size * 0.72);
-  } else {
-    mv = modelViewMatrix * vec4(wp, 1.0);
-    float rot = vSeed * 6.2831853 + age * (vSeed - 0.5) * 3.0;
-    float cs = cos(rot), sn = sin(rot);
-    vec2 q = vec2(position.x * cs - position.y * sn, position.x * sn + position.y * cs);
-    mv.xy += q * size;
-  }
-
-  gl_Position = projectionMatrix * mv;
-}
-`
-
-const PARTICLE_FRAG = `
-varying vec3  vCol;
-varying float vA;
-varying float vKind;
-varying vec2  vQ;
-varying float vSeed;
-
-void main() {
-  vec2 q = vQ * 2.0;
-  float d = length(q);
-  float a;
-
-  if (vKind < 0.5) {             // sprite: wide glow + hot core
-    a = exp(-d * d * 3.0) * 0.70 + exp(-d * d * 20.0) * 0.90;
-  } else if (vKind < 1.5) {      // spark: coloured body, white-hot centre
-    float s = 1.0 - smoothstep(0.16, 1.0, d);
-    a = s * s * 1.10 + exp(-d * d * 14.0) * 0.80;
-  } else if (vKind < 3.5) {      // ring
-    a = (1.0 - smoothstep(0.0, 0.20, abs(d - 0.76))) * 1.10;
-    // Tight inner fill only. At 0.09 over a wide gaussian, a shockwave ring
-    // grown to forty metres painted a flat wash across the entire frame.
-    a += exp(-d * d * 6.0) * 0.035;
-  } else if (vKind < 4.5) {      // shell: bright annulus, punched dark core
-    a = 1.0 - smoothstep(0.0, 0.34, abs(d - 0.66));
-    a *= 1.0 - 0.90 * exp(-d * d * 7.0);
-    a += exp(-d * d * 1.4) * 0.05;
-  } else if (vKind < 5.5) {      // smoke
-    a = exp(-d * d * 2.0) * 0.55;
-  } else if (vKind < 6.5) {      // beam
-    float w = 1.0 - smoothstep(0.0, 1.0, abs(q.x));
-    a = w * w * (1.0 - smoothstep(-0.3, 1.0, q.y)) * 0.85;
-  } else {                       // bead: a shiny glowing marble
-    // FOUR TERMS, AND THEY ARE FOUR DIFFERENT JOBS.
-    //
-    // body   a filled disc with an EDGE. This is the whole reason the kind
-    //        exists: a gaussian puff has no silhouette, and a thing without a
-    //        silhouette is not an object, it is a glow. 0.62 alpha, which at
-    //        TUNING.sparks.lum puts the body just over the bloom threshold and
-    //        a long way under the point ACES flattens every hue to white.
-    // shade  a sphere, not a coin. Cheap Lambert-ish falloff toward the rim.
-    // spec   THE SHINE, and the only part of a bead allowed to clip. It is
-    //        about six pixels across at a realistic chase distance, so it can
-    //        carry 2.25x the colour -- and 2.25x a SATURATED colour still
-    //        blooms white, which is what "shiny" looks like -- without taking
-    //        the hue of the other nine hundred pixels with it.
-    // rim    a thin bright edge. This is what stops a bead 40 m away, where
-    //        the specular is sub-pixel, from collapsing into a flat dot.
-    // halo   a little light bleeding past the silhouette, so it GLOWS instead
-    //        of merely being bright. Held to 0.09 and tight, and that number
-    //        was MEASURED down from 0.20: this is the only term that covers
-    //        the whole quad, so it is the only one whose cost scales with the
-    //        square of the bead's screen size, and at 0.20 a slam's worth of
-    //        near-camera beads laid a flat additive wash over the sky.
-    float body = 1.0 - smoothstep(0.62, 0.96, d);
-    float shade = 0.62 + 0.38 * (1.0 - d * d);
-    vec2 hp = q - vec2(-0.30, 0.32);
-    float spec = exp(-dot(hp, hp) * 30.0);
-    float rim = exp(-(d - 0.80) * (d - 0.80) * 60.0) * 0.42;
-    float halo = exp(-d * d * 3.4) * 0.13;
-    a = body * (shade * 0.70 + rim) + spec * 1.55 + halo;
-  }
-
-  a *= vA;
-  if (a < 0.004) discard;
-
-  // Premultiplied additive: CustomBlending is ONE / ONE.
-  gl_FragColor = vec4(vCol * a, a);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}
-`
-
 const HOLO_VERT = `
 uniform float uTime;
 uniform float uSize;
@@ -1274,11 +1016,9 @@ class Vfx implements VfxSystem {
   private readonly slotRefill: number
 
   // --- particle pool ---------------------------------------------------
+  /** The shared quad buffer. See render/particles.ts. */
+  private readonly pp: ParticlePool
   private readonly pool: number
-  private readonly frameBudget: number
-  private head = 0
-  private spawnStart = 0
-  private spawnCount = 0
   /**
    * The sim frame whose events have already been consumed.
    *
@@ -1292,21 +1032,6 @@ class Vfx implements VfxSystem {
    * in the game.
    */
   private prevSimFrame = -1
-  private readonly aPos: Float32Array
-  private readonly aVel: Float32Array
-  private readonly aCol: Float32Array
-  private readonly aMisc: Float32Array
-  private readonly aMisc2: Float32Array
-  private readonly aAxis: Float32Array
-  private readonly attrPos: THREE.InstancedBufferAttribute
-  private readonly attrVel: THREE.InstancedBufferAttribute
-  private readonly attrCol: THREE.InstancedBufferAttribute
-  private readonly attrMisc: THREE.InstancedBufferAttribute
-  private readonly attrMisc2: THREE.InstancedBufferAttribute
-  private readonly attrAxis: THREE.InstancedBufferAttribute
-  private readonly pGeo: THREE.InstancedBufferGeometry
-  private readonly pMat: THREE.ShaderMaterial
-  private readonly pMesh: THREE.Mesh
 
   // --- trails ----------------------------------------------------------
   private readonly trailN: number
@@ -1396,7 +1121,6 @@ class Vfx implements VfxSystem {
 
     const base = POOL_BASE[quality.tier] ?? 1800
     this.pool = Math.max(600, Math.min(8000, Math.round(base * quality.particleScale)))
-    this.frameBudget = Math.max(48, this.pool >> 2)
     // Expressed as a FRACTION of the pool, so every tier gives contact sparks
     // the same share of the ring buffer rather than the cheapest device giving
     // them all of it.
@@ -1405,66 +1129,11 @@ class Vfx implements VfxSystem {
     this.slotTokens = this.slotBucket
 
     // ---- particle pool ------------------------------------------------
-    this.aPos = new Float32Array(this.pool * 3)
-    this.aVel = new Float32Array(this.pool * 3)
-    this.aCol = new Float32Array(this.pool * 3)
-    this.aMisc = new Float32Array(this.pool * 4)
-    this.aMisc2 = new Float32Array(this.pool * 4)
-    // Seeded to world +Y, so a particle written by a path that never sets an
-    // axis behaves exactly as it did before this attribute existed.
-    this.aAxis = new Float32Array(this.pool * 3)
-    for (let i = 0; i < this.pool; i++) this.aAxis[i * 3 + 1] = 1
-
-    const quad = new Float32Array([
-      -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
-    ])
-    const geo = new THREE.InstancedBufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(quad, 3))
-    geo.setIndex(new THREE.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1))
-    geo.instanceCount = this.pool
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6)
-
-    this.attrPos = new THREE.InstancedBufferAttribute(this.aPos, 3)
-    this.attrVel = new THREE.InstancedBufferAttribute(this.aVel, 3)
-    this.attrCol = new THREE.InstancedBufferAttribute(this.aCol, 3)
-    this.attrMisc = new THREE.InstancedBufferAttribute(this.aMisc, 4)
-    this.attrMisc2 = new THREE.InstancedBufferAttribute(this.aMisc2, 4)
-    this.attrAxis = new THREE.InstancedBufferAttribute(this.aAxis, 3)
-    this.attrPos.setUsage(THREE.DynamicDrawUsage)
-    this.attrVel.setUsage(THREE.DynamicDrawUsage)
-    this.attrCol.setUsage(THREE.DynamicDrawUsage)
-    this.attrMisc.setUsage(THREE.DynamicDrawUsage)
-    this.attrMisc2.setUsage(THREE.DynamicDrawUsage)
-    this.attrAxis.setUsage(THREE.DynamicDrawUsage)
-    geo.setAttribute('aPos', this.attrPos)
-    geo.setAttribute('aVel', this.attrVel)
-    geo.setAttribute('aCol', this.attrCol)
-    geo.setAttribute('aMisc', this.attrMisc)
-    geo.setAttribute('aMisc2', this.attrMisc2)
-    geo.setAttribute('aAxis', this.attrAxis)
-    this.pGeo = geo
-
-    this.pMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-        uCamPos: { value: new THREE.Vector3() },
-      },
-      vertexShader: PARTICLE_VERT,
-      fragmentShader: PARTICLE_FRAG,
-      transparent: true,
-      depthWrite: false,
-      depthTest: true,
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneFactor,
-    })
-
-    this.pMesh = new THREE.Mesh(this.pGeo, this.pMat)
-    this.pMesh.frustumCulled = false
-    this.pMesh.matrixAutoUpdate = false
-    this.pMesh.renderOrder = 20
-    this.group.add(this.pMesh)
+    // Math.random rather than this file's own xorshift, which is what spawn()
+    // always used for the per-particle seed; injected so the stream and its
+    // ORDER are unchanged by the move into render/particles.ts.
+    this.pp = new ParticlePool(this.pool, Math.random)
+    this.group.add(this.pp.mesh)
 
     // ---- trail ribbons -------------------------------------------------
     // THREE ribbons per racer now, not one, and all of them still one draw
@@ -1641,6 +1310,37 @@ class Vfx implements VfxSystem {
   // Particle emission. The only place the pool is written.
   // -------------------------------------------------------------------------
 
+  /**
+   * Particles spawned so far this frame.
+   *
+   * Kept as a property on the VFX system after the pool moved out to
+   * render/particles.ts, because tools/probe-driftfx.mjs reads it by this name
+   * to prove the drift emitters are running. Without it that probe reads
+   * undefined, falls back to -1, and passes every comparison it makes.
+   */
+  get spawnCount(): number { return this.pp.spawnedThisFrame }
+
+  // THE DIAGNOSTIC SURFACE THE PROBES READ.
+  //
+  // These were plain fields until the pool moved to render/particles.ts, and
+  // tools/probe-sparks.ts, tools/probe-sparkshots.mjs and tools/smoke.mjs all
+  // reach through them by name -- the first re-integrates a particle's arc on
+  // the CPU from aPos/aVel/aMisc2 to check where a bouncing spark actually
+  // lands, which is exactly the class of claim a photograph cannot make.
+  // Forwarded rather than duplicated, so there is still one buffer.
+  get aPos(): Float32Array { return this.pp.aPos }
+  get aVel(): Float32Array { return this.pp.aVel }
+  get aCol(): Float32Array { return this.pp.aCol }
+  get aMisc(): Float32Array { return this.pp.aMisc }
+  get aMisc2(): Float32Array { return this.pp.aMisc2 }
+  get aAxis(): Float32Array { return this.pp.aAxis }
+  get pMesh(): THREE.Mesh { return this.pp.mesh }
+
+  /**
+   * One particle. A thin pass-through to the shared pool so the eighty call
+   * sites below did not have to move; the pool owns the ring buffer, the
+   * per-frame budget and the birth stamp.
+   */
   private spawn(
     x: number, y: number, z: number,
     vx: number, vy: number, vz: number,
@@ -1648,21 +1348,12 @@ class Vfx implements VfxSystem {
     life: number, size: number, growth: number,
     gravity: number, drag: number, kind: number,
   ): void {
-    if (this.spawnCount >= this.frameBudget) return
-    const i = this.head
-    this.head = i + 1 >= this.pool ? 0 : i + 1
-    this.spawnCount++
-
-    const i3 = i * 3
-    const i4 = i * 4
-    const p = this.aPos, v = this.aVel, c = this.aCol, m = this.aMisc, m2 = this.aMisc2
-    p[i3] = x; p[i3 + 1] = y; p[i3 + 2] = z
-    v[i3] = vx; v[i3 + 1] = vy; v[i3 + 2] = vz
-    c[i3] = r; c[i3 + 1] = g; c[i3 + 2] = b
-    m[i4] = this.time + _delay; m[i4 + 1] = life; m[i4 + 2] = size; m[i4 + 3] = growth
-    m2[i4] = gravity; m2[i4 + 1] = drag; m2[i4 + 2] = kind; m2[i4 + 3] = rnd()
-    const a = this.aAxis
-    a[i3] = _axX; a[i3 + 1] = _axY; a[i3 + 2] = _axZ
+    // The two module-level current-values this file has always used. Pushed
+    // rather than held by the pool so `setAxis()` and `_delay` keep working
+    // exactly as they read at every call site.
+    this.pp.setAxis(_axX, _axY, _axZ)
+    this.pp.delay = _delay
+    this.pp.spawn(x, y, z, vx, vy, vz, r, g, b, life, size, growth, gravity, drag, kind)
   }
 
   /** Spherical burst helper. dirBias steers the cone; spread 1 = full sphere. */
@@ -1674,21 +1365,9 @@ class Vfx implements VfxSystem {
     life: number, size: number, kind: number,
     gravity: number, drag: number,
   ): void {
-    const n = Math.min(count, this.frameBudget - this.spawnCount)
-    for (let i = 0; i < n; i++) {
-      const rx = rnd2(), ry = rnd2(), rz = rnd2()
-      const s = speed * (0.45 + rnd() * 0.75)
-      const vx = (dx + rx * spread) * s
-      const vy = (dy + ry * spread) * s
-      const vz = (dz + rz * spread) * s
-      this.spawn(
-        x + rx * 0.25, y + ry * 0.25, z + rz * 0.25,
-        vx, vy, vz,
-        col[0] * gain, col[1] * gain, col[2] * gain,
-        life * (0.7 + rnd() * 0.6), size * (0.7 + rnd() * 0.7), 0,
-        gravity, drag, kind,
-      )
-    }
+    this.pp.setAxis(_axX, _axY, _axZ)
+    this.pp.delay = _delay
+    this.pp.burst(x, y, z, dx, dy, dz, count, speed, spread, col, gain, life, size, kind, gravity, drag)
   }
 
   private ring(
@@ -1801,8 +1480,6 @@ class Vfx implements VfxSystem {
     if (dt > 0.1) dt = 0.1
     this.time += dt
 
-    this.spawnStart = this.head
-    this.spawnCount = 0
     // The player's choice wins; the media query is only the fallback for a
     // caller that has no settings panel to ask (the probes, the tests).
     this.reduced = this.reduceMotion !== null
@@ -1817,9 +1494,7 @@ class Vfx implements VfxSystem {
     this.hitFlash *= Math.pow(0.004, dt)
 
     const cx = cameraPos.x, cy = cameraPos.y, cz = cameraPos.z
-    this.pMat.uniforms.uTime.value = this.time
-    const camUni = this.pMat.uniforms.uCamPos.value as THREE.Vector3
-    camUni.set(cx, cy, cz)
+    this.pp.beginFrame(this.time, cx, cy, cz)
 
     // Only consume each sim step's events once; see prevSimFrame. Continuous
     // emitters keep running either way, so a paused or high-refresh frame
@@ -3090,7 +2765,7 @@ class Vfx implements VfxSystem {
     let aZ = _axX * oy - _axY * ox
     const al = Math.sqrt(aX * aX + aY * aY + aZ * aZ)
     if (al > 1e-4) { aX /= al; aY /= al; aZ /= al } else { aX = 1; aY = 0; aZ = 0 }
-    const m = Math.min(n, this.frameBudget - this.spawnCount)
+    const m = Math.min(n, this.pp.budgetLeft)
     for (let i = 0; i < m; i++) {
       // Walked down the flank front to back, with a small jitter so the row is
       // a row and not a picket fence.
@@ -3597,7 +3272,7 @@ class Vfx implements VfxSystem {
     const cF = -_bHz * 0.62, cU = _bHy * 0.60
     const cx = gX(cF, 0, cU), cy = gY(cF, 0, cU), cz = gZ(cF, 0, cU)
 
-    const n = Math.min(Math.round((14 + t * 12) * q), this.frameBudget - this.spawnCount)
+    const n = Math.min(Math.round((14 + t * 12) * q), this.pp.budgetLeft)
     for (let i = 0; i < n; i++) {
       const a = rnd() * TAU
       const rr = (1.8 + t * 0.8) * (0.7 + rnd() * 0.6)
@@ -3646,7 +3321,7 @@ class Vfx implements VfxSystem {
     fx.gatSpin = 0
     this.flash(mx, my, mz, BEAM_RGB, 1.30, 0.22, 1.5)
     this.ring(mx, my, mz, BEAM_RGB, 1.10, 0.30, 0.30, 9, false)
-    const n = Math.min(Math.round(16 * _bQ), this.frameBudget - this.spawnCount)
+    const n = Math.min(Math.round(16 * _bQ), this.pp.budgetLeft)
     for (let i = 0; i < n; i++) {
       // A ring of motes on the barrel FACE — the (right, up) plane — swept in
       // toward the muzzle, so the spin-up reads as a weapon and not as another
@@ -4268,7 +3943,7 @@ class Vfx implements VfxSystem {
 
   /** Particles seeded on a shell, travelling inward — the implosion phase. */
   private implode(x: number, y: number, z: number, col: Float32Array, count: number, life: number): void {
-    const n = Math.min(count, this.frameBudget - this.spawnCount)
+    const n = Math.min(count, this.pp.budgetLeft)
     const inv = 1 / life
     for (let i = 0; i < n; i++) {
       let ux = rnd2(), uy = rnd2(), uz = rnd2()
@@ -5738,45 +5413,7 @@ class Vfx implements VfxSystem {
   // -------------------------------------------------------------------------
 
   private flush(): void {
-    if (this.spawnCount === 0) return
-    const n = this.spawnCount
-    const start = this.spawnStart
-    this.attrPos.clearUpdateRanges()
-    this.attrVel.clearUpdateRanges()
-    this.attrCol.clearUpdateRanges()
-    this.attrMisc.clearUpdateRanges()
-    this.attrMisc2.clearUpdateRanges()
-    this.attrAxis.clearUpdateRanges()
-    if (n >= this.pool) {
-      this.attrPos.addUpdateRange(0, this.pool * 3)
-      this.attrVel.addUpdateRange(0, this.pool * 3)
-      this.attrCol.addUpdateRange(0, this.pool * 3)
-      this.attrMisc.addUpdateRange(0, this.pool * 4)
-      this.attrMisc2.addUpdateRange(0, this.pool * 4)
-      this.attrAxis.addUpdateRange(0, this.pool * 3)
-    } else if (start + n <= this.pool) {
-      this.attrPos.addUpdateRange(start * 3, n * 3)
-      this.attrVel.addUpdateRange(start * 3, n * 3)
-      this.attrCol.addUpdateRange(start * 3, n * 3)
-      this.attrMisc.addUpdateRange(start * 4, n * 4)
-      this.attrMisc2.addUpdateRange(start * 4, n * 4)
-      this.attrAxis.addUpdateRange(start * 3, n * 3)
-    } else {
-      const head = this.pool - start
-      const tail = n - head
-      this.attrPos.addUpdateRange(start * 3, head * 3); this.attrPos.addUpdateRange(0, tail * 3)
-      this.attrVel.addUpdateRange(start * 3, head * 3); this.attrVel.addUpdateRange(0, tail * 3)
-      this.attrCol.addUpdateRange(start * 3, head * 3); this.attrCol.addUpdateRange(0, tail * 3)
-      this.attrMisc.addUpdateRange(start * 4, head * 4); this.attrMisc.addUpdateRange(0, tail * 4)
-      this.attrMisc2.addUpdateRange(start * 4, head * 4); this.attrMisc2.addUpdateRange(0, tail * 4)
-      this.attrAxis.addUpdateRange(start * 3, head * 3); this.attrAxis.addUpdateRange(0, tail * 3)
-    }
-    this.attrPos.needsUpdate = true
-    this.attrVel.needsUpdate = true
-    this.attrCol.needsUpdate = true
-    this.attrMisc.needsUpdate = true
-    this.attrMisc2.needsUpdate = true
-    this.attrAxis.needsUpdate = true
+    this.pp.flush()
   }
 
   // -------------------------------------------------------------------------
@@ -5812,8 +5449,7 @@ class Vfx implements VfxSystem {
     this.disposed = true
     this.destroyBoxes()
     this.destroyShards()
-    this.pGeo.dispose()
-    this.pMat.dispose()
+    this.pp.dispose()
     this.trailGeo.dispose()
     this.trailMat.dispose()
     this.wellGeoShell.dispose()

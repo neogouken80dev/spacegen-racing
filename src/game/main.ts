@@ -24,7 +24,7 @@ import { buildEnvironment } from '../render/environment'
 import { createEntityVisuals, type EntityVisualsWithGate } from '../render/entities'
 import { createVfx } from '../render/vfx'
 import { createPostFx, type PostFx } from '../render/postfx'
-import { createHud, type Hud } from '../ui/hud'
+import { createHud, type Hud, type PodiumLine } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
 import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
 import { CATALOGUE } from '../audio/catalogue'
@@ -39,10 +39,14 @@ import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
 import { installCompactLayout, type CompactLayout } from '../ui/compact'
 import { createInput, isTouchScheme, type InputManager } from './input'
 import {
-  applyRound, clearCircuit, CIRCUIT_GRID, gridMismatch, isComplete, loadCircuit,
-  newCircuit, resultFromRace, roundsDone, saveCircuit, trackIdForRound,
-  type CircuitState,
+  applyRound, clearCircuit, CIRCUIT_GRID, CIRCUIT_ROUNDS, gridMismatch, isComplete,
+  loadCircuit, newCircuit, resultFromRace, roundsDone, saveCircuit, standings,
+  trackIdForRound, type CircuitState,
 } from './circuit'
+import {
+  PODIUM_SKIP_GUARD, podiumCast, podiumDone, podiumSkip, type PodiumCast,
+} from './podium'
+import { createPodiumStage, pilotName, type PodiumStage } from '../render/podium'
 import { ChaseCamera } from './camera'
 import { themeFor } from '../render/themes'
 import {
@@ -61,8 +65,15 @@ const RACER_COUNT = 8
  * is doing a victory lap under AI), and the camera has left the chase rig. It
  * is deliberately a phase of its own rather than a flag on `racing`, because
  * every branch that asks "is the player driving" has to answer no.
+ *
+ * `podium` is its younger sibling: the championship celebration, and it plays
+ * ONCE PER CIRCUIT -- after round 8 has been scored and only then. It is in the
+ * same family as `ceremony` (no input into the sim, a skip behind a guard, the
+ * camera somewhere the chase rig is not) with one difference that matters: by
+ * the time it starts there is no world left. The race is over, the track has
+ * been torn down, and the scene holds the podium and nothing else.
  */
-type Phase = 'menu' | 'attract' | 'racing' | 'ceremony' | 'paused' | 'results'
+type Phase = 'menu' | 'attract' | 'racing' | 'ceremony' | 'podium' | 'paused' | 'results'
 
 interface RenderRacer {
   visual: VehicleVisualEx
@@ -194,6 +205,16 @@ export class Game {
   /** A skip control has been released at least once since the ceremony began. */
   private skipArmed = false
 
+  // --- championship podium --------------------------------------------------
+  /** The celebration scene, or null whenever the phase is not `podium`. */
+  private podiumStage: PodiumStage | null = null
+  /** Seconds since the podium opened. Its own clock: the camera plan in
+   *  game/podium.ts is written against it and there is no sim to ask. */
+  private podT = 0
+  private podSkipArmed = false
+  /** Reused so the per-frame HUD push allocates nothing. */
+  private readonly podCard = { lines: [] as PodiumLine[], you: '', tied: false, canSkip: false }
+
   // Adaptive quality
   private resizeObs: ResizeObserver | null = null
   private frameTimes: number[] = []
@@ -254,6 +275,11 @@ export class Game {
       e.preventDefault()
       if (this.phase === 'ceremony') this.finishRace()
     })
+    this.hud.podiumSkipButton.addEventListener('click', (e) => {
+      e.preventDefault()
+      if (this.phase === 'podium') this.endPodium()
+    })
+    this.hud.setReducedMotion(this.reduceMotion)
     this.frontEnd = createFrontEnd(container)
     this.input = createInput(canvas, container)
     // THE HUD LAYOUT FOLLOWS THE HANDS, NOT THE VIEWPORT. See ui/compact.ts:
@@ -271,10 +297,13 @@ export class Game {
     this.settings.onQualityChange = (q) => this.setTier(q)
     this.settings.onReducedMotionChange = (on) => {
       this.reduceMotion = on
-      // All three motion consumers from one value. The VFX system reads
-      // `this.reduceMotion` on its own each frame; these two are pushed.
+      // All four motion consumers from one value. The VFX system reads
+      // `this.reduceMotion` on its own each frame; these three are pushed.
+      // The HUD is on the list because the podium card's entrance is a DOM
+      // animation and a media query cannot see the in-game toggle.
       this.cheer.setReducedMotion(on)
       this.scoreHud.setReducedMotion(on)
+      this.hud.setReducedMotion(on)
     }
     this.settings.onVfxIntensityChange = (glare, screen) => {
       this.vfxGlare = glare
@@ -383,6 +412,8 @@ export class Game {
       else if (this.phase === 'paused') this.resume()
       // Escape / Start during the ceremony is the skip, not a pause menu.
       else if (this.phase === 'ceremony' && this.cerT >= T.ceremony.skipGuard) this.finishRace()
+      // ...and the same during the podium, behind the same kind of guard.
+      else if (this.phase === 'podium' && this.podT >= PODIUM_SKIP_GUARD) this.endPodium()
     }
 
     window.addEventListener('resize', this.onResize)
@@ -802,6 +833,25 @@ export class Game {
     this.cerT = 0
     this.cerFieldT = -1
     this.hud.setFinish(null)
+    /**
+     * WHICH ROUND THIS IS.
+     *
+     * Null outside circuit mode, which is the whole of "single-race mode is
+     * unaffected": the HUD draws nothing at all when it is not told a round,
+     * so a one-off race's countdown is byte-for-byte the one that shipped.
+     *
+     * `roundsDone` is the rounds ALREADY banked, so the round about to be
+     * driven is that plus one -- the same arithmetic the garage head and the
+     * Start button use, deliberately, because three places disagreeing about
+     * what round it is would be worse than none of them saying.
+     */
+    this.hud.setRound(this.circuitActive && this.circuit && !isComplete(this.circuit)
+      ? {
+        round: roundsDone(this.circuit) + 1,
+        total: CIRCUIT_ROUNDS,
+        trackName: this.track.def.name,
+      }
+      : null)
     this.cheer.reset()
     this.cheer.setLevel(this.calloutLevel)
     this.scorer.reset()
@@ -845,6 +895,7 @@ export class Game {
   }
 
   private toMenu(): void {
+    this.closePodium()
     this.phase = 'menu'
     this.race = null
     this.teardownWorld()
@@ -970,11 +1021,10 @@ export class Game {
     // Whatever brought us here — the shot ending, a skip, or the last car
     // crossing — the table has to be complete before it is drawn.
     this.settleRace()
-    this.phase = 'results'
     this.tools.hidden = true
     this.hud.setFinish(null)
+    this.hud.setRound(null)
     this.cheer.reset()
-    this.hud.root.style.display = 'none'
     this.chase.endCinematic()
     this.input.setPadsVisible(false)
     this.audio.endRace()
@@ -982,13 +1032,176 @@ export class Game {
     // THE ROUND IS SCORED BEFORE THE SCREEN IS BUILT, in that order, because
     // showResults() arms the auto-switch to the standings page and that page
     // has to exist and be filled by then. setCircuit is what creates it.
+    //
+    // WAS IT ALREADY OVER? Asked BEFORE the round is banked, because "the
+    // circuit is complete" is true from round 8 onwards and the podium is the
+    // moment it BECOMES true. Without this, walking back into a finished
+    // circuit and somehow racing again would replay the celebration for a race
+    // that scored nothing.
+    const wasComplete = this.circuit !== null && isComplete(this.circuit)
     this.scoreCircuitRound()
+    if (this.circuitActive && this.circuit && !wasComplete && isComplete(this.circuit)) {
+      this.beginPodium()
+      return
+    }
+    this.phase = 'results'
+    this.hud.root.style.display = 'none'
+    this.showResultsScreen()
+  }
+
+  /** Build and raise the results screen. Split out of finishRace because the
+   *  podium sits between the two at the end of a circuit. */
+  private showResultsScreen(): void {
+    if (!this.race) return
     this.frontEnd.showResults(this.race.state, this.localId, {
       score: this.lastScore,
       bestCombo: this.lastBestCombo,
     }, this.track.def.id)
     void this.publishScore()
     this.frontEnd.show('results')
+  }
+
+  // -------------------------------------------------------------------------
+  // THE CHAMPIONSHIP PODIUM
+  //
+  // Entered from finishRace() at the exact moment round 8 is banked, and from
+  // nowhere else. Everything about it is a deliberate echo of the finish
+  // ceremony, because a player should not have to learn a second set of rules
+  // for the second celebration in ninety seconds: the same skip guard, the
+  // same edge trigger, the same "a hidden tab is skipped, not paused".
+  //
+  // IT PLAYS WHETHER OR NOT THE PLAYER IS ON IT. The card names where they
+  // finished either way. A celebration you are locked out of is how a series
+  // says the last forty minutes were somebody else's; one that says "4th, 46
+  // points" while three robots dance is how it says you were in it.
+  // -------------------------------------------------------------------------
+
+  private beginPodium(): void {
+    if (!this.circuit) { this.phase = 'results'; this.showResultsScreen(); return }
+    const cast = podiumCast(standings(this.circuit), 0)
+    // A podium with nobody on it is not a scene. Unreachable with the shipped
+    // eight-car grid -- standings() returns a row per entrant -- and cheaper to
+    // rule out than to debug at the end of a forty-minute series.
+    if (cast.steps.length === 0) { this.phase = 'results'; this.showResultsScreen(); return }
+
+    this.phase = 'podium'
+    this.podT = 0
+    this.podSkipArmed = false
+    // The race world goes first. The podium needs the renderer and the scene,
+    // not the track: leaving a circuit's terrain, props and sky standing under
+    // it would be the most expensive frame in the game for no pixels at all.
+    this.teardownWorld()
+    this.podiumStage = createPodiumStage(this.scene, cast, this.quality, this.reduceMotion)
+    // A fresh post chain against the SAME camera object the stage writes to.
+    // See the note in buildWorld: the composer is bound to `chase.camera`, so
+    // there is exactly one camera in this game and everything points it.
+    this.post = this.quality.postFx
+      ? createPostFx(this.renderer, this.scene, this.chase.camera, this.quality)
+      : null
+    this.post?.setIntensity(this.vfxGlare, this.vfxScreen)
+
+    // WORLD UP, EXPLICITLY. ChaseCamera writes `camera.up` from the racer's
+    // own frame every race (see easeUp), so on a banked grid or a gravity
+    // circuit the camera arrives here still rolled onto a road that no longer
+    // exists -- and `lookAt` builds its basis from `up`, so the whole podium
+    // would be photographed at an angle nobody chose.
+    this.chase.camera.up.set(0, 1, 0)
+
+    // THE PODIUM OWNS THE SCREEN. In the shipping path the front end is already
+    // hidden -- we arrive straight from the ceremony -- but saying so here is
+    // what makes the phase self-contained rather than dependent on where it was
+    // entered from, and a results panel left standing over the celebration
+    // would also swallow the skip button underneath it.
+    this.frontEnd.hide()
+    this.fillPodiumCard(cast)
+    this.hud.root.style.display = ''
+    this.hud.setPodium(this.podCard)
+    // The score counter lives inside the HUD root and survives `is-ceremony`,
+    // because during a finish shot the run's score is still the thing the
+    // player wants. There is no run here at all.
+    this.scoreHud.setVisible(false)
+    this.tools.hidden = true
+    this.input.setPadsVisible(false)
+    // The title theme, because it is the game's own anthem and a championship
+    // celebrated in silence is a worse bug than a missing sound effect.
+    this.audio.menuMusic('title')
+  }
+
+  /** Fill the reused card object. Runs once per podium, not per frame. */
+  private fillPodiumCard(cast: PodiumCast): void {
+    const lines: PodiumLine[] = []
+    for (const e of cast.steps) {
+      lines.push({
+        place: e.place,
+        pilot: pilotName(e.pilotId),
+        chassis: CHASSIS_BY_ID[e.chassisId]?.name ?? e.chassisId,
+        points: e.points,
+        isLocal: e.isLocal,
+      })
+    }
+    this.podCard.lines = lines
+    this.podCard.tied = cast.tied
+    this.podCard.canSkip = false
+    const place = cast.localPlace
+    const pts = cast.localPoints + (cast.localPoints === 1 ? ' point' : ' points')
+    this.podCard.you = place === 1
+      ? `YOU ARE THE CHAMPION — ${pts}`
+      : place > 0
+        ? `YOU FINISHED ${ORDINAL[place] ?? place + 'th'} — ${pts}`
+        : `${pts}`
+  }
+
+  /**
+   * One frame of the podium: the clock, the skip and the auto-advance.
+   *
+   * The skip rule is game/podium.ts's, which is the finish ceremony's: a time
+   * guard AND an edge trigger. A player arrives here straight off the last
+   * corner of round 8 and may well still be holding the throttle -- a level
+   * test alone would end the celebration 0.7 s in, which is the bug the
+   * ceremony already fixed once.
+   *
+   * SAMPLED HERE, ONCE. During a race the sim loop calls sample() and the
+   * ceremony reads what it left in `lastInput`; there is no sim running in
+   * this phase, so a stale `lastInput` would be frozen at whatever was held
+   * crossing the line and the edge trigger would never see a release. So the
+   * podium does its own single call per frame, which is the contract sample()
+   * needs either way.
+   *
+   * THE SAME FOUR CONTROLS THE CEREMONY WATCHES, and throttle is deliberately
+   * not among them: with auto-accelerate on, throttle is held permanently, so
+   * including it would mean the skip never arms for exactly the players least
+   * able to do anything about it.
+   */
+  private stepPodium(dt: number): void {
+    this.podT += dt
+    const f = this.input.sample()
+    const held = f.item || f.drift || f.brake > 0.5 || f.lift
+    const r = podiumSkip(this.podT, held, this.podSkipArmed)
+    this.podSkipArmed = r.armed
+    const canSkip = this.podT >= PODIUM_SKIP_GUARD
+    if (canSkip !== this.podCard.canSkip) {
+      this.podCard.canSkip = canSkip
+      this.hud.setPodium(this.podCard)
+    }
+    if (r.skip || podiumDone(this.podT)) this.endPodium()
+  }
+
+  /** Drop the podium without advancing anywhere. For teardown paths only. */
+  private closePodium(): void {
+    if (this.podiumStage) { this.podiumStage.dispose(); this.podiumStage = null }
+    this.hud.setPodium(null)
+  }
+
+  /** Leave the podium for the results screen. Idempotent. */
+  private endPodium(): void {
+    if (this.phase !== 'podium') return
+    this.phase = 'results'
+    this.hud.setPodium(null)
+    this.hud.root.style.display = 'none'
+    if (this.podiumStage) { this.podiumStage.dispose(); this.podiumStage = null }
+    if (this.post) { this.post.dispose(); this.post = null }
+    this.audio.menuMusic(null)
+    this.showResultsScreen()
   }
 
   /**
@@ -1137,6 +1350,7 @@ export class Game {
       || (this.phase === 'attract' && !this.docHidden)) && this.race !== null
     if (this.phase === 'ceremony') this.cerT += rawDt
     if (this.phase === 'attract' && !this.docHidden) this.attractT += rawDt
+    if (this.phase === 'podium') this.stepPodium(rawDt)
 
     if (simming && this.race) {
       this.accumulator += rawDt
@@ -1257,6 +1471,26 @@ export class Game {
   }
 
   private renderFrame(dt: number): void {
+    // THE PODIUM DRAWS FIRST AND RETURNS. It has no racers and no track, so
+    // every line below it would either skip or dereference something that is
+    // not there -- and the interpolation block's guard (`renderRacers.length
+    // === racers.length`) happens to be false here for the wrong reason, which
+    // is exactly the kind of accidental correctness that breaks later.
+    if (this.phase === 'podium' && this.podiumStage) {
+      this.podiumStage.update(dt, this.podT, this.chase.camera)
+      if (this.post) {
+        this.blastBuf.length = 0
+        this.post.setBlasts(this.blastBuf)
+        // No boost, no hit, no speed, no warp: nothing here is a car. The
+        // bloom is the whole point of running the chain at all -- it is what
+        // turns a firework from a bright dot into a firework.
+        this.post.render(dt, 0, 0, 0, 0, this.reduceMotion)
+      } else {
+        this.renderer.render(this.scene, this.chase.camera)
+      }
+      return
+    }
+
     const alpha = this.race ? clamp01(this.accumulator / DT) : 1
 
     if (this.race && this.renderRacers.length === this.race.state.racers.length) {
@@ -1605,6 +1839,9 @@ export class Game {
     // so returning to the tab does not drop into a cinematic mid-shot.
     if (document.hidden && this.phase === 'racing') this.pause()
     else if (document.hidden && this.phase === 'ceremony') this.finishRace()
+    // Same rule for the podium, and for the same reason: there is nothing to
+    // pause, and coming back to the tab must not drop in mid-celebration.
+    else if (document.hidden && this.phase === 'podium') this.endPodium()
     // The title race has no pause menu to raise, so it is gated on this flag
     // instead: the loop stops stepping and stops advancing the shot's clock,
     // and picks both up where they left off. Read here rather than calling
@@ -1624,6 +1861,7 @@ export class Game {
     this.resizeObs = null
     document.removeEventListener('visibilitychange', this.onVisibility)
     this.audio.dispose()
+    this.closePodium()
     this.teardownWorld()
     disposeVehicleCache()
     this.cheer.dispose()
@@ -1640,6 +1878,11 @@ export class Game {
 
 // ---------------------------------------------------------------------------
 const TMP = new THREE.Vector3()
+
+/** Place words for the podium card. Eight entrants, so eight is the end. */
+const ORDINAL: readonly string[] = [
+  '', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th',
+]
 
 function copyView(v: RacerState, r: RacerState): void {
   v.id = r.id; v.chassisId = r.chassisId; v.pilotId = r.pilotId

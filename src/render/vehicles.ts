@@ -116,6 +116,15 @@ export interface VehicleVisualEx extends VehicleVisual {
   gravity: boolean
   /** Currently selected LOD index, 0..3. Read-only in practice. */
   readonly lodIndex: number
+  /**
+   * Empty the seat.
+   *
+   * For the podium, where the pilot is standing on the step rather than sitting
+   * in the car and the same head must not appear twice a metre apart. Hides the
+   * shell AND the face panel at every LOD, so a car parked at the bottom of a
+   * step is an empty car from any distance.
+   */
+  setPilotVisible(on: boolean): void
   /** Swap the procedural rig for a loaded model at any time (async GLB path).
    *  Pass null to restore the procedural rig. See setVehicleModelLoader. */
   attachModel(obj: THREE.Object3D | null): void
@@ -2163,6 +2172,9 @@ interface Temper { blink: number; jitter: number; emote: number; glitch: number 
  * they were holding. Scaling it by driftInward makes the car visibly stand
  * back up as the line is opened out.
  */
+/** One full turn, for the pilot figure's punctuating spin. */
+const TAU_FIG = Math.PI * 2
+
 const DRIFT_LEAN = 0.42
 const DRIFT_LEAN_FLOOR = 0.34
 /** Roll contributed by raw yaw rate, radians at the chassis's own yaw limit. */
@@ -2190,6 +2202,9 @@ class VehicleVisualImpl implements VehicleVisualEx {
   private readonly refBuild: LodBuild
   private modelRig: Rig | null = null
   private modelObj: THREE.Object3D | null = null
+  /** See setPilotVisible. Held so an authored model swapped in later inherits
+   *  it instead of quietly putting the driver back in the seat. */
+  private pilotShown = true
 
   private readonly loco: ChassisDef['locomotion']
   private readonly maxYaw: number
@@ -2284,6 +2299,7 @@ class VehicleVisualImpl implements VehicleVisualEx {
     if (obj) {
       this.modelRig = bindModelRig(obj, this.refBuild)
       this.modelObj = obj
+      if (this.modelRig.pilot) this.modelRig.pilot.visible = this.pilotShown
       this.tilt.add(this.modelRig.root)
       this.lod.visible = false
     } else {
@@ -2293,6 +2309,14 @@ class VehicleVisualImpl implements VehicleVisualEx {
 
   /** The authored model currently in use, if any. */
   get model(): THREE.Object3D | null { return this.modelObj }
+
+  setPilotVisible(on: boolean): void {
+    this.pilotShown = on
+    for (const rig of this.rigs) {
+      if (rig.pilot) rig.pilot.visible = on
+    }
+    if (this.modelRig?.pilot) this.modelRig.pilot.visible = on
+  }
 
   update(r: RacerState, dtRaw: number, cameraDistance: number): void {
     const dt = dtRaw > 0.05 ? 0.05 : dtRaw > 0 ? dtRaw : 0
@@ -2670,9 +2694,793 @@ export function createVehicleVisual(
   return v
 }
 
+// ---------------------------------------------------------------------------
+// THE PILOT, OUT OF THE CAR
+// ---------------------------------------------------------------------------
+
+/**
+ * A pilot standing on its own, for the podium.
+ *
+ * THE HEAD IS STILL THE ONE IN THE CAR. `addPilotShell` is untouched and is
+ * still exactly what every chassis seats -- the ball, the mount peg, the
+ * archetype's crest and the ear pods -- and the face is still `pilotFaceGeo`,
+ * one shader, the only thing on the figure carrying an expression. Nothing
+ * below is reachable from a chassis builder, and tests/clearance.test.ts still
+ * asserts that swapping a pilot never moves a chassis's lowest vertex.
+ *
+ * WHAT IS NEW IS EVERYTHING UNDER THE CHIN, and it exists because of a
+ * photograph. The first podium took the seated pilot, scaled it 2.6x and stood
+ * it on a step; `shots/podium/desktop-beat-wide.png` came back as three
+ * balloons hovering over three blocks. The motion underneath was already a real
+ * jump arc with a landing squash, a bob, a sway and a punctuated spin -- and
+ * none of it read, because a sphere that hops is a bouncing ball. There was
+ * nothing to dance WITH. So the figure gets a body: pelvis, waist, chest,
+ * shoulder caps, two arms with elbows, two legs with knees, and feet.
+ *
+ * THREE DRAW CALLS, NOT TWELVE.
+ *   1. `pilotStandingGeo` -- pelvis + waist + chest + collar + THE HEAD, merged
+ *      into one buffer. None of it articulates relative to anything else: the
+ *      torso is a single rigid node that leans, and a head leans with its
+ *      shoulders, which is what a head does.
+ *   2. `pilotFaceGeo` -- unchanged, parented to the torso at the ball.
+ *   3. `limbBarGeo` -- ONE segment, drawn ten times by an InstancedMesh. A
+ *      thigh, a shin, a foot, an upper arm and a forearm are the same buffer at
+ *      five different scales; the joint hierarchy exists only as matrices, so
+ *      ten articulated parts cost one call and no scene-graph nodes.
+ * All three are cached per (pilot, detail) exactly as the seated pilot is, so
+ * three figures of different pilots share nothing and three of the same share
+ * everything.
+ *
+ * THE ORIGIN IS THE SOLES. y = 0 on the returned `group` is the bottom of the
+ * feet in the rest pose, so a caller stands a figure on a surface by setting
+ * `group.position.y` to that surface and nothing else. The old figure's origin
+ * was the BALL CENTRE, which is why game/podium.ts carried a PILOT_LIFT fudge
+ * and why the figures still photographed with air under them. The hop still
+ * writes `group.position.y` -- it is the one channel that may, because `hop` is
+ * never negative. The BOB used to write it too and now drives the knees
+ * instead: a bob at the root would post the feet down through the step.
+ *
+ * MOTION: the same channels, plus what a celebration needs.
+ *   hop      a real ballistic arc on a period, because a jump that is a sine is
+ *            a bounce and reads as rubber. Preceded by a knee wind-up and
+ *            followed by a landing absorb, because a leap with neither is a
+ *            lift.
+ *   spin     a sway that PUNCTUATES into a full turn rather than a continuous
+ *            yaw. Measured off a photograph: a constant spin means the face --
+ *            the only thing carrying an emotion -- points away from the camera
+ *            for most of every shot, and the champion beat came back as a
+ *            portrait of the back of a bald sphere.
+ *   bob/sway now go through the body: the hips drop and roll, the shoulders
+ *            counter-roll, and one foot comes off the step. That is a dance
+ *            step; the same signal applied to a sphere was a wobble.
+ *   joy      changes WHAT THE BODY DOES, not only the face: how high it jumps,
+ *            how far the arms go up, how deep it lands.
+ *   energy   0 is reduced motion and freezes every one of the above to a still,
+ *            upright standing pose. Every animated term below is multiplied by
+ *            it; nothing is subtracted from a rest value.
+ *
+ * AND THE THREE STEPS DANCE DIFFERENTLY. `seed` is the step index, so DANCE[0]
+ * is always the champion. Three robots doing one dance 0.2 s apart is a chorus
+ * line; the brief asked for three robots each celebrating on their own account.
+ */
+export interface PilotFigure {
+  readonly group: THREE.Group
+  /**
+   * 0..1. Scales every animated channel together. 0 is a completely still
+   * figure -- standing upright on both feet -- that still blinks and still
+   * smiles: reduced motion asks for less movement, not for a character to be
+   * switched off.
+   */
+  energy: number
+  /** 0..1 how pleased it is. Drives the face AND the size of the dance. */
+  joy: number
+  update(dt: number): void
+  dispose(): void
+}
+
+/**
+ * The highest a figure's soles ever get above its own origin, in figure units.
+ *
+ * Exported because render/podium.ts needs it and the alternative is a copy: the
+ * card-clearance gate has to know where the champion's head is AT THE APEX OF
+ * ITS HOP, not at rest, and the hop is this file's business. Multiply by
+ * PILOT_SCALE for metres. It is the champion's number -- DANCE[0] at joy 1 --
+ * because the champion is the only figure any of that framing is about.
+ */
+export const PILOT_FIGURE_HOP = 0.56
+
+/** Standalone-figure geometry, shared between figures of the same pilot. */
+interface FigureGeo {
+  /** Torso + head, merged. */
+  upper: THREE.BufferGeometry
+  /** Face panel + rear repeater. */
+  face: THREE.BufferGeometry
+  /** One limb segment, instanced ten times. */
+  bar: THREE.BufferGeometry
+}
+const figureCache = new Map<string, FigureGeo>()
+
+/** Authored radius of a pilot ball, matching every chassis's seat. */
+const PILOT_R = 0.40
+
+/**
+ * THE FIGURE, IN UNITS OF THE BALL'S RADIUS.
+ *
+ * Everything scales off the head because the head is the one thing that may not
+ * change: it is the character, it is cut to fit five cockpits, and the podium
+ * draws it at 2.6x like everything else. So the body is expressed as multiples
+ * of r = 0.40 and the whole figure grows and shrinks with the ball.
+ *
+ * THE PROPORTION IS A MASCOT, NOT A PERSON, and it is measured off the
+ * photographs rather than off anatomy. The ball is 2 r across; the shoulders
+ * span 1.6 r including their caps, and the body from soles to chin is 1.38 r
+ * against that 2 r head. At 2.6x it is a 3.5 m figure -- 3.9 m on the pilots
+ * whose crest is a spire -- with a 2.1 m head, standing on a 3.4 m-wide step.
+ *
+ * A bobblehead, deliberately, because the face is a single emissive panel and
+ * it carries the ENTIRE performance: shrink the head to a realistic fraction of
+ * a seven-head figure and the face is 40 px from the wide beat, which is three
+ * anonymous silhouettes. The body only has to be big enough to dance with.
+ *
+ * TWO THINGS THE CONTACT SHEET CHANGED, both of which are worth keeping:
+ *   - the legs were 0.63 r and read as a figure SITTING, not standing, with two
+ *     boots and no leg between the pelvis and the floor;
+ *   - the chest was 1.36 r wide with the shoulders at 0.68, so the top third of
+ *     both arms was inside the ribcage and the figure had flippers.
+ *
+ * Y = 0 IS THE SOLES for everything with a `Y` in its name here, EXCEPT the
+ * torso block (shoulderY, ballY), which is authored in TORSO-LOCAL space with
+ * y = 0 on the hip line -- because the torso is the node that leans, and a
+ * lean has to pivot at the hips or the figure bends at the ankles.
+ */
+const FIG = {
+  /** Ankle pivot height. Exactly half the foot's thickness, so a flat foot
+   *  puts its sole on y = 0 and the soles-at-origin contract is arithmetic
+   *  rather than a fudge factor. */
+  ankleY: 0.08,
+  shin: 0.37,
+  thigh: 0.35,
+  /**
+   * Hip height at rest. The chain REACHES ankleY + thigh + shin = 0.80, so
+   * 0.76 is 4 cm of deliberate slack: it puts a 20-degree bend in the knee
+   * standing still. Locked-straight legs photographed as a mannequin on a
+   * stand, and there is nowhere to go from a locked knee but up.
+   *
+   * IT WAS 0.63 AND THE CONTACT SHEET KILLED IT. Short legs under a wide
+   * pelvis do not read as a figure standing; they read as a figure SITTING, and
+   * with a 0.48 r foot on the end of each one the whole lower half was two
+   * boots and no leg. A limb needs enough length for its own joint to be a
+   * visible event.
+   */
+  hipRest: 0.76,
+  /** Deepest the hips ever drop: a 47-degree knee, which is a squat. */
+  hipMin: 0.60,
+  hipX: 0.22,
+  footLen: 0.48,
+  /** How far behind the ankle the heel starts. A foot with no heel is a ski. */
+  footHeel: 0.15,
+  footW: 0.30,
+  footTh: 0.16,
+  /**
+   * Half the shoulder span. 0.68 puts the upper arm's own axis 0.68 r off the
+   * centre line against a 1.0 r head, so an arm raised to the side is OUTSIDE
+   * the head's silhouette instead of behind it. The first pass sat them at 0.56
+   * and the champion close-up -- taken, as close-ups are, at whatever instant
+   * the clock landed on -- caught the figure mid-spin with both arms edge-on
+   * and swallowed by the ball: a robot celebrating with no visible arms.
+   */
+  shoulderX: 0.68,
+  /** Torso-local, i.e. above the hip line. */
+  shoulderY: 0.50,
+  /**
+   * Arm bones. 0.72 r of arm against a 0.62 r torso, so a hanging hand reaches
+   * just above the knee -- long for a person and correct for a machine, and
+   * long enough that the ELBOW is somewhere rather than being the middle of a
+   * stub. The 0.32/0.30 first pass gave the figure flippers.
+   */
+  upperArm: 0.38,
+  foreArm: 0.34,
+  /**
+   * Ball centre above the hip line. The chest tops out at 0.62 and the collar
+   * at 0.68, so the ball (bottom at 0.62) sits straight down onto the collar
+   * with no neck showing -- which is how the pilot looks in a cockpit, where
+   * the rim IS the collar. A visible neck under a 2 r head reads as a lollipop.
+   *
+   * hipRest + ballY = 2.38, so the face lands 2.38 r x 0.40 x PILOT_SCALE =
+   * 2.48 m above the soles, against PODIUM_FACE_Y's authored 2.30 m. The
+   * difference is deliberately NOT chased from this end: render/podium.ts finds
+   * the `sg_face` node, measures it, and slides the face-aimed beats by however
+   * far out the authored guess was. The figure owes that file two honest
+   * numbers -- a face it can find and PILOT_FIGURE_HOP -- and owes it no
+   * particular height.
+   *
+   * Which matters, because a body under this head IS tall: the champion's head
+   * at the apex of its hop reaches 8.46 m, against 5.09 m for the bare ball
+   * this replaced. The standings card was directly on it at that height until
+   * the podium moved the card into the corner and started gating the overlap in
+   * pixels. Raising or lowering this number is free here and expensive there,
+   * so it is set by what reads and checked by that gate.
+   */
+  ballY: 1.62,
+} as const
+
+/**
+ * The podium figure's one static buffer: pelvis, waist, chest, collar AND the
+ * head, in torso-local space with y = 0 on the hip line.
+ *
+ * PODIUM ONLY. Nothing in the chassis path calls this; `addPilotShell` is what
+ * a seat gets and it gained nothing.
+ */
+function pilotStandingGeo(p: PilotDef, r: number, det: Det): THREE.BufferGeometry {
+  const P = new Parts()
+  const shell = new THREE.Color(p.shell)
+  const accent = new THREE.Color(p.accent)
+  // The chest is the shell pulled 22% toward the accent. Straight shell lost
+  // the entire torso on the dark pilots -- Koan's shell is 0x14121a and its
+  // body went missing against the step -- and straight accent turned every
+  // figure into a jumpsuit. 22% is where a Vanguard still reads as a Vanguard
+  // from the wide beat and a Koan still has a body.
+  const chest = shell.clone().lerp(accent, 0.22)
+  // Recesses one stop down, so the pelvis and the waist separate from the chest
+  // under a single key light instead of fusing into one block.
+  const deep = shell.clone().multiplyScalar(0.62)
+  const u = r
+
+  // PELVIS -- wider than the waist above it, so the hip joints have something
+  // to hang from and the figure has a back to spin away to.
+  P.box(deep, 0, 0.62 * u, 0.30 * u, 0.46 * u, 0, 0.02 * u, 0)
+  // The hip sockets themselves, in accent: they are what makes a thigh read as
+  // ATTACHED rather than as a bar floating under a box.
+  P.boxPair(accent, 0.30, 0.17 * u, 0.20 * u, 0.26 * u, FIG.hipX * u, 0, 0)
+  // WAIST -- a narrow machined column. The pinch between hips and chest is most
+  // of what says "mechanical" at this distance; a straight-sided torso is a bin.
+  P.box(deep, 0, 0.44 * u, 0.24 * u, 0.34 * u, 0, 0.26 * u, 0)
+  // CHEST -- tapered UP (topX) so the shoulder caps sit proud of the ribs.
+  // 1.10 WIDE, NOT 1.36. The shoulder joints sit at +/-0.68 and an upper arm
+  // is 0.265 across, so its inner face is at 0.547: a chest any wider than
+  // 1.10 swallows the top of both arms and the figure photographs with
+  // flippers welded to its ribs. Measured off the contact sheet.
+  P.box(chest, 0, 1.10 * u, 0.36 * u, 0.60 * u, 0, 0.44 * u, 0, 0, 0, 0,
+    { topX: 0.92, frontY: 0.94 })
+  // Shoulder caps: the sockets the arms swing from.
+  P.boxPair(accent, 0.25, 0.24 * u, 0.30 * u, 0.34 * u,
+    FIG.shoulderX * u, FIG.shoulderY * u, 0)
+  // COLLAR -- the plinth the ball drops onto.
+  P.box(deep, 0, 0.66 * u, 0.09 * u, 0.48 * u, 0, 0.635 * u, 0)
+  if (det.d <= 0) {
+    // A lit chest badge and a back pack. These two are the only things that say
+    // which way a figure is facing during the half-second its head is turned
+    // away mid-spin, and the badge is the only emissive below the face.
+    P.box(accent, 0.45, 0.34 * u, 0.13 * u, 0.06 * u, 0, 0.46 * u, 0.31 * u)
+    P.box(deep, 0, 0.50 * u, 0.28 * u, 0.14 * u, 0, 0.42 * u, -0.34 * u)
+  }
+  // ...and the head, byte for byte the one in the car, sitting on the collar.
+  addPilotShell(P, p, r, det, 0, FIG.ballY * u, 0)
+  return P.merge()
+}
+
+/**
+ * ONE LIMB SEGMENT, DRAWN TEN TIMES.
+ *
+ * Authored as a UNIT: hub at y = 0, tip at y = -1, cross-section 1 x 1. So an
+ * instance's scale is literally (width, length, depth), and a thigh, a shin, an
+ * upper arm, a forearm and a foot are all this buffer at different scales --
+ * which is the whole reason an articulated figure costs three draw calls
+ * instead of twelve. A foot is the same bar laid on its side by a quarter turn
+ * about X and squashed to 0.16 of its depth.
+ *
+ * Non-uniform instance scale is safe: three.js divides the instance normal by
+ * its own column lengths before rotating it, so the squashed foot still lights
+ * like a slab rather than like a bar pretending to be one.
+ */
+function limbBarGeo(p: PilotDef, det: Det): THREE.BufferGeometry {
+  const P = new Parts()
+  const shell = new THREE.Color(p.shell)
+  const accent = new THREE.Color(p.accent)
+  // The accent band at the joint end is what turns a bar into a LIMB. Without
+  // it the first pass photographed as four chair legs and two broom handles.
+  //
+  // BARELY EMISSIVE (0.12, not the 0.40 it started at) and narrower than the
+  // shaft it sits on. At 0.40 the five bands on a gold pilot each blew past the
+  // bloom threshold and the champion close-up photographed as a pile of lit
+  // debris under a ball: every joint was brighter than the limb it joined, so
+  // the eye read five separate objects instead of one leg.
+  //
+  // ITS CROSS-SECTION IS THE UNIT. The collar is the widest thing on the bar at
+  // exactly 1 x 1, so an instance scaled by (w, len, d) really is w wide and d
+  // deep -- which is what makes the foot's sole land on y = 0 from arithmetic
+  // (ankleY == footTh / 2) instead of from a fitted offset. Narrowing it to
+  // 0.94 during a mass pass floated every figure 5 mm off its step and the
+  // contract gate in render/podium.ts caught it immediately, which is the
+  // entire point of that gate.
+  P.box(accent, 0.12, 1.00, 0.15, 1.00, 0, -0.03, 0)
+  if (det.d <= 0) {
+    // Two stacked blocks with a step between them: a machined limb, and the
+    // step is what catches the rim light and gives the segment an edge.
+    P.box(shell, 0, 0.88, 0.60, 0.88, 0, -0.36, 0)
+    P.box(shell, 0, 0.72, 0.44, 0.72, 0, -0.79, 0)
+  } else {
+    P.box(shell, 0, 0.84, 0.96, 0.84, 0, -0.52, 0)
+  }
+  return P.merge()
+}
+
+/**
+ * ONE STEP'S CHOREOGRAPHY.
+ *
+ * Indexed by the step, so DANCE[0] is always the champion. These are not phase
+ * offsets -- the figures differ in tempo, in hop height, in which way they turn
+ * and, in the arm code below, in what their arms are actually DOING.
+ */
+interface Dance {
+  /** Multiplier on the hop height. */
+  hop: number
+  /** Multiplier on the seconds between hops: above 1 is a slower dance. */
+  period: number
+  /** How many hops go by between punctuating spins. A WHOLE NUMBER: see the
+   *  spin block in update() for why it has to be. */
+  spinEvery: number
+  /** Which way that spin goes. */
+  dir: 1 | -1
+  /** Radians per second of the arm/knee pulse between hops. */
+  beat: number
+  /** Multiplier on how deep the knees go. */
+  crouch: number
+  /** How far the resting foot comes off the step on the weight shift, in r. */
+  lift: number
+  /** Multiplier on the hip twist. */
+  twist: number
+}
+const DANCE: readonly Dance[] = [
+  // 0 -- CHAMPION. Both fists overhead on every hop, the deepest landing, the
+  //      biggest leap, and it comes round for a full turn more often than
+  //      either of the others. The top step should look like the top step from
+  //      across the arena with the sound off.
+  { hop: 1.00, period: 1.00, spinEvery: 2, dir: 1, beat: 2.7, crouch: 1.00, lift: 0.045, twist: 0.8 },
+  // 1 -- RUNNER-UP. A WAVE, not a jump: the right arm stays up beside the head
+  //      and does its work at the elbow, the left counterweights a side-step,
+  //      and the hop is barely half. It turns the OTHER way, which is what
+  //      stops the two nearest figures reading as one mirrored pair.
+  { hop: 0.58, period: 1.24, spinEvery: 3, dir: -1, beat: 1.8, crouch: 0.70, lift: 0.090, twist: 1.5 },
+  // 2 -- THIRD. A MARCH. Quick shallow bounces, arms alternating up and down on
+  //      the beat with the elbows locked at the boxy right angle that reads as
+  //      ROBOT, and the knees lifting in time. Spins least: this one is having
+  //      a good time on its own and is not playing to the camera.
+  { hop: 0.50, period: 0.72, spinEvery: 4, dir: 1, beat: 3.6, crouch: 0.58, lift: 0.115, twist: 0.5 },
+]
+
+/**
+ * Instance slots in the limb mesh: right leg, left leg, right arm, left arm,
+ * each hub-first, so a dump of the matrices reads down the body.
+ */
+const LIMB_COUNT = 10
+const LIMB_LEG = 0    // + 3*side + (0 thigh | 1 shin | 2 foot)
+const LIMB_ARM = 6    // + 2*side + (0 upper | 1 fore)
+
+const HALF_PI = Math.PI * 0.5
+
+/** Scratch for the per-frame joint chain. update() allocates nothing. */
+const _jm = [new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4()]
+const _jq = new THREE.Quaternion()
+const _je = new THREE.Euler()
+const _jv = new THREE.Vector3()
+const _j1 = new THREE.Vector3(1, 1, 1)
+const _jsc = new THREE.Vector3()
+const _jms = new THREE.Matrix4()
+
+/**
+ * Compose one joint into `out`: a translation and an XYZ euler, no scale.
+ *
+ * XYZ ORDER ON PURPOSE. The shoulder uses Z for the raise (out and over the
+ * head) and X for the swing (fore and aft), and three.js applies an XYZ euler
+ * as Rx * Ry * Rz -- so Z hits the vector FIRST. The arm is raised, then swung
+ * about the world-ish X, which is the order a shoulder works in. ZYX swings
+ * first and then raises the swing, which folds the arm across the chest.
+ */
+function joint(
+  out: THREE.Matrix4, x: number, y: number, z: number, rx: number, ry: number, rz: number,
+): THREE.Matrix4 {
+  _je.set(rx, ry, rz, 'XYZ')
+  _jq.setFromEuler(_je)
+  _jv.set(x, y, z)
+  return out.compose(_jv, _jq, _j1)
+}
+
+/**
+ * Stance solve for one leg, written into `_ikA` (how far the thigh tips
+ * forward from vertical) and `_ikB` (how far the shin tips back).
+ *
+ * TAKES THE TARGET, NOT THE ANGLE. Driving the knee angle directly and letting
+ * the foot go where it likes is one line shorter and photographs as skating:
+ * the hips move on every dance step, and a foot that follows them slides across
+ * the step it is supposed to be standing on. So the ankle height is the input
+ * and the two angles come out of the cosine rule, which is what keeps a foot
+ * planted while the weight shifts over it -- and what makes a raised foot a
+ * deliberate step rather than a leg that got longer.
+ *
+ * Note how little vertical travel a leg has: at rest the hips are 0.55 above
+ * the ankle on a 0.586 chain, and dropping them 0.14 -- under 4 cm at podium
+ * scale -- takes the knee from 21 to 47 degrees. The KNEE is what the eye
+ * reads, so the numbers here look tiny and the pose does not.
+ */
+let _ikA = 0
+let _ikB = 0
+function solveLeg(span: number): void {
+  const a = FIG.thigh
+  const b = FIG.shin
+  const reach = a + b
+  // Never let the chain lock or invert: a straight leg divides by zero in the
+  // cosine rule and a hyper-extended one flips the knee backwards.
+  const s = span < 0.30 ? 0.30 : span > reach - 0.004 ? reach - 0.004 : span
+  _ikA = Math.acos(clamp((a * a + s * s - b * b) / (2 * a * s), -1, 1))
+  _ikB = Math.asin(clamp((a / b) * Math.sin(_ikA), -1, 1))
+}
+
+class PilotFigureImpl implements PilotFigure {
+  readonly group = new THREE.Group()
+  energy = 1
+  joy = 1
+
+  /** Yaw spin + the side-to-side rock. Pivots at the soles, not at the waist. */
+  private readonly spinner = new THREE.Group()
+  /** Hips up. Carries the torso mesh, the face and every joint's parent frame. */
+  private readonly torso = new THREE.Group()
+  private readonly limbs: THREE.InstancedMesh
+  private readonly body: SgBodyMaterial
+  private readonly face: SgFaceMaterial
+  private readonly temper: Temper
+  private readonly dance: Dance
+  private readonly style: number
+  private readonly phase: number
+  private readonly rate: number
+  private t = 0
+  private blinkTimer = 0.6
+  private blinkAnim = 0
+  private emote = 0
+
+  constructor(p: PilotDef, quality: RenderQuality, seed: number) {
+    // LOD 0 up close, LOD 1 on the cheapest tier: the crest and the ear pods
+    // survive both (they are gated at d <= 1), and d 1 is where the ball and
+    // the tori drop their segment counts -- and where the body drops its badge,
+    // its back pack and the step in every limb segment.
+    const d: 0 | 1 = quality.tier === 'low' ? 1 : 0
+    const key = `${p.id}|${d}`
+    let geo = figureCache.get(key)
+    if (!geo) {
+      geo = {
+        upper: pilotStandingGeo(p, PILOT_R, DETAIL[d]),
+        face: pilotFaceGeo(PILOT_R, DETAIL[d]),
+        bar: limbBarGeo(p, DETAIL[d]),
+      }
+      figureCache.set(key, geo)
+    }
+
+    const accent = new THREE.Color(p.accent)
+    const rim = accent.clone().lerp(new THREE.Color(0xffffff), 0.45)
+    this.body = makeBodyMaterial({
+      roughness: 0.48, metalness: 0.10, rim: 0.70, rimPower: 3.2, rimColor: rim.getHex(),
+    })
+    this.face = makeFaceMaterial(p.face, TEMPER[p.temperament].glitch)
+    this.temper = TEMPER[p.temperament]
+    this.style = ((seed % DANCE.length) + DANCE.length) % DANCE.length
+    this.dance = DANCE[this.style]
+    this.phase = seed * 1.7
+    // Every figure dances at its own tempo. Three robots on one beat looks
+    // choreographed, which is a different (and much colder) idea than three
+    // robots each delighted on their own account.
+    this.rate = 1 + (seed % 3) * 0.13
+
+    const upper = new THREE.Mesh(geo.upper, this.body)
+    upper.castShadow = quality.shadows
+    upper.name = RIG_NODES.pilot
+    const facePanel = new THREE.Mesh(geo.face, this.face)
+    facePanel.name = RIG_NODES.face
+    facePanel.renderOrder = 4
+    facePanel.position.y = FIG.ballY * PILOT_R
+    this.torso.add(upper)
+    this.torso.add(facePanel)
+    this.torso.position.y = FIG.hipRest * PILOT_R
+
+    this.limbs = inst(geo.bar, this.body, LIMB_COUNT, 'sg_limbs')
+    this.limbs.castShadow = quality.shadows
+
+    this.spinner.add(this.torso)
+    this.spinner.add(this.limbs)
+    this.group.add(this.spinner)
+    // Stand it up before the first rendered frame. The podium cuts to the
+    // reveal on the same frame it builds the scene, so a figure that only got
+    // its pose on the second update() would be photographed as a pile of bars
+    // at the origin.
+    this.update(0)
+  }
+
+  update(dt: number): void {
+    const step = dt > 0.05 ? 0.05 : dt > 0 ? dt : 0
+    this.t += step
+    const t = this.t
+    const e = this.energy < 0 ? 0 : this.energy > 1 ? 1 : this.energy
+    const joy = this.joy < 0 ? 0 : this.joy > 1 ? 1 : this.joy
+    const D = this.dance
+    const u = PILOT_R
+
+    // ---- jump ------------------------------------------------------------
+    // A real arc: the figure is in the air for the first JUMP_AIR of each
+    // period and flat on the step for the rest, so there is a beat of
+    // anticipation between hops instead of a continuous bounce.
+    const period = 2.35 * this.rate * D.period
+    const JUMP_AIR = 0.62
+    const cyc = (t + this.phase) % period
+    const jp = cyc / JUMP_AIR
+    const hop = jp < 1 ? 4 * jp * (1 - jp) : 0
+    // WIND-UP. The last 0.26 s before the next take-off, dipping the knees. A
+    // leap with no wind-up reads as a lift, and the knees are the only part of
+    // this figure that can show one.
+    const WIND = 0.26
+    const wind = cyc > period - WIND ? (cyc - (period - WIND)) / WIND : 0
+    // Squash on the landing frames only: a figure that squashed all the time
+    // would read as breathing, and this is meant to read as a landing.
+    const squash = jp > 1 && jp < 1.22 ? (1.22 - jp) / 0.22 : 0
+
+    // ---- pulses ----------------------------------------------------------
+    const bob = Math.sin(t * 3.1 * this.rate + this.phase)
+    const sway = Math.sin(t * 1.55 * this.rate + this.phase * 1.3)
+    const beat = Math.sin(t * D.beat * this.rate + this.phase * 2.1)
+
+    // ---- spin ------------------------------------------------------------
+    // Rest facing front, sway around it, and punctuate with a FULL turn that
+    // lands back where it started, eased so it accelerates out of the sway and
+    // decelerates back into it.
+    //
+    // THE SPIN RIDES THE HOP'S OWN CLOCK, and that is the single most important
+    // number in this function. The two used to run on unrelated periods (2.35 s
+    // and 4.6 s) and drifted in and out of phase, so every so often the figure
+    // was at the apex of a jump AND side-on mid-turn at the same instant. The
+    // champion beat is a close-up that lands wherever the clock lands, and it
+    // landed there: a ball with an edge-on torso under it, both arms pointing
+    // at and away from the lens, no readable pose at all.
+    //
+    // So the spin period is a WHOLE NUMBER of hops, and the turn is placed as a
+    // FRACTION of one hop -- 0.38 to 0.68 through the cycle, which is inside
+    // the grounded stretch (the figure is airborne for the first 0.62 s of
+    // every period) for all three tempos. The figure jumps facing you, lands
+    // facing you, and turns on its feet in between.
+    const spinPeriod = period * D.spinEvery
+    const TURN_AT = 0.38
+    const TURN_FOR = 0.30
+    const sp = (((t + this.phase) % spinPeriod) / period - TURN_AT) / TURN_FOR
+    const turn = sp <= 0 ? 0 : sp >= 1 ? 1 : sp * sp * sp * (sp * (sp * 6 - 15) + 10)
+    // 0 at rest, 1 at the middle of the turn. This is what throws the arms out.
+    const whirl = sp > 0 && sp < 1 ? Math.sin(Math.PI * sp) : 0
+    const yawSway = Math.sin(t * 1.15 * this.rate + this.phase) * 0.30
+
+    // ---- root ------------------------------------------------------------
+    // ONLY the hop writes group.y, and `hop` is never negative -- which is what
+    // makes "y = 0 is the soles" a contract a caller can place against rather
+    // than an approximation. The bob used to live here; at this origin a
+    // negative bob posts the feet down through the step.
+    // (0.30 + 0.26 joy) tops out at PILOT_FIGURE_HOP for a champion at full
+    // joy, which is what render/podium.ts measures the card clearance against.
+    this.group.position.y = hop * (PILOT_FIGURE_HOP - 0.26 + 0.26 * joy) * D.hop * e
+    // The squash now works from the FEET UP, because the origin moved to the
+    // soles. It used to squash about the ball centre, which drove the head into
+    // the step on every landing. Most of the absorb is in the knees below, so
+    // this is half what it was: two absorbs stacked read as jelly.
+    const sq = 1 - squash * 0.08 * e
+    this.group.scale.set(1 + squash * 0.055 * e, sq, 1 + squash * 0.055 * e)
+
+    this.spinner.rotation.y = (turn * TAU_FIG * D.dir + yawSway) * e
+    // The rock. A fifth of what the sphere used to get: this pivots at the
+    // soles now, so 0.20 rad swung a 3.9 m figure like a bowling pin.
+    this.spinner.rotation.z = sway * 0.055 * e
+
+    // ---- hips and knees --------------------------------------------------
+    const crouch = clamp(
+      (0.14 * (0.5 - 0.5 * bob) + 0.80 * squash + 0.66 * wind) * D.crouch, 0, 1,
+    ) * (0.55 + 0.45 * joy) * e
+    const hipH = FIG.hipRest - crouch * (FIG.hipRest - FIG.hipMin)
+    // In the air the knees come up. Added AFTER the stance solve, because the
+    // feet are off the step and there is nothing left to plant them on.
+    //
+    // SMALL. The first pass tucked 0.90 rad and the champion beat -- which is a
+    // close-up and lands wherever in the cycle it lands -- photographed as a
+    // giant head with a cannonball under it: the legs folded up behind the
+    // torso and stopped being legs. A jump reads from the LEGS STILL BEING
+    // LEGS, trailing slightly bent, not from how small the figure can get.
+    const tuck = hop * (0.24 + 0.18 * joy) * e
+    // THE WEIGHT SHIFT. The hips roll one way and the foot on that side comes
+    // off the step: that is a dance step. Same signal the rock uses, so the two
+    // can never disagree and leave the figure leaning onto a lifted foot.
+    const stepPhase = this.style === 2 ? beat : sway
+    const liftR = (stepPhase > 0 ? stepPhase : 0) * D.lift * e
+    const liftL = (stepPhase < 0 ? -stepPhase : 0) * D.lift * e
+
+    this.torso.position.y = hipH * u
+    // Hips against the shoulders: the pelvis rolls INTO the rock and the chest
+    // counter-rolls out of it, which is the difference between a dancer and a
+    // metronome. Small on purpose -- the hip sockets are only 0.21 r out, so
+    // even 0.09 rad moves a planted foot less than 2 cm at podium scale.
+    this.torso.rotation.z = (-sway * 0.09 - whirl * 0.05) * e
+    this.torso.rotation.y = (sway * 0.13 * D.twist) * e
+    // Fold forward into the landing, arch back off the top of the hop.
+    this.torso.rotation.x = (0.30 * squash + 0.18 * wind - 0.12 * hop) * e
+    this.torso.updateMatrix()
+    const T = this.torso.matrix
+
+    for (let i = 0; i < 2; i++) {
+      const sx = i === 0 ? 1 : -1
+      const lift = i === 0 ? liftR : liftL
+      solveLeg(hipH - (FIG.ankleY + lift))
+      // A positive X rotation tips a bone's -Y toward -Z, so forward is
+      // NEGATIVE: the thigh tips forward by -alpha, the knee folds back by
+      // alpha + beta, and the ankle takes off the shin's remaining beta so the
+      // sole stays parallel to the step whatever the knee is doing.
+      // SCISSORED, not tucked symmetrically: one thigh drives forward and the
+      // other trails. Two legs folding identically under a big head is a
+      // cannonball from every angle, and the champion beat is a close-up that
+      // lands wherever the clock lands. A leap reads from the SPLIT.
+      const hipR = -_ikA - tuck * 0.55 - sx * tuck * 0.85
+      const kneeR = _ikA + _ikB + tuck * 1.15
+      const ankleR = -_ikB - tuck * 0.30
+      const s3 = LIMB_LEG + i * 3
+
+      joint(_jm[0], sx * FIG.hipX * u, 0, 0, hipR, 0, 0).premultiply(T)
+      this.setLimb(s3 + 0, _jm[0], 0.335 * u, FIG.thigh * u, 0.335 * u)
+      joint(_jm[1], 0, -FIG.thigh * u, 0, kneeR, 0, 0).premultiply(_jm[0])
+      this.setLimb(s3 + 1, _jm[1], 0.295 * u, FIG.shin * u, 0.295 * u)
+      joint(_jm[2], 0, -FIG.shin * u, 0, ankleR, 0, 0).premultiply(_jm[1])
+      // The foot is the same bar laid forward by a quarter turn about X, with
+      // its hub a heel's length behind the ankle. The ankle pivot is exactly
+      // half the slab's thickness up, so a flat foot's sole lands on y = 0.
+      joint(_jm[3], 0, 0, -FIG.footHeel * u, -HALF_PI, 0, 0).premultiply(_jm[2])
+      this.setLimb(s3 + 2, _jm[3], FIG.footW * u, FIG.footLen * u, FIG.footTh * u)
+    }
+
+    // ---- arms ------------------------------------------------------------
+    // Index 0 is the RIGHT arm (+X). `raise` swings it out and over about Z:
+    // 0 hangs, ~1.57 is straight out sideways, ~2.4 is overhead. Every animated
+    // term carries a factor of `e`, so energy 0 leaves the rest pose exactly --
+    // a still figure standing upright, never a T-pose and never a frozen hop.
+    for (let i = 0; i < 2; i++) {
+      const sx = i === 0 ? 1 : -1
+      let raise: number
+      let bend: number
+      let swing: number
+      if (this.style === 0) {
+        // CHAMPION -- a double fist pump, swinging between 64 and 117 degrees
+        // and straightening at the top of every punch.
+        //
+        // THE HOP IS THE LOUDEST TERM, and it caps at 2.16 rad. Shoulders at
+        // 0.68 r with 0.72 r of arm put the fist at 1.27 r from the centre
+        // line there, clear of the 1.0 r head; at the 2.58 the first pass
+        // reached, with shoulders still at 0.56, the fist landed INSIDE the
+        // ball and the champion beat came back with no visible arms at all.
+        // Between hops they rest at 1.00 rad -- down and out, loading.
+        raise = 0.40 + (0.60 + 0.90 * hop + 0.26 * beat) * joy * e
+        bend = 0.50 + (-0.34 * hop + 0.14 * beat) * e
+        // ...and slightly forward of the shoulder line, so the V reads from the
+        // front rather than edge-on.
+        swing = (-0.10 - 0.16 * hop) * e
+      } else if (this.style === 1) {
+        // RUNNER-UP -- a WAVE. The right arm is up beside the head at rest and
+        // does all of its work at the elbow, which is what a wave is; the left
+        // stays low and out, counterweighting the side-step.
+        const wv = Math.sin(t * 6.1 * this.rate + this.phase)
+        if (i === 0) {
+          raise = 1.85 + (0.30 + 0.16 * hop) * joy * e
+          bend = 0.62 + 0.54 * wv * e
+          swing = (-0.22 - 0.16 * wv) * e
+        } else {
+          raise = 0.34 + (0.52 + 0.34 * hop + 0.22 * sway) * joy * e
+          bend = 0.45 + 0.28 * hop * e
+          swing = 0.12 * sway * e
+        }
+      } else {
+        // THIRD -- a MARCH. One arm up while the other is down, swapped on the
+        // beat, elbows held near the right angle that reads as ROBOT rather
+        // than as a person waving two flags.
+        const up = 0.5 + 0.5 * (i === 0 ? beat : -beat)
+        raise = 0.30 + (0.22 + 1.34 * up) * joy * e
+        bend = 0.85 + (0.22 - 0.52 * up) * e
+        swing = (0.30 - 0.60 * up) * e
+      }
+      // The spin throws them wide: a skater, not a soldier. Blended on top of
+      // whatever the style was doing, so a wave still waves as it comes round.
+      //
+      // AND IT SPLITS THEM FORE AND AFT. Two arms straight out to the sides are
+      // two arms edge-on to the lens for half of every turn, and edge-on to a
+      // 40-degree close-up is invisible. One forward and one back means
+      // whichever way the figure is pointing, an arm is across the frame.
+      // 1.80 rather than 1.57, elbows kept at 0.42 rather than locked out, and
+      // a hard fore/aft split: straight, level, symmetrical arms during the
+      // turn photographed as a T-POSE, which is the one shape a rigged figure
+      // must never be caught in. Above horizontal with bent elbows and one arm
+      // leading is a spin.
+      raise += (1.80 - raise) * whirl * 0.70 * e
+      bend += (0.42 - bend) * whirl * 0.70 * e
+      swing += sx * whirl * 0.75 * e
+
+      const s2 = LIMB_ARM + i * 2
+      joint(_jm[0], sx * FIG.shoulderX * u, FIG.shoulderY * u, 0, swing, 0, sx * raise)
+        .premultiply(T)
+      this.setLimb(s2 + 0, _jm[0], 0.265 * u, FIG.upperArm * u, 0.265 * u)
+      joint(_jm[1], 0, -FIG.upperArm * u, 0, -bend, 0, 0).premultiply(_jm[0])
+      this.setLimb(s2 + 1, _jm[1], 0.235 * u, FIG.foreArm * u, 0.235 * u)
+    }
+    this.limbs.instanceMatrix.needsUpdate = true
+
+    // ---- face ------------------------------------------------------------
+    const fm = this.face.sg
+    fm.uTime.value = t
+    if (this.temper.blink > 0) {
+      this.blinkTimer -= step
+      if (this.blinkTimer <= 0) {
+        // Same deterministic jitter the in-car pilot uses, so two probe runs
+        // photograph the same blink.
+        this.blinkTimer = this.temper.blink * (1.05 + Math.sin(t * 12.9898 + this.phase) * 0.45)
+        this.blinkAnim = 1
+      }
+      if (this.blinkAnim > 0) this.blinkAnim = Math.max(0, this.blinkAnim - step * 7.5)
+      fm.uBlink.value = Math.sin(Math.PI * this.blinkAnim)
+    }
+    // Delight, on top of whatever this temperament's resting face is, so a
+    // gruff pilot on the top step still reads as a gruff pilot having a good
+    // day rather than as a different character.
+    const target = clamp(this.temper.emote + this.joy * 1.25, -1, 1)
+    this.emote = approach(this.emote, target, 0.18, step)
+    fm.uEmote.value = this.emote
+    // A pulse on the beat of the hop: the face is the only light source this
+    // figure has, so brightening it on the landing is the cheapest way to
+    // make the dance land.
+    fm.uGain.value = 1 + 0.55 * hop * e + 0.25 * this.joy
+  }
+
+  /** Write one limb segment's instance matrix: a joint frame times the scale
+   *  that turns the unit bar into that particular bone. */
+  private setLimb(
+    i: number, m: THREE.Matrix4, sx: number, sy: number, sz: number,
+  ): void {
+    // Into a SEPARATE scratch, never into `m`: `m` is still the parent frame
+    // that the next joint down premultiplies against, and Matrix4.scale()
+    // mutates in place. Scaling it here put the thigh's width into the shin's
+    // position, which photographed as a leg exploding sideways on the landing.
+    _jsc.set(sx, sy, sz)
+    this.limbs.setMatrixAt(i, _jms.copy(m).scale(_jsc))
+  }
+
+  dispose(): void {
+    this.torso.clear()
+    this.spinner.clear()
+    this.group.clear()
+    this.limbs.dispose()
+    this.body.dispose()
+    this.face.dispose()
+  }
+}
+
+/**
+ * One pilot, standing up and celebrating.
+ *
+ * The returned group's y = 0 IS THE BOTTOM OF ITS FEET: place it by setting
+ * `group.position.y` to the surface it is standing on.
+ *
+ * `seed` picks the choreography AND de-syncs it; pass the step index, so the
+ * champion always gets DANCE[0].
+ */
+export function createPilotFigure(
+  pilotId: string, quality: RenderQuality, seed = 0,
+): PilotFigure {
+  return new PilotFigureImpl(pilotDef(pilotId), quality, seed)
+}
+
 /** Free every shared geometry. Call on scene teardown, after the individual
  *  VehicleVisuals have been disposed. */
 export function disposeVehicleCache(): void {
+  for (const f of figureCache.values()) {
+    f.upper.dispose()
+    f.face.dispose()
+    f.bar.dispose()
+  }
+  figureCache.clear()
   for (const b of buildCache.values()) {
     b.body.dispose()
     b.wheels?.geo.dispose()

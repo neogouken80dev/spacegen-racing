@@ -44,10 +44,73 @@ export interface FinishInfo {
   canSkip: boolean
 }
 
+/**
+ * WHICH ROUND OF THE CIRCUIT THIS IS.
+ *
+ * `null` in single-race mode, which is the whole of "a one-off race is
+ * unaffected": there is no round, so there is no card, and the countdown looks
+ * exactly as it always has.
+ */
+export interface RoundInfo {
+  /** 1-based. */
+  round: number
+  total: number
+  /** The circuit's display name, e.g. "Elkarim". */
+  trackName: string
+}
+
+/** One line of the podium card: a place, who took it and what they drove. */
+export interface PodiumLine {
+  place: number
+  pilot: string
+  chassis: string
+  points: number
+  isLocal: boolean
+}
+
+/** What the HUD needs to draw over the podium. `null` puts it away. */
+export interface PodiumInfo {
+  lines: PodiumLine[]
+  /**
+   * The line naming where the PLAYER finished. Always present, including when
+   * they are on the podium -- losing has to look like something, and the
+   * player has to be able to find themselves either way.
+   */
+  you: string
+  /** The top two cannot be separated; say so rather than crowning one. */
+  tied: boolean
+  canSkip: boolean
+}
+
 export interface Hud {
   root: HTMLElement
   update(state: RaceState, localId: number, track: Track, fps: number): void
   showCountdown(n: number | string): void
+  /**
+   * Name the round at the start of a circuit race. Set before the countdown;
+   * the card holds through it and fades once the lights go out. `null` is
+   * single-race mode and draws nothing at all.
+   */
+  setRound(info: RoundInfo | null): void
+  /**
+   * Enter or leave the championship podium. Hides every racing instrument the
+   * same way the finish card does -- there is no race under this one at all --
+   * and puts up the three names, the three cars and the player's own result.
+   */
+  setPodium(info: PodiumInfo | null): void
+  /** The podium's own skip control. Separate from `skipButton` because the two
+   *  leave different phases and wiring one button to both is how a skip ends
+   *  up firing in the wrong one. */
+  readonly podiumSkipButton: HTMLButtonElement
+  /**
+   * The PLAYER's reduced-motion choice, which is not the media query.
+   *
+   * Same push the cheer layer and the score HUD already take, and it exists for
+   * the same reason: a player can turn the in-game toggle on with the OS
+   * preference off, and this sheet's `@media` rules cannot see that. One
+   * toggle, every consumer.
+   */
+  setReducedMotion(on: boolean): void
   /**
    * Enter or leave the finish ceremony. While it is set the driving
    * instruments are hidden — speed, drift ring, items, charge, lift and the
@@ -98,6 +161,16 @@ const TIER_COLOR = ['#3d8bff', '#b44dff', '#ffd23f', '#ffffff']
  * the most recent laps.
  */
 const SPLIT_ROWS = 4
+
+/**
+ * Seconds the round card takes to fade once the race is live.
+ *
+ * Long enough to read on the way past and short enough to be gone before the
+ * first corner: the shortest run to turn 1 on the roster is a little over two
+ * seconds, and a caption still on screen there is a caption over the racing
+ * line, which is the failure cheer.ts's header spends a paragraph on.
+ */
+const ROUND_FADE = 1.4
 
 const RING_R = 52
 const RING_C = 2 * Math.PI * RING_R
@@ -434,6 +507,21 @@ class HudImpl implements Hud {
   private lastFinField = -2
   private lastCanSkip: boolean | null = null
 
+  // the round card, and the podium
+  private readonly roundEl: HTMLElement
+  private readonly roundNum: HTMLElement
+  private readonly roundName: HTMLElement
+  private round: RoundInfo | null = null
+  private roundT = 0
+  private readonly podWrap: HTMLElement
+  private readonly podRows: HTMLElement
+  private readonly podYou: HTMLElement
+  private readonly podTied: HTMLElement
+  readonly podiumSkipButton: HTMLButtonElement
+  private podOn = false
+  private podKey = ''
+  private lastPodSkip: boolean | null = null
+
   // centre
   private readonly countEl: HTMLElement
   private readonly bannerEl: HTMLElement
@@ -680,6 +768,17 @@ class HudImpl implements Hud {
     this.spinTxt.textContent = 'SPUN OUT'
     this.spinEl.hidden = true
 
+    // --- THE ROUND CARD ----------------------------------------------------
+    // In the centre stack with the countdown and the FINAL LAP banner, because
+    // it is the same kind of thing: a transient that names the moment. It sits
+    // ABOVE the count rather than replacing it -- the number is the instrument
+    // a driver is actually reading in those three seconds, and nothing gets to
+    // stand in front of it.
+    this.roundEl = div('sg-ctr sg-ctr__round', centre)
+    this.roundNum = div('sg-ctr__roundNum', this.roundEl)
+    this.roundName = div('sg-ctr__roundName', this.roundEl)
+    this.roundEl.hidden = true
+
     // --- FINISH CEREMONY ---------------------------------------------------
     // Two pieces, deliberately at opposite ends of the frame so the middle --
     // where the car is, and the whole point of the shot -- stays empty.
@@ -707,6 +806,33 @@ class HudImpl implements Hud {
     this.finWrap.appendChild(skip)
     this.finWrap.hidden = true
 
+    // --- THE CHAMPIONSHIP PODIUM -------------------------------------------
+    // Same shape as the finish card and for the same reason: the middle of the
+    // frame belongs to the picture. The three rows sit at the TOP, the
+    // player's own line and the skip sit at the bottom, and the podium itself
+    // is in the gap between them.
+    //
+    // It is a list rather than a graphic. The scene already says who won -- a
+    // tall step, a gold face, a car parked in front of it -- and the job of
+    // the text is the part a scene cannot do: spell the names, so nobody has
+    // to recognise a chassis silhouette to know what happened.
+    this.podWrap = div('sg-pod', root)
+    const podHead = div('sg-pod__head', this.podWrap)
+    div('sg-pod__eyebrow', podHead).textContent = 'GRAND CIRCUIT'
+    div('sg-pod__title', podHead).textContent = 'CHAMPIONSHIP'
+    this.podTied = div('sg-pod__tied', podHead)
+    this.podTied.hidden = true
+    this.podRows = div('sg-pod__rows', this.podWrap)
+    this.podYou = div('sg-pod__you', this.podWrap)
+    const podSkip = document.createElement('button')
+    podSkip.type = 'button'
+    podSkip.className = 'sg-fin__skip sg-pod__skip'
+    podSkip.textContent = 'Results'
+    podSkip.addEventListener('pointerdown', (e) => { e.stopPropagation() })
+    this.podiumSkipButton = podSkip
+    this.podWrap.appendChild(podSkip)
+    this.podWrap.hidden = true
+
     container.appendChild(root)
 
     // Redraw the baked minimap whenever the canvas box changes.
@@ -730,7 +856,8 @@ class HudImpl implements Hud {
       ? matchMedia('(prefers-reduced-motion: reduce)')
       : null
     this.reduced = this.mq ? this.mq.matches : false
-    this.onMq = () => { this.reduced = this.mq ? this.mq.matches : false }
+    this.root.dataset.reduced = this.reduced ? '1' : '0'
+    this.onMq = () => { this.setReducedMotion(this.mq ? this.mq.matches : false) }
     if (this.mq && this.mq.addEventListener) this.mq.addEventListener('change', this.onMq)
 
     this.lastNow = performance.now()
@@ -828,13 +955,91 @@ class HudImpl implements Hud {
     this.countT = label === 'GO!' || label === 'GO' ? 1.0 : 0.92
   }
 
+  setReducedMotion(on: boolean): void {
+    this.reduced = on
+    this.root.dataset.reduced = on ? '1' : '0'
+  }
+
+  setRound(info: RoundInfo | null): void {
+    this.round = info
+    if (!info) {
+      this.roundT = 0
+      this.roundEl.hidden = true
+      return
+    }
+    setText(this.roundNum, `ROUND ${info.round} OF ${info.total}`)
+    setText(this.roundName, info.trackName.toUpperCase())
+    // Full strength until the countdown ends; updateCentre then runs it out.
+    // Held here rather than on a wall-clock timer so a software renderer at
+    // two frames a second still shows it for the whole countdown.
+    this.roundT = ROUND_FADE
+    this.roundEl.hidden = false
+    this.roundEl.style.setProperty('--k', '1')
+  }
+
+  setPodium(info: PodiumInfo | null): void {
+    const on = info !== null
+    if (on !== this.podOn) {
+      this.podOn = on
+      this.podWrap.hidden = !on
+      // Same switch the finish card throws: every driving instrument is about
+      // a car nobody is steering. There is not even a race behind this one --
+      // so `is-podium` goes further and puts EVERYTHING else away, the minimap
+      // included. A minimap of a circuit that has been torn down is a picture
+      // of a track with no cars on it.
+      this.root.classList.toggle('is-ceremony', on || this.finOn)
+      this.root.classList.toggle('is-podium', on)
+      if (!on) {
+        this.podKey = ''
+        this.lastPodSkip = null
+      }
+    }
+    if (!info) return
+
+    // Rebuilt only when the content actually changes. It changes exactly once
+    // -- the standings are final by the time this screen exists -- so this is
+    // really a guard against the per-frame `canSkip` update rebuilding three
+    // rows sixty times a second.
+    const key = info.lines.map((l) => `${l.place}/${l.pilot}/${l.chassis}/${l.points}`).join('|')
+      + '|' + info.you + '|' + (info.tied ? 't' : '')
+    if (key !== this.podKey) {
+      this.podKey = key
+      while (this.podRows.firstChild) this.podRows.removeChild(this.podRows.firstChild)
+      for (const l of info.lines) {
+        const row = div('sg-pod__row', this.podRows)
+        row.dataset.place = String(l.place)
+        if (l.isLocal) row.classList.add('is-you')
+        const p = div('sg-pod__place', row)
+        p.textContent = ORD_NUM[l.place < 1 ? 1 : l.place > 12 ? 12 : l.place]
+        span('sg-pod__ord', p, ORD_SUF[l.place < 1 ? 1 : l.place > 12 ? 12 : l.place])
+        const who = div('sg-pod__who', row)
+        div('sg-pod__pilot', who).textContent = l.pilot
+        div('sg-pod__chassis', who).textContent = l.chassis
+        div('sg-pod__pts', row).textContent = `${l.points} pts`
+      }
+      setText(this.podYou, info.you)
+      this.podTied.hidden = !info.tied
+      if (info.tied) {
+        setText(this.podTied, 'LEVEL ON POINTS AND COUNTBACK')
+      }
+    }
+    if (info.canSkip !== this.lastPodSkip) {
+      this.lastPodSkip = info.canSkip
+      this.podiumSkipButton.disabled = !info.canSkip
+    }
+  }
+
   setFinish(info: FinishInfo | null): void {
     const on = info !== null
     if (on !== this.finOn) {
       this.finOn = on
       this.finWrap.hidden = !on
-      this.root.classList.toggle('is-ceremony', on)
+      this.root.classList.toggle('is-ceremony', on || this.podOn)
       if (on) {
+        // The round card belongs to the race that has just ended.
+        this.round = null
+        this.roundT = 0
+        this.roundEl.hidden = true
         // Anything mid-animation belongs to the race that just ended. The
         // countdown is on this list because update() stops running the centre
         // block during the ceremony, so a GO! that has not finished fading --
@@ -1407,6 +1612,29 @@ class HudImpl implements Hud {
   }
 
   private updateCentre(r: RacerState, state: RaceState, dt: number): void {
+    // the round card ------------------------------------------------------
+    // Pinned at full strength for the whole countdown, then run out over
+    // ROUND_FADE once the race is live. Keyed off the SIM PHASE rather than a
+    // timer started at setRound(): a slow first frame, a long shader compile
+    // or a tab that was hidden between Start and the lights must not eat the
+    // one moment this card exists for.
+    if (this.round) {
+      if (state.phase === 'countdown') {
+        this.roundT = ROUND_FADE
+      } else if (this.roundT > 0) {
+        this.roundT -= dt
+        if (this.roundT <= 0) {
+          this.roundT = 0
+          this.roundEl.hidden = true
+          this.round = null
+        }
+      }
+      if (this.roundT > 0) {
+        const k = Math.min(1, this.roundT / ROUND_FADE)
+        this.roundEl.style.setProperty('--k', k.toFixed(3))
+      }
+    }
+
     // countdown -----------------------------------------------------------
     if (state.phase === 'countdown') {
       const n = Math.ceil(state.countdown - TUNING.race.lightInterval * 0.6)
