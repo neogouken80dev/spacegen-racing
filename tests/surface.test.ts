@@ -171,8 +171,36 @@ describe('surface grip in the physics', () => {
     expect(glass.maxEdge).toBeGreaterThan(dry.maxEdge)
     expect(authored.seconds).toBeGreaterThan(dry.seconds)
     expect(glass.seconds).toBeGreaterThan(authored.seconds)
-    // The slowest point of the corner falls too: scrubbing off slip costs speed.
-    expect(authored.minSpeed).toBeLessThan(dry.minSpeed)
+    // THE SLOWEST POINT OF THE CORNER, and the authored case no longer has an
+    // opinion about it.
+    //
+    // This used to assert `authored.minSpeed < dry.minSpeed` -- scrubbing off
+    // slip costs speed -- and it was true by 0.34 m/s out of 60, which is half
+    // a percent. `derive.accelCurveGain` 2.4 -> 3.4 flipped its sign:
+    //
+    //              dry      authored(0.45)   glass(0.15)
+    //   gain 2.4   60.496       60.159          26.219
+    //   gain 3.4   60.163       60.322          26.580
+    //
+    // Note WHICH number moved. The authored run got FASTER at its slowest
+    // point and the dry one got SLOWER, which is the placement change the
+    // paragraph above already describes doing its work: the ice is on the
+    // APPROACH, so a car that accelerates harder arrives at the sweeper with
+    // more speed to carry through it, while on dry grip the extra speed only
+    // means more to scrub in the corner itself. The two curves crossed, 0.16
+    // m/s apart -- a quarter of a percent.
+    //
+    // A claim that lives inside half a percent of 60 m/s and changes sign when
+    // an unrelated constant moves is not measuring the surface model; it is
+    // measuring where two nearly identical trajectories happen to land. So it
+    // is retired rather than retargeted, exactly as the road-use claim above
+    // was, and for the same reason. What still carries the authored case is
+    // slip and time, both monotonic and both asserted three lines up.
+    //
+    // GLASS KEEPS ITS ASSERTION, because there the effect is real and enormous
+    // rather than marginal: 26.6 against 60.2, a 56% drop, in the same
+    // direction on both tunings.
+    expect(glass.minSpeed).toBeLessThan(dry.minSpeed * 0.8)
   })
 
   it('costs a grounded chassis road and time on ice, whichever chassis it is', () => {

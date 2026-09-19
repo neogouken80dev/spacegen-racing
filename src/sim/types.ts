@@ -328,6 +328,17 @@ export interface RacerState {
 
 export type RacerEvent =
   | { t: 'boost'; tier: number }
+  /**
+   * The standing start was graded. Fired once per racer, during the countdown,
+   * on the frame they first applied throttle.
+   *
+   * `grade` is the whole point: this event exists so the UI can SAY which of
+   * the three happened. The mechanic shipped for months with no event at all,
+   * so the only trace a launch left anywhere was the boost flame turning white
+   * -- and a player who cannot tell a reward from a punishment cannot learn a
+   * timing. See T.boost.launchPerfect for the reaction bands.
+   */
+  | { t: 'launch'; grade: 'perfect' | 'good' | 'jump' }
   | { t: 'driftStart' }
   | { t: 'driftEnd'; tier: number }
   | { t: 'hit'; item: ItemId }

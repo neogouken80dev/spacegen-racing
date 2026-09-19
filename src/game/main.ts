@@ -852,6 +852,23 @@ export class Game {
         trackName: this.track.def.name,
       }
       : null)
+    /**
+     * THE ROCKET-START HINT, and the one condition on it that is not "have you
+     * played before".
+     *
+     * AUTO-ACCELERATE PLAYERS ARE NOT SHOWN IT, because they cannot act on it.
+     * With auto-accelerate on -- the DEFAULT on every touch device -- the GAS
+     * pad is not on screen at all (see touchControls.ts, `.sgtc-gas` is
+     * display:none in auto mode), so there is no control to press when the
+     * lights change and the countdown guard below holds the throttle shut
+     * anyway. Teaching somebody a timing they have no button for is worse than
+     * saying nothing: it reads as a mechanic that is broken.
+     *
+     * `takeStartHint()` is called INSIDE the branch rather than outside it, so
+     * an auto-accelerate player does not silently spend their one showing on a
+     * race that could not show it.
+     */
+    this.hud.setStartHint(!this.input.autoAccelerate && takeStartHint())
     this.cheer.reset()
     this.cheer.setLevel(this.calloutLevel)
     this.scorer.reset()
@@ -1372,6 +1389,33 @@ export class Game {
         // later edit could read the wrong way round.
         if (this.phase !== 'attract') {
           const frame: InputFrame = this.input.sample()
+          /**
+           * AUTO-ACCELERATE DOES NOT GET TO PRESS THE LAUNCH BUTTON.
+           *
+           * sim/race.ts grades the standing start off the FIRST FRAME a racer
+           * applies throttle. `InputManager.sample()` forces throttle to 1 on
+           * every frame when auto-accelerate is on -- which is the default on
+           * every touch device -- so the sim saw a touch player open the
+           * throttle on the first frame of the countdown, 3.0 seconds before
+           * the lights, and graded it as a jump start. Every race. The penalty
+           * was invisible (a stun with no words attached) so nobody reported
+           * it; putting words on it is what made it findable, and a red JUMP
+           * START on the grid of every phone race is not a thing to ship.
+           *
+           * Held shut for the whole countdown rather than released at some
+           * chosen moment, because an auto-throttle that lets go at the right
+           * instant is the GAME claiming a bonus the player did not react for.
+           * The band race.ts calls "never pressed" -- no boost, no penalty --
+           * is the honest grade for a car that is driving its own throttle,
+           * and it is what a player gets here. Turning auto-accelerate off
+           * puts the GAS pad back and the mechanic with it.
+           *
+           * THIS IS AN INPUT-ROUTING FIX, NOT A TUNING ONE: the grading rule
+           * is right, the throttle it was reading was synthetic.
+           */
+          if (this.race.state.phase === 'countdown' && this.input.autoAccelerate) {
+            frame.throttle = 0
+          }
           this.lastInput.lookBack = frame.lookBack
           this.lastInput.item = frame.item
           this.lastInput.drift = frame.drift
@@ -1554,7 +1598,11 @@ export class Game {
 
       this.entityVis?.update(dt, st, st.time)
       if (st.phase === 'countdown') {
-        const n = Math.ceil(st.countdown - 0.6)
+        // T.race.goLead, not a literal 0.6. This is the number the rocket
+        // start prices a reaction against (see T.boost.launchPerfect), and
+        // when it was written out by hand in both places they disagreed --
+        // which is how reacting WELL to this light became a penalty.
+        const n = Math.ceil(st.countdown - T.race.goLead)
         this.entityVis?.setStartLights(Math.max(0, Math.min(3, n)))
         // One beep per integer. Driven off the same number the start lights
         // read, so the sound and the lamp can never disagree about the count.
@@ -1916,6 +1964,47 @@ function avg(a: number[]): number {
 function percentile(a: number[], p: number): number {
   const c = a.slice().sort((x, y) => x - y)
   return c[Math.min(c.length - 1, Math.floor(c.length * p))]
+}
+
+/**
+ * HAS THIS PROFILE EVER SEEN A COUNTDOWN? Answers, and records that it has.
+ *
+ * The rocket start is the one mechanic in the game a player cannot discover by
+ * driving: its window is three and a half seconds long, it happens once a race,
+ * and until this pass it produced no words, no sound and no light. So the first
+ * countdown a profile ever sees carries one line of type telling them it is
+ * there, and no countdown after that does.
+ *
+ * TWO GATES, AND THEY ARE NOT THE SAME GATE.
+ *
+ *   the stored flag   survives a reload, which is the actual claim being made
+ *                     ("you have played before").
+ *   `hintSpent`       a module-scope latch for THIS page load. It is what
+ *                     makes the answer correct when storage is not available:
+ *                     localStorage throws outright in a partitioned iframe and
+ *                     in some private windows, and a player there is a genuine
+ *                     first-timer every single session -- but they are not a
+ *                     first-timer on their second race of one. Without the
+ *                     latch the hint would come back on every restart, every
+ *                     race, forever, for exactly the players least able to
+ *                     turn it off.
+ *
+ * Every access is wrapped, and a throw falls through to SHOWING it. That is
+ * the deliberate direction: the cost of showing a hint to someone who has seen
+ * it is one quiet line for three seconds; the cost of hiding it from someone
+ * who has not is the whole feature.
+ */
+const LS_SEEN_START = 'sg.seenStart'
+let hintSpent = false
+
+function takeStartHint(): boolean {
+  if (hintSpent) return false
+  hintSpent = true
+  let seen = false
+  try { seen = window.localStorage.getItem(LS_SEEN_START) === '1' } catch { /* blocked */ }
+  if (seen) return false
+  try { window.localStorage.setItem(LS_SEEN_START, '1') } catch { /* blocked */ }
+  return true
 }
 
 /** Cheap device-class guess used only as a starting point; the adaptive

@@ -32,7 +32,8 @@ import { AudioPlanner, engineFor } from './plan'
 import { createStage } from './stage'
 
 /** cheer.ts's own kinds. Keeping the union here would let the two drift. */
-export type VoKind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
+export type VoKind =
+  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo' | 'launch'
 
 /**
  * Voice lines, by moment. Several variants each so a player hears a different
@@ -44,6 +45,17 @@ export type VoKind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' |
  */
 export const VO_LINES: Record<VoKind, readonly string[]> = {
   tierUp: [],
+  /**
+   * The standing start, and it is silent HERE on purpose.
+   *
+   * Its moment is the most crowded half-second in the game: `countdownGo`, the
+   * launch's own cue, eight engines spooling and a banner. A voice line is the
+   * fourth thing, it arrives after all of them (the stage ducks the music for
+   * 1.1s to make room), and by the time it finished speaking the player would
+   * be at the first corner being told about the lights. The banner and the
+   * launch cue have already said it.
+   */
+  launch: [],
   cash: ['audio/vo/cash-1.mp3', 'audio/vo/cash-2.mp3', 'audio/vo/cash-3.mp3'],
   chain: ['audio/vo/chain-1.mp3', 'audio/vo/chain-2.mp3'],
   overtake: ['audio/vo/overtake-1.mp3', 'audio/vo/overtake-2.mp3', 'audio/vo/overtake-3.mp3'],

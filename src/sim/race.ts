@@ -69,6 +69,23 @@ function segDist(
   return Math.sqrt(cx * cx + cy * cy + cz * cz)
 }
 
+/**
+ * Bank a launch boost of `tier` on a racer sitting on the grid.
+ *
+ * Written straight rather than through applyBoost() because that function's
+ * whole job is arbitrating between boosts a moving car already holds --
+ * weakerExtend, the max() against the current magnitude, the source priority.
+ * None of that applies here: a car on the grid holds nothing, this is the
+ * first boost of the race by construction, and routing it through the
+ * arbitrator would make the launch's strength depend on rules written for a
+ * drift release colliding with a pad.
+ */
+function applyLaunch(r: RacerState, tier: number): void {
+  r.boostMag = T.drift.tierBoost[tier]
+  r.boostTime = T.drift.tierDuration[tier]
+  r.boostSource = 'start'
+}
+
 export class Race {
   readonly track: Track
   readonly state: RaceState
@@ -234,7 +251,7 @@ export class Race {
 
     if (s.phase === 'countdown') {
       s.countdown -= DT
-      // Rocket start: sample the local racer's throttle during the window.
+      // Rocket start: sample each racer's throttle and grade the REACTION.
       for (const r of s.racers) {
         if (r.finished || this.startResolved[r.id]) continue
         const inp = r.isAI ? this.aiRocketStart(r) : this.inputs[r.id]
@@ -243,14 +260,19 @@ export class Race {
         // simply held accelerate through the countdown had the bog penalty
         // re-applied on every tick and could never move at all.
         this.startResolved[r.id] = true
-        const w = T.boost.rocketStartWindow
-        if (s.countdown <= w[1] && s.countdown >= w[0]) {
-          const tier = T.boost.rocketStartTier
-          r.boostMag = T.drift.tierBoost[tier]
-          r.boostTime = T.drift.tierDuration[tier]
-          r.boostSource = 'start'
-        } else if (s.countdown > w[1]) {
+        // Seconds since the lights went green. Negative means they went first.
+        // ONE clock: T.race.goLead is what the gantry reads too, so a reaction
+        // priced here is the reaction to the light the player actually saw.
+        const react = T.race.goLead - s.countdown
+        if (react < -T.boost.launchJumpGrace) {
           r.stunTime = T.boost.bogTime
+          r.events.push({ t: 'launch', grade: 'jump' })
+        } else if (react <= T.boost.launchPerfect) {
+          applyLaunch(r, T.boost.launchPerfectTier)
+          r.events.push({ t: 'launch', grade: 'perfect' })
+        } else if (react <= T.boost.launchGood) {
+          applyLaunch(r, T.boost.launchGoodTier)
+          r.events.push({ t: 'launch', grade: 'good' })
         }
       }
       if (s.countdown <= 0) { s.phase = 'racing'; s.countdown = 0 }
@@ -388,16 +410,33 @@ export class Race {
     }
   }
 
+  /**
+   * The AI's launch, as a REACTION TIME rather than a target on the clock.
+   *
+   * THE FIELD MUST NOT ALL NAIL IT. A perfect start is the one moment of the
+   * race that is purely the player's to win, and it is worth nothing if seven
+   * AI cars take it too -- so the distribution is deliberately centred on GOOD
+   * with PERFECT as the tail, and only the best AI has much of a tail. At
+   * skill 4 that is a little over a third of starts; at skill 0, one in eight.
+   *
+   * The lazy branch is a plain slow reaction rather than a jump start, because
+   * an AI bogging itself on the line is not a challenge the player beat, it is
+   * a car that removed itself, and eight cars occasionally doing that at
+   * random makes the first corner read as noise.
+   */
   private aiRocketStart(r: RacerState): InputFrame {
     const skill = clamp(r.aiSkill, 0, 4)
     const rng = this.aiRng[r.id]
-    // Better AI hits the window more often.
-    const chance = 0.25 + skill * 0.16
-    const wantAt = rng.next() < chance
-      ? this.rng.range(T.boost.rocketStartWindow[0], T.boost.rocketStartWindow[1])
-      : this.rng.range(0.5, 1.4)
+    const sharp = 0.12 + skill * 0.06
+    const n = rng.next()
+    const react = n < sharp
+      // PERFECT: never earlier than the light, so the AI cannot fluke a jump.
+      ? this.rng.range(0.02, T.boost.launchPerfect)
+      : n < 0.82
+        ? this.rng.range(T.boost.launchPerfect, T.boost.launchGood)
+        : this.rng.range(T.boost.launchGood, T.boost.launchGood + 0.8)
     const inp = emptyInput()
-    inp.throttle = this.state.countdown <= wantAt ? 1 : 0
+    inp.throttle = T.race.goLead - this.state.countdown >= react ? 1 : 0
     return inp
   }
 

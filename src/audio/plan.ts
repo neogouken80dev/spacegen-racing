@@ -33,7 +33,7 @@ import type { RacerEvent, RacerState, RaceState } from '../sim/types'
 import type {
   AudioFrame, EngineVoice, PlayRequest, ScrapeLevel, SoundDef, SoundId,
 } from './api'
-import { BOOST_SOUND, CATALOGUE, FIRE_SOUND, HIT_SOUND } from './catalogue'
+import { BOOST_SOUND, CATALOGUE, FIRE_SOUND, HIT_SOUND, LAUNCH_SOUND } from './catalogue'
 
 /** Past this, another car's one-shots are not worth a voice. Metres. */
 export const HEAR_RANGE = 150
@@ -261,6 +261,18 @@ export class AudioPlanner {
         const tier = Math.max(0, Math.min(BOOST_SOUND.length - 1, ev.tier | 0))
         return { id: BOOST_SOUND[tier], gain: 1 }
       }
+      case 'launch':
+        /**
+         * THE STANDING START, AND ONLY YOUR OWN.
+         *
+         * Same rule as driftStart below and a stronger case for it: all eight
+         * cars resolve their launch inside about half a second, so playing the
+         * field's would put up to eight one-shots into the single frame the GO
+         * cue is in -- and the whole reason this event exists is to tell the
+         * PLAYER which of three things THEY just did. A grade they cannot
+         * attribute teaches nothing, which is the bug being fixed.
+         */
+        return isLocal ? { id: LAUNCH_SOUND[ev.grade], gain: 1 } : null
       case 'driftStart':
         // Only your own. Eight cars entering slides is a hiss with no meaning.
         return isLocal ? { id: 'driftStart', gain: 1 } : null

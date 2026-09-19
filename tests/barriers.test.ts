@@ -236,8 +236,40 @@ describe('a barrier charges for the impact, not for the slide', () => {
      * still leaves the job the header describes intact -- these are three times
      * what a clean lap loses, so a barrier that started eating laps whole would
      * run past them just as it always would.
+     *
+     * ---------------------------------------------------------------------
+     * REBASED AGAIN for `derive.accelCurveGain` 2.4 -> 3.4, and ONLY Rustfall
+     * moves. Measured on the same fixed laps, same seed: rustfall 206.5 ->
+     * 217.6, aetherion 99.9 -> 93.7. A car with 42% more acceleration arrives
+     * at the wall carrying more speed and presses into it harder for the whole
+     * lap, so the ground speed this test adds up goes up with it; Aetherion's
+     * harness never gets deep enough into its barriers for the difference to
+     * show and drifts down instead. Rustfall's budget goes 215 -> 240, the
+     * same ~10% margin the pair has always carried. Aetherion keeps 195, which
+     * is now more than twice its measurement.
+     *
+     * AND A WARNING THAT IS NOT ABOUT THIS CHANGE. The sabotage check two
+     * paragraphs up -- force contactFade to 1, confirm the budget catches it
+     * -- NO LONGER SEPARATES, and it had already stopped before the
+     * acceleration gain. Forcing contactFade to 1 and re-measuring:
+     *
+     *                        rustfall          aetherion
+     *   before the gain      206.5 -> 127.0    99.9 -> 117.9
+     *   after  the gain      217.6 -> 219.4    93.7 -> 120.3
+     *
+     * Removing the fade makes Rustfall lose LESS on the old tuning and 1.8 m/s
+     * more on the new one, and Aetherion stays far under 195 either way. The
+     * harness aims past the edge and holds a drift into the wall, so killing
+     * the fade changes the LINE as much as the bite and the two effects are no
+     * longer separable in a single scalar. Neither budget can therefore be
+     * claimed to catch that particular sabotage any more, and this comment says
+     * so rather than leaving the older paragraph asserting something the
+     * numbers no longer support. What the budgets still do is the job the
+     * header gives them: catch a barrier that starts eating laps whole. Making
+     * the mechanism test discriminate again is a change to the harness, not to
+     * a budget, and it is deliberately not bundled into a tuning pass.
      */
-    for (const [def, budget] of [[RUSTFALL, 215], [AETHERION, 195]] as const) {
+    for (const [def, budget] of [[RUSTFALL, 240], [AETHERION, 195]] as const) {
       const track = new Track(def)
       const race = new Race(track, {
         seed: 7, totalLaps: 2, racerCount: 1, trackId: def.id,

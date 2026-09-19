@@ -277,7 +277,7 @@ describe('the vertigo shot fires on a boost, not only on a drift release', () =>
     const cam = new ChaseCamera(16 / 9)
     const r = fake(0.4)
     cam.reset(r)
-    r.boostMag = T.drift.tierBoost[T.boost.rocketStartTier]
+    r.boostMag = T.drift.tierBoost[T.boost.launchPerfectTier]
     r.boostSource = 'start'
     cam.update(r, RDT, 60, false, false)
     expect(cam.dollyLevel, 'no background to stretch, no shot').toBe(0)

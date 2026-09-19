@@ -597,6 +597,31 @@ describe('the flat tracks cannot reach any of this', () => {
     //             would move this, since the baseline is pinned to a race on
     //             this circuit, and the drift changes are shared-sim and move
     //             the other three as well.
-    expect(race.hash()).toBe('7ce2dd33')
+    //   9b8c218f  the standing start was re-anchored and the whole roster got
+    //             42% more acceleration. Two shared-sim changes, both asked
+    //             for, and either one alone would move this.
+    //             `derive.accelCurveGain` 2.4 -> 3.4 multiplies accelRate for
+    //             every chassis, so every car on the grid takes a different
+    //             line out of every corner from the first frame. And the
+    //             rocket start stopped being priced against a raw countdown
+    //             value and became a REACTION measured from the green light
+    //             (T.race.goLead), which changes what the eight AI cars do on
+    //             the line -- sim/race.ts's aiRocketStart now draws a reaction
+    //             time rather than a countdown target, so the field leaves the
+    //             grid in a different order with different boosts.
+    //             A hash that did NOT move would mean neither change had
+    //             reached the sim.
+    //   a84519e0  `boost.launchGoodTier` 0 -> 1, in the same pass and for a
+    //             reason the pass itself turned up. Measured on Rustfall in a
+    //             Solaire, distance from the line at 3.0s: a GOOD start on
+    //             tier 0 was 126.2 m against 120.6 m for a car that never
+    //             pressed at all, with the two speeds converged at 56 m/s --
+    //             because the 42% accel gain above lets a car out-accelerate a
+    //             0.18-for-0.80s ceiling almost immediately. The middle rung of
+    //             the ladder paid five metres and handed them back. Tier 1 is
+    //             +16.2 m on never-pressing and still 19.6 m behind PERFECT.
+    //             Seven of the eight cars on this grid take a graded start, so
+    //             this reaches the hash through them.
+    expect(race.hash()).toBe('a84519e0')
   })
 })

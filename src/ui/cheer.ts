@@ -21,8 +21,11 @@
  *   chaining          three slides linked without dropping the chain window.
  *                     Rare, entirely skill, worth saying so.
  *
- * And four moments off the drift ladder that are worth interrupting for:
+ * And five moments off the drift ladder that are worth interrupting for:
  *
+ *   the standing     the ONE line here that is not praise. See THE PENALTY
+ *   start            LINE below; it is also the only one that speaks while
+ *                    the sim is still counting down.
  *   taking the lead   the biggest single thing that can happen to a position.
  *   an overtake       a position gained under racing. Hard-limited to one
  *                     every six seconds, because mid-pack positions swap
@@ -53,6 +56,32 @@
  *   anything after    the finish has its own sequence and its own copy. The
  *   the finish        victory lap is AI-driven, so praising it would be
  *                     praising the computer.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PENALTY LINE, AND WHY THERE IS EXACTLY ONE
+ *
+ * Every other line in this file is praise, and the list above says why getting
+ * hit, spinning and hitting walls deliberately get nothing: the HUD is already
+ * printing SPUN OUT across the middle of the screen and a cheer next to it
+ * reads as mockery. A JUMP START is the exception, and it is one for a reason
+ * that is not a matter of taste.
+ *
+ * The rocket start shipped for months with no words attached to it at all. It
+ * paid a boost for a good reaction and a 1.2-second bog for going early, and
+ * because the two were indistinguishable on screen -- the only trace either
+ * left was the boost flame turning white -- nobody could learn the timing, and
+ * the owner of the game did not know the mechanic existed. A reward the player
+ * cannot attribute is not a reward, and a punishment the player cannot
+ * attribute is not a punishment: it is a bug report about the handling.
+ *
+ * So the three grades all speak, and the bad one has to be UNMISTAKABLY the
+ * bad one. That is what `data-bad` is: not a third hue on the same ladder but
+ * a different typographic voice -- upright rather than italic, red, no
+ * shockwave, no speed rules, and a stall instead of a stamp. The words carry
+ * it on their own in greyscale and through a screen reader (`JUMP START --
+ * BOGGED` names the cause and the cost), which is the rule the results screen
+ * already follows for the player's own row: a marker a colourblind player
+ * cannot pick out is the bug, not a lesser version of it.
  *
  * ---------------------------------------------------------------------------
  * HOW IT STAYS OFF THE RACING LINE
@@ -123,8 +152,9 @@ export type CheerLevel = 'full' | 'key' | 'off'
 
 /** Every kind of moment that can produce a line. */
 export type CheerKind =
-  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
-type Kind = 'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo'
+  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo' | 'launch'
+type Kind =
+  'tierUp' | 'cash' | 'chain' | 'overtake' | 'lead' | 'air' | 'beam' | 'combo' | 'launch'
 
 export interface Cheer {
   root: HTMLElement
@@ -245,6 +275,13 @@ const BEAM: string[] = [
 ]
 
 /**
+ * The standing start. Its table lives with TIER_COLOR further down rather than
+ * here, because two of the three hues ARE tier colours: a graded launch banks a
+ * real drift-tier boost and the words are painted in the colour of the boost
+ * they just paid. See LAUNCH.
+ */
+
+/**
  * Combo rungs, one line per rung of score/rules.ts COMBO_RUNGS.
  *
  * THIS LADDER IS DELIBERATELY IN A DIFFERENT REGISTER FROM EVERY OTHER LIST IN
@@ -296,6 +333,82 @@ const EMPTY: RacerState['events'] = []
 /** Tier colours, matching the drift ring and the boost flash. */
 const TIER_COLOR = ['#3d8bff', '#b44dff', '#ffd23f', '#ffffff']
 
+/**
+ * The colour of a penalty, and it is in NO drift ladder.
+ *
+ * `--sg-red`, which in this game means brake / danger / incoming and is the one
+ * hue the four tier colours, the chain cyan, the overtake green, the air green
+ * and the beam orange all leave alone. Written as a literal for the same reason
+ * TIER_COLOR is: this module hands the value to `rgba()` to build the halo, and
+ * a CSS variable cannot be parsed into channels here.
+ */
+const BAD_COLOR = '#ff3b5e'
+
+/**
+ * THE STANDING START, in three lines.
+ *
+ * WORDING. Deliberately plain, and deliberately a set: PERFECT / GOOD / JUMP
+ * over one shared noun. Everywhere else in this file the copy is allowed to be
+ * a race engineer with an opinion ("THAT LINE HELD", "STUCK IT"), because those
+ * lines describe something the player already understood and are only there to
+ * approve of it. This one has to TEACH -- the whole reason the work exists is
+ * that nobody knew the mechanic was there -- so the three grades have to read
+ * as one ladder at a glance and as the same thing the Controls panel calls a
+ * rocket start. A cleverer set of three was written first and thrown away: it
+ * was better copy and it taught nothing.
+ *
+ * The jump start names its COST as well as its cause. "JUMP START" alone is a
+ * label for a thing the player can see; the car not moving for most of a second
+ * afterwards is the part they need the words to connect.
+ *
+ * HUE. The two rewards take the colour of the boost they actually bank, read
+ * from TUNING rather than chosen -- so the words, the exhaust plume and the
+ * drift ring all agree about how big that boost was, and a retune of
+ * `launchPerfectTier` repaints the banner without anyone remembering to.
+ *
+ * WEIGHT is NOT read from the tier, and that is the one place these two tables
+ * deliberately disagree. `w` is how much SCREEN a moment is worth, and the
+ * launch is worth the same amount of it whichever grade came out: it is the
+ * only thing happening, on an empty frame, once per race. Driven off the tier
+ * it would put a GOOD start at rung 0 -- the Spark whisper, 88% opacity, the
+ * quietest thing this widget can say -- for a moment whose entire job is to be
+ * noticed by somebody who does not yet know the mechanic exists.
+ */
+const LAUNCH: Record<
+  'perfect' | 'good' | 'jump',
+  { text: string; color: string; w: number }
+> = {
+  perfect: {
+    text: 'PERFECT START',
+    color: TIER_COLOR[Math.max(0, Math.min(3, TUNING.boost.launchPerfectTier))],
+    w: 2,
+  },
+  good: {
+    text: 'GOOD START',
+    color: TIER_COLOR[Math.max(0, Math.min(3, TUNING.boost.launchGoodTier))],
+    w: 1,
+  },
+  jump: { text: 'JUMP START — BOGGED', color: BAD_COLOR, w: 1 },
+}
+
+/**
+ * Priority and cooldown for every kind, TUNING's numbers plus this file's.
+ *
+ * `launch` is not in `T.cheer` and should not be. Every number in there is one
+ * the balance harness or a feel session has an opinion about -- how often a
+ * cash-in may speak, how long a line holds -- and a launch fires at most ONCE
+ * per race by construction (sim/race.ts resolves each racer's start exactly
+ * once), so a cooldown on it is meaningless and a priority is a question about
+ * screen, not about balance. Same argument as KEY_CASH_MIN_TIER above.
+ *
+ * It sits at the top of the priority order, above the lead. For the two seconds
+ * this can fire in there is nothing else on screen to outrank -- the race has
+ * not started -- and being top means the one line that explains a penalty can
+ * never be dropped for something that arrived first.
+ */
+const PRIORITY: Record<Kind, number> = { ...CH.priority, launch: 5 }
+const COOLDOWN: Record<Kind, number> = { ...CH.cooldown, launch: 0 }
+
 /** '#rrggbb' -> 'rgba(r, g, b, a)'. Construction-cheap; called once per line. */
 function rgba(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16)
@@ -335,7 +448,7 @@ class CheerImpl implements Cheer {
   private sinceAny = 999
   private readonly cooldown: Record<Kind, number> = {
     tierUp: 999, cash: 999, chain: 999, overtake: 999, lead: 999, air: 999,
-    beam: 999, combo: 999,
+    beam: 999, combo: 999, launch: 999,
   }
   /** Rotating index per phrase list, so the same words never repeat back to back. */
   private readonly cursor: Record<string, number> = {}
@@ -382,6 +495,8 @@ class CheerImpl implements Cheer {
     this.line.className = 'sg-cheer__line'
     root.appendChild(this.line)
     root.dataset.beat = '0'
+    // The resting state is "this is praise", because every line but one is.
+    root.dataset.bad = '0'
     root.hidden = true
     host.appendChild(root)
 
@@ -455,6 +570,65 @@ class CheerImpl implements Cheer {
    * DOM; it all funnels through `say()`, which owns the restraint rules.
    */
   private decide(state: RaceState, r: RacerState, dt: number): void {
+    // Hoisted, because the launch below is read before any of the guards are
+    // and the racing path further down needs the same answer.
+    const fresh = state.frame !== this.lastEventFrame
+
+    // --- the standing start, ABOVE EVERY GUARD ----------------------------
+    //
+    // Every other line in this file describes something that happened while
+    // `state.phase` was 'racing'. The launch does not: sim/race.ts grades it
+    // during the COUNTDOWN, on the frame the racer first opens the throttle,
+    // so a detector living under the phase guard would never see the event at
+    // all.
+    //
+    // It is not gated on the countdown phase EITHER, and that is deliberate
+    // rather than lazy. Events are produced per fixed sim step and read per
+    // render frame, and a frame that runs several sub-steps can carry the last
+    // of the countdown AND the flip to racing in one pass -- on a machine slow
+    // enough, the launch event and `phase === 'racing'` arrive together. A
+    // phase test would silently drop the line on exactly the hardware least
+    // able to spare a second chance at learning the mechanic. The event fires
+    // once per racer per race by construction, so reading it wherever it turns
+    // up cannot produce a second line.
+    //
+    // Above `muted` for a third reason: a jump start sets `stunTime` on the
+    // very frame it fires, and the "never talk over a stun" rule would
+    // otherwise mute the only line in the game that explains a stun.
+    //
+    // WHEN IT SPEAKS: ON THE PRESS, AND THAT IS THE WHOLE PLACEMENT DECISION.
+    //
+    // The alternative was to hold all three grades until the lights went green
+    // and announce them there, which sounds tidier and is wrong. The one thing
+    // this line has to do is attach a name to something the PLAYER just did,
+    // and attribution is made of immediacy: a verdict that arrives at GO reads
+    // as part of the GO -- something the race did -- rather than as an answer
+    // to a button. It is also strictly too late to teach, because the window
+    // it is teaching about has already shut by then.
+    //
+    // So it LEADS the GO instead of sharing it, which is also what keeps the
+    // moment from stacking. Measured on the shipped countdown: a perfect start
+    // puts the banner up around countdown 0.40s and a jump start around 1.05s,
+    // both comfortably before `countdownGo` fires at 0. The per-integer
+    // countdown beeps are further out still -- they land at 3.6, 2.6 and 1.6 --
+    // so nothing here shares a frame with one. The banner then holds 1.05s and
+    // fades over 0.45s, so it is off the screen about a second into the race,
+    // before the first drift has anything to say.
+    //
+    // The one overlap that CANNOT be avoided is the jump start's own sound,
+    // since going early is what a jump start is; audio/catalogue.ts prices that
+    // sound two octaves under the GO for exactly that reason.
+    if (fresh && !r.finished && this.level !== 'off'
+      && this.viewH >= CH.minViewportHeight) {
+      const ev = r.events
+      for (let i = 0; i < ev.length; i++) {
+        const e = ev[i]
+        if (e.t !== 'launch') continue
+        const L = LAUNCH[e.grade]
+        this.say('launch', L.text, L.color, L.w, e.grade === 'jump')
+      }
+    }
+
     // Silent outside the race proper, and silent for a finished racer — the
     // victory lap is AI-driven, so there is nothing there to praise. The
     // detectors are still primed on the way past, so re-entering the race
@@ -497,7 +671,7 @@ class CheerImpl implements Cheer {
     this.lastChain = r.chainStacks
 
     // --- events -------------------------------------------------------------
-    const fresh = state.frame !== this.lastEventFrame
+    // `fresh` is computed at the top of this method now; see the launch.
     this.lastEventFrame = state.frame
     const ev = fresh ? r.events : EMPTY
     for (let i = 0; i < ev.length; i++) {
@@ -562,11 +736,11 @@ class CheerImpl implements Cheer {
     this.say('combo', COMBO[rung], COMBO_COLOR[rung] ?? '#ffffff', rung >= 3 ? 3 : rung)
   }
 
-  private say(kind: Kind, text: string, color: string, tier = -1): boolean {
+  private say(kind: Kind, text: string, color: string, tier = -1, bad = false): boolean {
     if (!text) return false
-    const prio = CH.priority[kind]
+    const prio = PRIORITY[kind]
     if (this.level === 'key' && prio < 3) return false
-    if (this.cooldown[kind] < CH.cooldown[kind]) return false
+    if (this.cooldown[kind] < COOLDOWN[kind]) return false
     const live = this.holdT > 0 || this.fadeT > 0
     if (live && prio <= this.shownPriority) return false
     if (!live && this.sinceAny < CH.minGap) return false
@@ -603,6 +777,11 @@ class CheerImpl implements Cheer {
     // chromatic fringe. styles.css hangs all four off this one attribute.
     const w = tier >= 0 ? tier : prio >= 4 ? 3 : prio >= 3 ? 2 : 0
     this.root.dataset.w = String(w)
+    // PRAISE OR PENALTY, written on every line rather than only on the bad
+    // ones, so the treatment can never be left behind on whatever is said
+    // next -- which on the launch's own timing would be the first drift of
+    // the race, about a second and a half later.
+    this.root.dataset.bad = bad ? '1' : '0'
     // Restart the entrance. Under reduced motion the CSS refuses to run it at
     // all, so this is a no-op there rather than something to branch on.
     this.beat ^= 1

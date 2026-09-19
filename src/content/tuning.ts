@@ -76,7 +76,29 @@ export const TUNING = {
     massBase: 400, massPer: 180,               // kg
     driftMultBase: 0.70, driftMultPer: 0.06,
     yawRateBase: 55, yawRatePer: 9,            // deg/s
-    accelCurveGain: 2.4,
+    /**
+     * THE ACCELERATION SLOPE, and it is the roster-wide one.
+     *
+     * `timeToTop` is not literally a time to top speed. The integrator is an
+     * exponential approach -- dv/dt = accelRate * (gap / top) -- so the time
+     * constant is tau = timeToTop / accelCurveGain, and a car reaches 90% of
+     * its ceiling at 2.303 tau. At gain 2.4 a mid-roster accel 7 chassis
+     * (timeToTop 4.02s) took 3.86s to get there from a standstill, which is
+     * most of the way down a short straight.
+     *
+     * 2.4 -> 3.4 on a call from Vince: corner exits bogged. It is the RIGHT
+     * lever for "faster for everyone" because it is a MULTIPLIER on accelRate,
+     * so every chassis gains the same 42% and the roster's relative spread is
+     * untouched. Lowering `timeToTopBase` would have been the obvious move and
+     * it is the wrong one: it SUBTRACTS a constant, and accelRate goes as
+     * 1/timeToTop, so 6.4 -> 5.4 gives the accel-4 Dray-9 +25% and the accel-8
+     * Vector-7 +37% -- it pulls the roster apart while claiming to raise a
+     * floor.
+     *
+     * Mid-roster 0 -> 90% of top: 3.86s -> 2.72s. See the balance numbers in
+     * the commit; lap times and win shares were measured, not assumed.
+     */
+    accelCurveGain: 3.4,
   },
 
   steering: {
@@ -737,9 +759,82 @@ export const TUNING = {
     trickTier: 0,               // index into drift tiers
     trickMinAir: 0.45,
     trickLandTolerance: 0.44,   // radians
-    rocketStartWindow: [0.05, 0.35],
-    rocketStartTier: 1,
-    bogTime: 1.20,
+    /**
+     * THE ROCKET START, AND IT USED TO BE ANCHORED TO NOTHING.
+     *
+     * The old shape was `rocketStartWindow: [0.05, 0.35]` -- raw values of
+     * `state.countdown`, with anything earlier than 0.35 taking the bog. The
+     * problem is what the PLAYER is reacting to. The start lights read
+     * `ceil(countdown - race.goLead)` and go green when that hits zero, which
+     * is at countdown = 0.60. So the timeline the player actually lived was:
+     *
+     *   countdown 0.60   lights go GREEN
+     *   0.60 -> 0.35     press here and you are BOGGED for 1.2s
+     *   0.35 -> 0.05     press here for the boost
+     *   0.05 -> 0.00     press here for nothing at all
+     *
+     * A human reacts to a visual go signal in about 200-250ms, and a primed
+     * one in 150. Every one of those lands in the bog. The mechanic punished
+     * a GOOD reaction and rewarded a slow one, and since nothing on screen
+     * ever said either word, nobody could learn which had happened -- which is
+     * why the feature had been in the build for months without being noticed.
+     *
+     * So the window is now stated as a REACTION TIME, measured from the green
+     * light, and `race.goLead` is the single constant both the lights and this
+     * read. They cannot drift apart any more, which is the actual defect: the
+     * old numbers were not wrong so much as expressed against the wrong clock.
+     *
+     * Negative is early. The grade ladder is three bands and a floor:
+     *
+     *   r < -launchJumpGrace   JUMP START -- went before the light. bogTime.
+     *   .. <= launchPerfect    PERFECT    -- launchPerfectTier boost.
+     *   .. <= launchGood       GOOD       -- launchGoodTier boost.
+     *   never pressed          nothing, and no penalty.
+     *
+     * Generous on purpose. Vince asked for a window that is fair to learn, and
+     * the skill this should test is "did you go when the light went", not "can
+     * you guess a 300ms slice of a countdown you cannot see". Everyone awake
+     * gets something; only jumping the light costs you. PERFECT is still worth
+     * chasing: tier 2 against tier 0 is 0.40 of top speed for 2.2s against 0.18
+     * for 0.8s, which from a standstill is most of the run to the first corner.
+     */
+    /** Seconds BEFORE the light a press still counts as a reaction, not a jump. */
+    launchJumpGrace: 0.15,
+    /** Reaction, seconds after the light, still inside PERFECT. */
+    launchPerfect: 0.25,
+    /** ...and inside GOOD. Past race.goLead the countdown is over anyway. */
+    launchGood: 0.60,
+    launchPerfectTier: 2,
+    /**
+     * GOOD was tier 0 and tier 0 is worth nothing now.
+     *
+     * Measured on Rustfall in a Solaire, distance from the line at 3.0s:
+     *
+     *   never pressed   120.6 m @ 56 m/s
+     *   GOOD (tier 0)   126.2 m @ 56 m/s     <- +5.6 m, speeds CONVERGED
+     *   PERFECT (t2)    156.4 m @ 71 m/s
+     *
+     * Tier 0 is 0.18 of top speed for 0.80s, and with accelCurveGain at 3.4 the
+     * car out-accelerates that ceiling almost immediately -- so the middle rung
+     * of the ladder paid five metres and then handed them back. A banner that
+     * says GOOD START and delivers nothing is worse than no banner: it teaches
+     * the player that the reward tier is decoration.
+     *
+     * Tier 1 (0.28 for 1.40s) measures +16.2 m on a car that never pressed and
+     * still finishes 19.6 m behind PERFECT at three seconds. That is a real
+     * middle rung that leaves PERFECT the prize, which is the shape the ladder
+     * was supposed to have.
+     */
+    launchGoodTier: 1,
+    /**
+     * The jump-start penalty. 1.20 -> 0.80 in the same pass.
+     *
+     * 1.2s was priced against a mechanic nobody could see coming, where the
+     * bog was effectively random. Now that a jump start is a thing the player
+     * did on purpose and is told about, it can be a real cost without being a
+     * race-ender: 0.80s still drops you through the pack and is recoverable.
+     */
+    bogTime: 0.80,
     /** Extra top speed per Charge pickup held. */
     chargePer: 0.005, chargeMax: 10, chargeLostOnHit: 3,
   },
@@ -1923,6 +2018,18 @@ export const TUNING = {
 
   race: {
     countdown: 3.6,
+    /**
+     * Seconds before the start that the lights go green.
+     *
+     * ONE CONSTANT, TWO READERS. The start-light gantry shows
+     * `ceil(countdown - goLead)` and flashes GO when that reaches zero; the
+     * rocket start in sim/race.ts prices a player's reaction from the same
+     * moment. Before this existed, 0.6 was a literal in game/main.ts and the
+     * launch window was a pair of raw countdown values chosen against nothing,
+     * and the two disagreed by a quarter of a second -- enough that reacting
+     * WELL to the light was a penalty. See boost.launchPerfect.
+     */
+    goLead: 0.6,
     lightInterval: 1.0,
     totalLaps: 3,
     gridSpacingLong: 9.0,

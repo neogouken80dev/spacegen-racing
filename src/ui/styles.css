@@ -3639,6 +3639,7 @@
 .sg-hud.is-ceremony .sg-hud__warns,
 .sg-hud.is-ceremony .sg-hud__pos,
 .sg-hud.is-ceremony .sg-map__meta,
+.sg-hud.is-ceremony .sg-ctr__hint,
 .sg-hud.is-ceremony .sg-cheer {
   display: none;
 }
@@ -3848,8 +3849,28 @@
      one, so nothing below removes anything the player needs to see -- the
      words are still there, still the escalating size, still wearing the
      Singularity fringe, which is a colour rather than a movement. */
+  /* `none`, NOT the half-and-half translate that used to be here, and the
+     difference was a callout sitting visibly left of centre for every player
+     with reduced motion turned on at the OS.
+
+     That translate was this element's own CENTRING, from when the widget was
+     absolutely positioned at left:50% and had to pull itself back by half its
+     width; re-asserting it here was how the block stopped an entrance
+     animation from moving it. The widget has since become a flex child of
+     .sg-moment, which does the centring, and the root stopped being animated
+     at all -- every moving part lives on the two children, which the rules
+     just below already still. So the rule was pulling the line half its own
+     width to the left and half its height up, against a layout that had
+     already placed it: "PERFECT START" measured 168px left of the GO! it is
+     supposed to sit over, at 1440x810.
+
+     Kept rather than deleted, as `none`, because the job the block gives it is
+     still real -- nothing here may move -- and this is the spelling of that
+     job which does not also re-position the element. Only the OS-level query
+     carried it; the in-game Reduced motion setting drives [data-reduced="1"],
+     which never had it, so the two disagreed about where a callout goes. */
   .sg-cheer {
-    transform: translate(-50%, -50%) !important;
+    transform: none !important;
   }
   .sg-cheer__line,
   .sg-cheer__wave {
@@ -5278,6 +5299,89 @@
   opacity: 0 !important;
 }
 
+/* ==========================================================================
+   THE PENALTY LINE — a jump start, and the only thing here that is not praise
+   ==========================================================================
+   One kind of line in this widget tells the player they did something WRONG,
+   and it has to be unmistakable at a glance without being a second ladder.
+   So it is not a third hue on the reward scale: it takes every channel the
+   rewards use and answers each one.
+
+     UPRIGHT, not italic. This is the channel that matters, because it is the
+       only one that survives BOTH greyscale and reduced motion. Every other
+       line in this game's display face leans; a penalty stands still, and it
+       reads as a readout rather than as a cheer before a single word is
+       parsed. The whole widget is one line of type, so the type IS the
+       signal — the same argument the results screen makes about not marking
+       the player's own row with colour alone.
+     WIDER TRACKING. A held, spaced word reads as an announcement. It also
+       buys back some of the width the upright face loses.
+     NO SHOCKWAVE, NO SPEED RULES. Both are gestures of arrival and both are
+       switched off — a bloom behind a penalty says "well done". The wave is
+       killed at its source (`--wo`) rather than by hiding the element, so the
+       animation still runs and nothing about the timing changes.
+     THE STAMP BECOMES A STALL. The rewards arrive high, large and leaning and
+       overshoot into place. This arrives LOW and slightly small and settles
+       upward — the same movement budget, inverted. A movement, so reduced
+       motion drops it and the three channels above carry the line alone.
+
+   The hue (--cc, set to --sg-red by cheer.ts) is on top of all of that, not
+   instead of it. */
+
+.sg-cheer[data-bad="1"] {
+  --wo: 0;
+}
+
+.sg-cheer[data-bad="1"] .sg-cheer__line {
+  font-style: normal;
+  letter-spacing: 0.17em;
+  /* The tracking is added on the right of the last glyph too, so the line
+     measures wider than it looks and sits a touch off centre without this. */
+  text-indent: 0.17em;
+}
+
+/* Rung 2 exists on this widget only to give a reward its bars. A penalty at
+   any rung has none. */
+.sg-cheer[data-bad="1"] .sg-cheer__line::before,
+.sg-cheer[data-bad="1"] .sg-cheer__line::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+.sg-cheer[data-bad="1"][data-beat="0"] .sg-cheer__line {
+  animation: sg-cheer-bog-a var(--dur) cubic-bezier(0.22, 0.7, 0.36, 1) 1;
+}
+.sg-cheer[data-bad="1"][data-beat="1"] .sg-cheer__line {
+  animation: sg-cheer-bog-b var(--dur) cubic-bezier(0.22, 0.7, 0.36, 1) 1;
+}
+
+/* Two copies, selected by data-beat, exactly as the reward entrance is — see
+   the note there. No fill mode on either: at rest the line is upright, full
+   size and readable, which is the state an animation that never runs must
+   leave behind. */
+@keyframes sg-cheer-bog-a {
+  0% {
+    transform: translate3d(0, calc(0.10em * var(--amp)), 0)
+      scale(calc(1 - 0.06 * var(--amp)), calc(1 - 0.04 * var(--amp)));
+  }
+  100% { transform: translate3d(0, 0, 0) scale(1, 1); }
+}
+@keyframes sg-cheer-bog-b {
+  0% {
+    transform: translate3d(0, calc(0.10em * var(--amp)), 0)
+      scale(calc(1 - 0.06 * var(--amp)), calc(1 - 0.04 * var(--amp)));
+  }
+  100% { transform: translate3d(0, 0, 0) scale(1, 1); }
+}
+
+.sg-cheer[data-reduced="1"][data-bad="1"] .sg-cheer__line {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-cheer[data-bad="1"] .sg-cheer__line { animation: none !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sg-cheer__line::before,
   .sg-cheer__line::after,
@@ -5321,6 +5425,92 @@
   line-height: 1.05;
   color: var(--sg-ink);
   text-shadow: 0 4px 0 rgba(0, 0, 0, 0.6), 0 0 42px rgba(122, 190, 255, 0.45);
+}
+
+/* ==========================================================================
+   THE ROCKET-START HINT — first race only
+   ==========================================================================
+   The countdown is the only three and a half seconds in which the mechanic it
+   names can be performed, so this is the only place the instruction can go.
+   It is also the reason it can be this quiet: a player who is about to be told
+   "go on green" is already staring at a gantry of red lamps.
+
+   BELOW THE NUMERALS. The count is 22vmin of italic display type dead centre,
+   the round card owns the band above it, and the bottom of the frame is where
+   the car and the road already are — so the hint takes the gap between the
+   count and the instrument band, anchored to the BOTTOM of the stack rather
+   than to the middle. Anchoring it to the middle would have it walk up into
+   the numerals as the viewport got shorter, which is precisely where it must
+   never be.
+
+   UI FACE, NOT DISPLAY. Everything else in this stack shouts: the count, the
+   FINAL LAP banner, SPUN OUT, the callouts. This is the one element here that
+   is a sentence rather than an exclamation, and the settings-panel face is
+   what the rest of the game uses when it is explaining something. Cyan, so it
+   belongs to the countdown's own glow rather than introducing a fifth hue to
+   a frame that already has red lamps in it. */
+
+.sg-ctr__hint {
+  align-self: end;
+  /* Clear of the bottom instrument band: the HUD's own bottom padding, the
+     safe area, and the height of the tallest thing in that row. Measured on
+     the shipped layouts rather than guessed — see tools/probe-launch.mjs,
+     which fails if this ever lands on the band, the touch pads or the
+     numerals.
+
+     104px is the TALL layouts' number, and what makes it tall is the speedo:
+     162px of dial at 1440x810, 144px at 1280x720. On a portrait phone the
+     bottom row is a 35px bar and this lands the line just under it, in the
+     gap above the thumb pads, which is the right place there too. */
+  transform: translateY(calc(-1 * (var(--sg-pad) + var(--sg-sab) + 104px)));
+  font-family: var(--sg-ui);
+  font-size: clamp(10px, 1.45vmin, 15px);
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  /* The tracking is added after the last glyph too, so without this the line
+     sits half a space left of centre. */
+  text-indent: 0.3em;
+  color: var(--sg-cyan);
+  /* A tight dark outline and a wide soft glow in its own hue, the same two-part
+     stack the callouts use: legible over a white sky and over black tarmac
+     without painting a panel on either. */
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.8),
+    0 0 4px rgba(2, 5, 12, 0.9),
+    0 0 26px rgba(34, 211, 255, 0.55);
+  opacity: var(--k, 1);
+  white-space: nowrap;
+}
+
+/* THE LANDSCAPE PHONE GETS THE LINE LOWER, because its bottom row is not a
+   speedo — it is a 35px bar, and 104px of clearance was measured against a
+   dial that layout does not draw.
+
+   The cost of the mismatch was the whole point of the element. At 915x412 the
+   hint sat at y=289 with its bottom 69px clear of a band that starts at 369:
+   70 wasted pixels, and in exchange the line was printed straight across the
+   cars on the grid — which on a 412px-tall frame is most of the middle of the
+   picture. Nothing in the DOM could see it, since the cars are 3D, so the
+   overlap checks all passed while the shot photographed badly.
+
+   47px puts the line's bottom about 12px above the band on both short layouts
+   measured (915x412: band at 369, line ends 357; 844x390: band at 348, line
+   ends 335), in the strip of road under the cars and over the boost bar.
+
+   BOUNDED BY HEIGHT ALONE, so a tall narrow phone keeps the 104. Portrait at
+   412x915 has the same 35px bar but its thumb pads are in the bottom corners,
+   and dropping the line there would post it between BRAKE and DRIFT. */
+@media (max-height: 520px) {
+  .sg-ctr__hint {
+    transform: translateY(calc(-1 * (var(--sg-pad) + var(--sg-sab) + 47px)));
+  }
+}
+
+/* A short frame has no room between the numerals and the band, and the count
+   is the instrument that matters. Same call cheer.ts makes at the same height,
+   and made in CSS here because this element has no other state to consult. */
+@media (max-height: 380px) {
+  .sg-ctr__hint { display: none; }
 }
 
 /* ==========================================================================

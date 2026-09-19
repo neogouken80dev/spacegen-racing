@@ -93,6 +93,17 @@ export interface Hud {
    */
   setRound(info: RoundInfo | null): void
   /**
+   * Put the rocket-start hint up for this race's countdown, or don't.
+   *
+   * WHO DECIDES IS NOT THIS FILE. The HUD has no idea whether the player has
+   * seen a countdown before, whether their throttle is under their own thumb
+   * or what a profile is; game/main.ts owns all three and pushes the answer in
+   * the same way it pushes the round. Exactly the same contract as setRound:
+   * set it before the countdown, `false` draws nothing at all, and a race that
+   * is never told gets the countdown that shipped, byte for byte.
+   */
+  setStartHint(show: boolean): void
+  /**
    * Enter or leave the championship podium. Hides every racing instrument the
    * same way the finish card does -- there is no race under this one at all --
    * and puts up the three names, the three cars and the player's own result.
@@ -171,6 +182,17 @@ const SPLIT_ROWS = 4
  * line, which is the failure cheer.ts's header spends a paragraph on.
  */
 const ROUND_FADE = 1.4
+
+/**
+ * Seconds the rocket-start hint takes to leave once the lights go out.
+ *
+ * Much shorter than ROUND_FADE, and for the opposite reason. The round card
+ * names the race and is worth reading on the way past; this is an instruction
+ * about something whose window has just CLOSED. A hint still on screen telling
+ * a player to go on green a second after green is the kind of tutorial text
+ * that teaches people to stop reading tutorial text.
+ */
+const HINT_FADE = 0.35
 
 const RING_R = 52
 const RING_C = 2 * Math.PI * RING_R
@@ -513,6 +535,9 @@ class HudImpl implements Hud {
   private readonly roundName: HTMLElement
   private round: RoundInfo | null = null
   private roundT = 0
+  private readonly hintEl: HTMLElement
+  private hint = false
+  private hintT = 0
   private readonly podWrap: HTMLElement
   private readonly podRows: HTMLElement
   private readonly podYou: HTMLElement
@@ -779,6 +804,21 @@ class HudImpl implements Hud {
     this.roundName = div('sg-ctr__roundName', this.roundEl)
     this.roundEl.hidden = true
 
+    // --- THE ROCKET-START HINT ---------------------------------------------
+    // The one piece of teaching in the whole HUD, and it is here rather than in
+    // a tutorial screen because the thing it teaches can only be done in the
+    // three and a half seconds it is on screen for.
+    //
+    // BELOW the numerals, not above. The centre stack already stacks upward
+    // from the middle -- the round card takes the top, the count takes the
+    // centre -- and the count is 22vmin of italic display type, so anything
+    // sharing that band is either under it or fighting it. Below is also where
+    // the player's eyes already are: the car is in the bottom half of the
+    // frame and the start lights are on the gantry ahead.
+    this.hintEl = div('sg-ctr sg-ctr__hint', centre)
+    this.hintEl.textContent = 'GO ON GREEN FOR A ROCKET START'
+    this.hintEl.hidden = true
+
     // --- FINISH CEREMONY ---------------------------------------------------
     // Two pieces, deliberately at opposite ends of the frame so the middle --
     // where the car is, and the whole point of the shot -- stays empty.
@@ -977,6 +1017,22 @@ class HudImpl implements Hud {
     this.roundEl.style.setProperty('--k', '1')
   }
 
+  setStartHint(show: boolean): void {
+    this.hint = show
+    if (!show) {
+      this.hintT = 0
+      this.hintEl.hidden = true
+      return
+    }
+    // Pinned at full strength, run out by updateCentre once the race is live --
+    // the same treatment the round card gets, and for the same reason: on a
+    // software renderer at two frames a second a wall-clock timer started here
+    // would have expired before the first countdown frame was drawn.
+    this.hintT = HINT_FADE
+    this.hintEl.hidden = false
+    this.hintEl.style.setProperty('--k', '1')
+  }
+
   setPodium(info: PodiumInfo | null): void {
     const on = info !== null
     if (on !== this.podOn) {
@@ -1046,6 +1102,7 @@ class HudImpl implements Hud {
         // which on a software renderer takes ten wall seconds, since the HUD
         // clamps its own dt to 0.1 -- would freeze on screen for the whole shot.
         this.countT = 0; this.countEl.hidden = true
+        this.hintT = 0; this.hint = false; this.hintEl.hidden = true
         this.boostT = 0; this.boostEl.hidden = true
         this.splitT = 0; this.splitEl.hidden = true
         this.bannerT = 0; this.bannerEl.hidden = true
@@ -1632,6 +1689,27 @@ class HudImpl implements Hud {
       if (this.roundT > 0) {
         const k = Math.min(1, this.roundT / ROUND_FADE)
         this.roundEl.style.setProperty('--k', k.toFixed(3))
+      }
+    }
+
+    // the rocket-start hint -------------------------------------------------
+    // Same shape as the round card above, one flag lighter: there is nothing to
+    // rebuild, so it only has to be held through the countdown and run out
+    // after it. `this.hint` is cleared on the way out so a rematch cannot
+    // inherit it -- the host decides again, per race.
+    if (this.hint) {
+      if (state.phase === 'countdown') {
+        this.hintT = HINT_FADE
+      } else if (this.hintT > 0) {
+        this.hintT -= dt
+        if (this.hintT <= 0) {
+          this.hintT = 0
+          this.hintEl.hidden = true
+          this.hint = false
+        }
+      }
+      if (this.hintT > 0) {
+        this.hintEl.style.setProperty('--k', Math.min(1, this.hintT / HINT_FADE).toFixed(3))
       }
     }
 

@@ -427,7 +427,22 @@ describe('the AI', () => {
     //           55.00 -> 55.12s. Both say the corner got very slightly less
     //           helpful, which is the direction the 55s floor wants and is why
     //           the warning four entries up is not being broken here.
-    expect(avg).toBeCloseTo(54.820, 2)
+    //   54.35s  THE WHOLE ROSTER ACCELERATES 42% HARDER, and the standing
+    //           start was re-anchored to the green light. FASTER by 0.47s.
+    //           `derive.accelCurveGain` 2.4 -> 3.4 was asked for directly --
+    //           corner exits bogged -- and it is a multiplier on accelRate, so
+    //           it lands on all eight cars equally and on every corner exit of
+    //           the lap. A field that got out of slow corners 42% harder and
+    //           did NOT lap faster would mean the gain had not reached the
+    //           integrator.
+    //           The launch change rides along and is much the smaller half: it
+    //           moves what the AI does in the 3.6s BEFORE this clock starts,
+    //           so it reaches the lap time only through where each car is when
+    //           the flag drops. It is not separable from the gain by
+    //           inspection and is not claimed to be.
+    //           Note this is Rustfall, not Elkarim -- the 55s floor two
+    //           entries up is that circuit's and is not what this line pins.
+    expect(avg).toBeCloseTo(54.352, 2)
   })
 })
 

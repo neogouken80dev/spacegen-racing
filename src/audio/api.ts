@@ -45,6 +45,12 @@ export type SoundId =
   | 'guard' | 'ward'
   // --- race ----------------------------------------------------------------
   | 'countdown' | 'countdownGo' | 'lap' | 'lapFinal' | 'finish' | 'crack'
+  /**
+   * A jump start. The two GOOD grades of the standing start have no id of
+   * their own on purpose -- they speak the boost ladder, see LAUNCH_SOUND --
+   * but nothing in the catalogue means "your engine bogged", so this does.
+   */
+  | 'launchBog'
   // --- front end -----------------------------------------------------------
   | 'uiMove' | 'uiSelect' | 'uiBack' | 'uiStart'
 

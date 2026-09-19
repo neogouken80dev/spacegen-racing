@@ -248,6 +248,18 @@ interface ActRow {
   keyFallback?: string
   touch: string
   desc: string
+  /**
+   * False for a row that shares another row's control rather than having one
+   * of its own, so it is kept OUT of the keyboard legend.
+   *
+   * The legend is a key to the PICTURE: a swatch there is a promise that some
+   * cap on the diagram is painted that colour. The rocket start is a thing you
+   * do with the accelerate key at a particular moment, not a binding, so it
+   * belongs in the table of what every action does and nowhere near the
+   * colours. Listing it would put a second swatch on one key and make the
+   * player hunt the diagram for a cap that does not exist.
+   */
+  diagram?: boolean
 }
 
 const ACTS: ActRow[] = [
@@ -257,6 +269,16 @@ const ACTS: ActRow[] = [
     keys: ['accelerate'],
     touch: 'GAS pad',
     desc: 'Hold to open the throttle. With Auto-accelerate on you never touch it — the ship drives, you only steer.',
+  },
+  {
+    id: 'rocketStart',
+    name: 'Rocket start',
+    keys: ['accelerate'],
+    touch: 'GAS pad',
+    diagram: false,
+    desc: 'On the grid only: go the instant the lights turn green and you launch on a boost. '
+      + 'React fast for the big one, a little late for a smaller one — and go before green and '
+      + 'you bog down on the line. Needs Auto-accelerate off, so the throttle is yours.',
   },
   {
     id: 'brake',
@@ -1519,6 +1541,9 @@ class SettingsPanelImpl implements SettingsPanel {
     const leg = el('div', 'sgset-leg', this.kbView)
     for (let i = 0; i < ACTS.length; i++) {
       const a = ACTS[i]
+      // See ActRow.diagram: the legend is a key to the drawn keyboard, and a
+      // row that borrows another row's key has no cap of its own to point at.
+      if (a.diagram === false) continue
       const item = el('div', 'sgset-leg__i', leg)
       const sw = el('span', 'sgset-leg__sw', item)
       sw.style.setProperty('--c', COLOR[a.id] ?? 'var(--sg-cyan)')

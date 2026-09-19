@@ -11,9 +11,9 @@
  * oscillators -- so that the whole path (event, planner, voice limiter,
  * panner, bus, output) was exercised from the first run rather than waiting on
  * a hundred deliveries. That was the right way round, and the swap it was
- * built for has now happened: 40 of the 42 entries below play files cut from
+ * built for has now happened: 41 of the 43 entries below play files cut from
  * the Gamemaster Pro Sound Collection by `tools/build-sfx.mjs`, which records
- * the trim and loudness decision behind each one. The whole pack is ~340 kB.
+ * the trim and loudness decision behind each one. The whole pack is ~343 kB.
  *
  * TWO ENTRIES ARE STILL SYNTH, AND SHOULD STAY THAT WAY.
  *
@@ -43,6 +43,7 @@
  * not three stacked on top of each other 10 dB hot.
  */
 import type { ItemId } from '../sim/types'
+import { TUNING } from '../content/tuning'
 import type { SoundDef, SoundId, SynthRecipe } from './api'
 
 /**
@@ -142,6 +143,18 @@ export const CATALOGUE: Record<SoundId, SoundDef> = {
   finish: f('audio/sfx/finish.mp3', 0.75, 'sfx', 1.0, 1),
   // Cryostatic's lake giving way on lap 3. Loud, low and once.
   crack: f('audio/sfx/crack.mp3', 0.80, 'sfx', 2.0, 1),
+  /**
+   * The bog, and the only made sound in the pack: boost-2's own thruster --
+   * what a PERFECT start plays -- dropped a fifth and cut off. See the note in
+   * tools/build-sfx.mjs for why it is not one of the two power-downs.
+   *
+   * 0.55 rather than the 0.70 countdownGo carries, because it lands ON the GO
+   * every time (a jump start is early by definition) and this is the one sound
+   * in the game that is deliberately under another. The two are two octaves
+   * apart -- 46-342 Hz against 546-988 -- so being quieter does not make it
+   * inaudible, it makes it the floor instead of the fight.
+   */
+  launchBog: f('audio/sfx/launch-bog.mp3', 0.55, 'sfx', 1.0, 1),
 
   // --- front end -----------------------------------------------------------
   uiMove: f('audio/sfx/ui-move.mp3', 0.18, 'sfx', 0.04, 2, { vary: 0.04 }),
@@ -185,3 +198,27 @@ export const HIT_SOUND: Record<ItemId, SoundId> = {
 
 /** The boost ladder, indexed by drift tier. Clamped by the caller. */
 export const BOOST_SOUND: readonly SoundId[] = ['boost0', 'boost1', 'boost2', 'boost3']
+
+/**
+ * The standing start, by grade -- and two thirds of it is the boost ladder.
+ *
+ * A graded launch banks a REAL drift-tier boost (sim/race.ts applyLaunch), it
+ * just does not push a `boost` event to say so, which is why the mechanic was
+ * silent for months. So the honest sound for it is the sound that tier already
+ * makes everywhere else in the game: a player who has drifted knows what a
+ * tier-2 boost sounds like, and hearing it at the lights says "you just banked
+ * a Nova" in a vocabulary they have already been taught. Read from TUNING, so
+ * a retune of the launch tiers moves the sound with the boost rather than
+ * leaving the two describing different sizes of the same event.
+ *
+ * The jump start cannot borrow anything, because nothing in the game means
+ * "stalled on the grid". It has its own recording.
+ */
+const launchTier = (t: number): SoundId =>
+  BOOST_SOUND[t < 0 ? 0 : t > BOOST_SOUND.length - 1 ? BOOST_SOUND.length - 1 : t | 0]
+
+export const LAUNCH_SOUND: Record<'perfect' | 'good' | 'jump', SoundId> = {
+  perfect: launchTier(TUNING.boost.launchPerfectTier),
+  good: launchTier(TUNING.boost.launchGoodTier),
+  jump: 'launchBog',
+}

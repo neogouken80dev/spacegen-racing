@@ -277,6 +277,16 @@ const BEAM_RGB = makeRgb(0x35ff9e, 2.10)
 const BEAM_HOT = makeRgb(0xdaffef, 3.05)
 /** Booster ramp: same family as the boost pads that feed it. */
 const RAMP_RGB = makeRgb(0x9ce8ff, 1.55)
+/**
+ * A bogged start. `--sg-red`, the same hue ui/cheer.ts paints JUMP START in and
+ * the one colour no drift tier, no item and no pickup in this file uses -- so
+ * the only red at the exhaust of a stationary car is a penalty.
+ *
+ * Gain 0.9 rather than the 1.2-1.6 the rewards run at, and that is the whole
+ * point: it is UNDER the bloom threshold. A punishment that glows is a
+ * punishment that looks like a power-up from ten metres away.
+ */
+const BOG_RGB = makeRgb(0xff3b5e, 0.90)
 
 // ---------------------------------------------------------------------------
 // Module-scope scratch. Nothing below allocates during update().
@@ -912,6 +922,21 @@ class RacerFx {
   beamRing = 0
   /** Previous beamCharge, so a falling charge can read as cooling off. */
   prevBeam = 0
+
+  // --- the standing start ----------------------------------------------
+  /**
+   * How this racer's rocket start was graded: 0 none, 1 good, 2 perfect.
+   *
+   * Held for the whole race because it is the only way the plume can know. The
+   * sim says `boostSource === 'start'` and nothing more -- it has no field for
+   * the grade, and the grade only exists in the one-shot `launch` event -- so
+   * the colour of a launch plume is decided here, once, on the frame the event
+   * arrives, and read for the two seconds the boost then lasts.
+   *
+   * A jump start never sets it: it banks no boost at all, so there is no plume
+   * to colour.
+   */
+  launchGrade = 0
 
   // --- booster ramp ----------------------------------------------------
   /** 1 while airborne off a ramp; cleared on landing. */
@@ -1628,6 +1653,9 @@ class Vfx implements VfxSystem {
             )
           }
           break
+        case 'launch':
+          this.launchStart(fx, it.grade, hz, hy, q)
+          break
         case 'driftStart':
           this.ring(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06), SMOKE_RGB, 6.0, 0.30, 1.2, 5.0, true)
           fx.gatherAcc = 0; fx.gatherRing = 0; fx.coreAcc = 0
@@ -2038,7 +2066,7 @@ class Vfx implements VfxSystem {
     // ---- 2. BOOST plume (continuous, any source) -----------------------
     if (r.boostTime > 0 && r.boostMag > 0) {
       const b01 = clamp01(r.boostMag / 0.55)
-      this.boostColorOf(r, _rgb)
+      this.boostColorOf(r, fx, _rgb)
       // Off the tail, a fifth of a body-height up: the CAR's tail and the
       // CAR's up. The plume is the single largest continuous shape in the
       // game, and on a wall-ride it used to fire out of the vehicle's flank.
@@ -3727,13 +3755,35 @@ class Vfx implements VfxSystem {
   }
 
   /** Picks the plume colour for whatever is currently boosting this racer. */
-  private boostColorOf(r: RacerState, out: Float32Array): void {
+  private boostColorOf(r: RacerState, fx: RacerFx, out: Float32Array): void {
     let src: Float32Array
     switch (r.boostSource) {
       case 'pad': src = PAD_RGB; break
       case 'slipstream': src = SLIP_RGB; break
       case 'item': src = r.invincibleTime > 0 ? ITEM_RGB.overdriveCore : NITRO_RGB; break
-      case 'start': src = WHITE_RGB; break
+      case 'start': {
+        // THE LAUNCH PLUME, AND IT USED TO BE WHITE WHATEVER YOU DID.
+        //
+        // A flat white was the ONLY trace the rocket start left anywhere in
+        // the build, and it said nothing: the same flame for a reaction inside
+        // 250ms and for one that took half a second. It now takes the drift
+        // tier's own colour -- gold for a perfect start, ice cyan for a good
+        // one -- so the car burns the colour of the boost it actually banked,
+        // which is the colour the banner is printed in and the colour that
+        // tier's drift ring uses. Three channels, one fact.
+        //
+        // WHITE IS STILL THE FALLBACK, deliberately. `launchGrade` is written
+        // from a one-shot event, and a frame that misses the event (a replay
+        // seeked past it, a car whose first frames were culled) has a real
+        // boost with no grade attached; the shipped white is the right thing
+        // to draw then, rather than a colour that claims a grade.
+        if (fx.launchGrade === 0) { src = WHITE_RGB; break }
+        const t = fx.launchGrade === 2
+          ? TUNING.boost.launchPerfectTier : TUNING.boost.launchGoodTier
+        const ti = (t < 0 ? 0 : t > 3 ? 3 : t | 0) * 3
+        out[0] = DRIFT_RGB[ti]; out[1] = DRIFT_RGB[ti + 1]; out[2] = DRIFT_RGB[ti + 2]
+        return
+      }
       default: {
         // Drift / trick: infer the tier from the magnitude so the plume keeps
         // the colour of the tier that produced it.
@@ -3748,6 +3798,109 @@ class Vfx implements VfxSystem {
       }
     }
     out[0] = src[0]; out[1] = src[1]; out[2] = src[2]
+  }
+
+  /**
+   * THE STANDING START, GRADED — the one-shot the rocket start never had.
+   *
+   * Three states, and the whole job is that they are not three flavours of the
+   * same gesture. The two rewards are a boost burst in miniature, in their own
+   * tier's colour; the bog is a stumble, in a hue nothing else at this end of
+   * the car uses, with none of the reward vocabulary at all.
+   *
+   * WHY THIS IS SMALLER THAN boostBurst, WHICH IT OTHERWISE MIRRORS.
+   *
+   * Every one of these fires on a car that is STATIONARY, one car length in
+   * front of a chase camera that is also stationary, and up to eight of them
+   * land inside about half a second of each other. A drift cash-in gets a
+   * 3.6m flash and two shockwaves because it happens at 45 m/s with the world
+   * streaming past; the same budget spent here would be a wall of light over
+   * the grid for the two seconds before the race starts, which is exactly the
+   * frame in which the player is reading a countdown. So: a perfect start runs
+   * at roughly the tier-1 boost burst's spend, a good start at a third of
+   * that, and both are gone well inside the countdown they land in.
+   *
+   * The filled elements divide their tier's luminance back out through
+   * DRIFT_BODY_GAIN, for the same reason boostBurst does -- otherwise a gold
+   * perfect start is three times brighter than a cyan good one purely because
+   * of what colour it is, and the ladder stops being about the driving.
+   */
+  private launchStart(
+    fx: RacerFx, grade: 'perfect' | 'good' | 'jump',
+    hz: number, hy: number, q: number,
+  ): void {
+    // The exhaust, in the car's own frame. Same anchor boostBurst uses.
+    const eF = -hz * 1.08
+    const ex = gX(eF, 0, 0.35), ey = gY(eF, 0, 0.35), ez = gZ(eF, 0, 0.35)
+
+    if (grade === 'jump') {
+      fx.launchGrade = 0
+      /**
+       * THE BOG. A cough, not a burst.
+       *
+       * Smoke first and most of it, because smoke is what an engine that did
+       * not catch produces and because it is the one particle kind in this
+       * file that is DARK -- it subtracts from the frame where every reward
+       * adds to it. The handful of sparks are there to make it an event rather
+       * than a fade, and they fall (gravity -7) instead of flying, which is
+       * the opposite read from the rising fan a boost throws.
+       *
+       * No ring, no flash, no light claimed. Every one of those is a reward
+       * gesture in this file and the jump start gets none of them.
+       */
+      this.burst(
+        ex, ey, ez, dX(-1, 0, 0.55), dY(-1, 0, 0.55), dZ(-1, 0, 0.55),
+        Math.round(11 * q), 4.5, 0.9,
+        SMOKE_RGB, 3.4, 0.80, 0.34, K_SMOKE, 0.9, 1.6,
+      )
+      this.burst(
+        ex, ey, ez, dX(-1, 0, 0.2), dY(-1, 0, 0.2), dZ(-1, 0, 0.2),
+        Math.round(7 * q), 6.0, 0.7,
+        BOG_RGB, 1.0, 0.36, 0.10, K_SPARK, -7, 2.4,
+      )
+      return
+    }
+
+    const perfect = grade === 'perfect'
+    fx.launchGrade = perfect ? 2 : 1
+    const tRaw = perfect ? TUNING.boost.launchPerfectTier : TUNING.boost.launchGoodTier
+    const tier = tRaw < 0 ? 0 : tRaw > 3 ? 3 : tRaw | 0
+    const ti = tier * 3
+    _rgb[0] = DRIFT_RGB[ti]; _rgb[1] = DRIFT_RGB[ti + 1]; _rgb[2] = DRIFT_RGB[ti + 2]
+    const front = DRIFT_BODY_GAIN[tier]
+
+    // A ground front under the car, both grades. It reads as the deck taking
+    // the load, it is the one element that is unambiguously AT the vehicle
+    // rather than in the air in front of it, and lying flat it occludes none
+    // of the gantry the player is watching.
+    this.shockRing(
+      gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06),
+      _rgb, (perfect ? 0.40 : 0.24) * front, perfect ? 0.40 : 0.30,
+      1.2, perfect ? 7.0 : 4.4, true,
+    )
+    // ...and the sparks off the back, which is the whole of a good start.
+    this.burst(
+      ex, ey, ez, dX(-1, 0, 0.25), dY(-1, 0, 0.25), dZ(-1, 0, 0.25),
+      Math.round((perfect ? 22 : 9) * q), perfect ? 18 : 12, 0.55,
+      _rgb, 0.42, perfect ? 0.38 : 0.28, perfect ? 0.14 : 0.11, K_SPARK, -6, 1.8,
+    )
+    if (!perfect) return
+
+    // PERFECT ONLY, and this is the entire difference at a glance: an air
+    // front and a flash at the tail, so the top grade is doing two things the
+    // lower one is not rather than the same thing turned up. Both are held
+    // under the cash-in's numbers -- 0.34 against 0.48 on the ring, 0.34
+    // against 0.55 on the flash -- because nothing is moving yet.
+    this.shockRing(
+      pX(0, 0, 0.35), pY(0, 0, 0.35), pZ(0, 0, 0.35),
+      _rgb, 0.34 * front, 0.34, 0.9, 4.2, false,
+    )
+    this.flash(pX(0, 0, hy), pY(0, 0, hy), pZ(0, 0, hy), _rgb, 0.34 * front, 0.20, 0.55)
+    this.burst(
+      ex, ey, ez, dX(-1, 0, 0.3), dY(-1, 0, 0.3), dZ(-1, 0, 0.3),
+      Math.round(6 * q), 9, 0.8,
+      _rgb, 0.17 * front, 0.55, 0.36, K_SPRITE, 0.4, 2.4,
+    )
   }
 
   /** Boost activation: plume kick + ring shockwave, escalating hard by tier. */
@@ -5333,7 +5486,7 @@ class Vfx implements VfxSystem {
       const k = (0.30 + d01 * 0.16) * DRIFT_BODY_GAIN[dTier]
       _rgb2[0] *= k; _rgb2[1] *= k; _rgb2[2] *= k
     } else if (b01 > 0.05) {
-      this.boostColorOf(r, _rgb2)
+      this.boostColorOf(r, fx, _rgb2)
       const w = b01 * b01
       const k = 0.42 + w * 0.42
       _rgb2[0] = _rgb2[0] * k + w * 0.5

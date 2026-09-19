@@ -72,7 +72,13 @@ const CEIL_DB = -1.5
  */
 const KBPS = 96
 
-// name            folder                     source file                                    from   len   kbps
+// name            folder                     source file                                    from   len   kbps  rate
+//
+// `rate` is a PLAYBACK-RATE change applied before the trim maths: 0.55 means
+// the sample is played back at 55% speed, which drops it 10.4 semitones and
+// makes it 1/0.55 times as long. `from`/`len` stay in SOURCE seconds either
+// way, so the numbers in this table always describe the region of the original
+// file that was taken; only the output is longer. One entry uses it.
 const PACK = [
   // --- the boost ladder: climbs in size and in length --------------------
   ['boost-0',      'Sci-Fi', 'sci-fi_small_spaceship_jet_blast_02.wav',            0.10, 0.40],
@@ -129,6 +135,28 @@ const PACK = [
   ['finish',       'Sci-Fi', 'sci-fi_power_up_08.wav',                             0.00, 1.60],
   // Cryostatic's lake giving way. The largest, lowest thing in the pack.
   ['crack',        'Sci-Fi', 'sci-fi_explosion_05.wav',                            0.00, 1.60],
+  /**
+   * THE BOG. A jump start, and the only sound in the pack that is made rather
+   * than found.
+   *
+   * It is boost-2's OWN source -- the thruster a PERFECT start plays -- taken
+   * from the same point in the file and then dropped a fifth and stretched by
+   * `rate`, so what the player hears is literally the ignition they were
+   * reaching for, failing to catch. Nothing in the collection means "stalled":
+   * the two power-downs are an EMP hit and an EMP launch already, and giving
+   * this the EMP's voice would have it say something that did not happen.
+   *
+   * 0.28s of source at rate 0.55 is 0.51s out, deliberately shorter than the
+   * 0.80s bog it announces -- the sound is the engine failing, not the time
+   * spent stopped.
+   *
+   * IT HAS TO SHARE THE FRAME WITH countdown-go, every time, because a jump
+   * start fires BEFORE the lights by definition. Measured centroid per 120ms:
+   * countdown-go runs 546-988 Hz, this runs 46-38-229-342 Hz. They are a
+   * couple of octaves apart for the whole of the overlap, which is what keeps
+   * two sounds in one moment legible as two sounds.
+   */
+  ['launch-bog',   'Sci-Fi', 'sci-fi_vehicle_thrusters_engage_large_01.wav',        0.20, 0.28, undefined, 0.55],
 
   // --- front end ----------------------------------------------------------
   ['ui-move',      'User_Interface_Menu', 'ui_button_simple_click_06.wav',         0.00, 0.05],
@@ -169,17 +197,29 @@ function measure(args) {
  * a click on every play. 4ms in, and out over the last 45ms or a fifth of the
  * file, whichever is shorter.
  */
-function encode(src, dst, from, len, gainDb, kbps) {
-  const fadeOut = Math.max(0.012, Math.min(0.045, len * 0.22))
+function encode(src, dst, from, len, gainDb, kbps, rate = 1) {
+  // THE FADES ARE IN OUTPUT TIME, AND `len` IS IN SOURCE TIME. Identical while
+  // rate is 1, and not once it is not: a 0.28s trim played at 0.55 is 0.51s of
+  // audio, so a fade placed at `len - fadeOut` would fire 0.23s early and take
+  // the body of the sound with it.
+  const out = len / rate
+  const fadeOut = Math.max(0.012, Math.min(0.045, out * 0.22))
+  // The rate change goes FIRST so everything after it -- the gain, both fades
+  // -- is measured against the stretched signal. `aresample` puts the stream
+  // back to 48k for the encoder; without it the container claims the sample
+  // rate `asetrate` invented.
+  const af = []
+  if (rate !== 1) af.push(`asetrate=${Math.round(48000 * rate)}`, 'aresample=48000')
+  af.push(
+    `volume=${gainDb.toFixed(3)}dB`,
+    'afade=t=in:st=0:d=0.004',
+    `afade=t=out:st=${Math.max(0, out - fadeOut).toFixed(4)}:d=${fadeOut.toFixed(4)}`,
+  )
   execFileSync('ffmpeg', [
     '-v', 'error', '-y',
     '-ss', String(from), '-t', String(len), '-i', src,
     '-ac', '1', '-ar', '48000',
-    '-af', [
-      `volume=${gainDb.toFixed(3)}dB`,
-      'afade=t=in:st=0:d=0.004',
-      `afade=t=out:st=${Math.max(0, len - fadeOut).toFixed(4)}:d=${fadeOut.toFixed(4)}`,
-    ].join(','),
+    '-af', af.join(','),
     '-c:a', 'libmp3lame', '-b:a', `${kbps}k`,
     dst,
   ])
@@ -187,20 +227,25 @@ function encode(src, dst, from, len, gainDb, kbps) {
 
 let total = 0
 const report = []
-for (const [name, folder, file, from, len, kbps] of PACK) {
+for (const [name, folder, file, from, len, kbps, rate = 1] of PACK) {
   const src = join(SRC, folder, file)
   if (!existsSync(src)) { console.error(`MISSING SOURCE: ${src}`); process.exitCode = 1; continue }
   const dst = join(OUT, `${name}.mp3`)
 
   // Pass 1: how loud, and how peaky, is the trimmed region once it is mono?
-  const base = ['-v', 'error', '-ss', String(from), '-t', String(len), '-i', src, '-ac', '1', '-ar', '48000']
+  // MEASURED THROUGH THE RATE CHANGE, not around it. `asetrate` is a resample,
+  // so it moves both the peak and the RMS of the region being measured; taking
+  // the numbers off the untouched source would price the gain for a signal
+  // that is not the one being encoded.
+  const rateAf = rate !== 1 ? ['-af', `asetrate=${Math.round(48000 * rate)},aresample=48000`] : []
+  const base = ['-v', 'error', '-ss', String(from), '-t', String(len), '-i', src, '-ac', '1', '-ar', '48000', ...rateAf]
   const { peakDb, rmsDb } = measure(base)
   // Loudness target, clamped so the peak stays under the ceiling.
   const gainDb = Math.min(RMS_DB - rmsDb, CEIL_DB - peakDb).toFixed(3)
   const limitedByPeak = (CEIL_DB - peakDb) < (RMS_DB - rmsDb)
 
   // Pass 2: normalise, de-click, encode.
-  encode(src, dst, from, len, +gainDb, kbps ?? KBPS)
+  encode(src, dst, from, len, +gainDb, kbps ?? KBPS, rate)
   // MATCH THE LOUDNESS OF WHAT THE ENCODER PRODUCED, not of what went in.
   //
   // A lossy encoder discards energy, so the decoded RMS lands below the target
@@ -219,7 +264,7 @@ for (const [name, folder, file, from, len, kbps] of PACK) {
       // Never at the cost of the ceiling: a correction that would clip is
       // capped, and the file is then treated as peak-limited like any other.
       const capped = Math.min(finalGain, CEIL_DB - peakDb)
-      encode(src, dst, from, len, capped, kbps ?? KBPS)
+      encode(src, dst, from, len, capped, kbps ?? KBPS, rate)
       finalGain = capped
     }
   }
