@@ -28,8 +28,9 @@ import {
   type MockWorld, type StorageLike,
 } from '../src/net/mock'
 import {
-  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS,
+  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, SERIES_LENGTHS,
   type LobbyRoom, type LobbySummary, type RaceStartPacket,
+  type SeriesLength, type SeriesPlan, type SeriesStanding,
 } from '../src/net/types'
 import {
   AVATARS, DEFAULT_AVATAR_ID, PRICES, RANKS, STARTER_IDS, canBuy, ownsAvatar, priceOf,
@@ -54,6 +55,19 @@ afterEach(() => {
   for (const t of junk.splice(0)) t.dispose()
   vi.useRealTimers()
 })
+
+/**
+ * A single race, in the shape a lobby is now created in.
+ *
+ * `create` used to take `trackId` and `laps`; it takes a `SeriesPlan`, and a
+ * one-off is a plan of length 1. Every test below that only wanted "a lobby on
+ * Rustfall" says so through this, which is also the thing it is asserting --
+ * that a single race goes down the series path and comes out looking like a
+ * single race.
+ */
+function single(trackId: string, laps = 3): SeriesPlan {
+  return { length: 1, trackIds: [trackId], laps }
+}
 
 /** A world with its clock stopped, so a test ticks it by hand. */
 function stillWorld(seed: number): MockWorld {
@@ -438,7 +452,7 @@ async function pair(seed: number): Promise<{
 
   const room = unwrap(await settle(host.create({
     name: 'Test lobby', region: 'eu-west', maxPlayers: 8,
-    private: false, trackId: 'rustfall', laps: 3,
+    private: false, series: single('rustfall'),
   }), 10))
   const guestRoom = unwrap(await settle(guest.join(room.id), 10))
   // Let the guest's simulated ICE finish, so the room is startable.
@@ -519,8 +533,8 @@ describe('host semantics', () => {
     expect(world.lobbies.get(room.id)!.members.every((m) => m.ready)).toBe(true)
 
     const changed = unwrap(await settle(host.setTrack('neonspire', 5), 10))
-    expect(changed.trackId).toBe('neonspire')
-    expect(changed.laps).toBe(5)
+    expect(changed.series.trackIds[changed.round]).toBe('neonspire')
+    expect(changed.series.laps).toBe(5)
     // A ready you gave for one track is not a ready for another -- the host's
     // own included.
     expect(changed.members.every((m) => !m.ready)).toBe(true)
@@ -578,7 +592,7 @@ describe('host semantics', () => {
     const svc = track(createMockLobbyService({ world, failureRate: 0, latencyScale: 0 }))
     const huge = unwrap(await settle(svc.create({
       name: 'Everybody', region: 'apac', maxPlayers: 99,
-      private: false, trackId: 'rustfall', laps: 3,
+      private: false, series: single('rustfall'),
     }), 10))
     // A lobby of ten would silently drop two people at the start line, because
     // buildPacket stops filling at GRID_SIZE.
@@ -587,7 +601,7 @@ describe('host semantics', () => {
 
     const tiny = unwrap(await settle(svc.create({
       name: 'Just me', region: 'apac', maxPlayers: 0,
-      private: false, trackId: 'rustfall', laps: 3,
+      private: false, series: single('rustfall'),
     }), 10))
     expect(tiny.maxPlayers).toBe(LOBBY_MIN_PLAYERS)
   })
@@ -597,7 +611,7 @@ describe('host semantics', () => {
     const svc = track(createMockLobbyService({ world, failureRate: 0, latencyScale: 0 }))
     const mine = unwrap(await settle(svc.create({
       name: 'Mine', region: 'sa', maxPlayers: 4,
-      private: false, trackId: 'rustfall', laps: 3,
+      private: false, series: single('rustfall'),
     }), 10))
     const rows = unwrap(await settle(svc.list(), 10))
     const row = rows.find((r) => r.id === mine.id)!
@@ -620,7 +634,7 @@ describe('host semantics', () => {
     }))
     const room = unwrap(await settle(host.create({
       name: 'Friends only', region: 'na-west', maxPlayers: 4,
-      private: true, trackId: 'cryostatic', laps: 3,
+      private: true, series: single('cryostatic'),
     }), 10))
     expect(room.joinCode).toMatch(/^[A-Z0-9]{4}$/)
 
@@ -855,7 +869,7 @@ describe('names', () => {
     await settle(acct.load(), 10)
     unwrap(await settle(acct.setName('Vinceroy'), 10))
     const room = unwrap(await settle(lobby.create({
-      name: '', region: 'oce', maxPlayers: 8, private: false, trackId: 'halcyon', laps: 3,
+      name: '', region: 'oce', maxPlayers: 8, private: false, series: single('halcyon'),
     }), 10))
     const mine = room.members.find((m) => m.playerId === room.localId)!
     expect(mine.name).toBe('Vinceroy')
@@ -1065,5 +1079,186 @@ describe('the one place the app gets its services from', () => {
     const orphan = first.list()
     await vi.advanceTimersByTimeAsync(2000)
     expect((await orphan).ok).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A SERIES
+// ---------------------------------------------------------------------------
+//
+// The properties a screenshot of a standings table cannot check: that round 2
+// is a different circuit from round 1, that a driver who walked out in round 2
+// is still on the table with a zero beside their name, that the points are the
+// ones game/circuit.ts awards and not a second table that happens to look like
+// it, and -- the one that matters most -- that a lobby of length 1 behaves
+// EXACTLY as a single race did before any of this existed.
+
+/** Host and guest in a room running a series of `length`. */
+async function series(seed: number, length: SeriesLength, trackIds: string[]) {
+  const world = stillWorld(seed)
+  const opts = { world, failureRate: 0, latencyScale: 0 }
+  const host = track(createMockLobbyService(opts))
+  const guest = track(createMockLobbyService({
+    ...opts,
+    identity: { id: 'p-guest', name: 'Guestley', avatarId: DEFAULT_AVATAR_ID },
+  }))
+  const rooms: (LobbyRoom | null)[] = []
+  const starts: RaceStartPacket[] = []
+  host.onRoom = (r) => rooms.push(r)
+  host.onStart = (p) => starts.push(p)
+  const room = unwrap(await settle(host.create({
+    name: 'Series', region: 'eu-west', maxPlayers: 8, private: false,
+    series: { length, trackIds, laps: 3 },
+  }), 10))
+  unwrap(await settle(guest.join(room.id), 10))
+  await vi.advanceTimersByTimeAsync(10)
+  return { world, host, guest, room, rooms, starts }
+}
+
+/** Race a round: everybody readies, the host starts, the host banks a table. */
+async function raceRound(
+  host: ReturnType<typeof createMockLobbyService>,
+  guest: ReturnType<typeof createMockLobbyService>,
+  table: SeriesStanding[],
+): Promise<RaceStartPacket> {
+  await settle(host.setReady(true), 10)
+  await settle(guest.setReady(true), 10)
+  const packet = unwrap(await settle(host.start(), 10))
+  await settle(host.endRound(table), 10)
+  return packet
+}
+
+describe('a series runs its rounds', () => {
+  it('advances round by round, on a different circuit each time', async () => {
+    const ids = ['rustfall', 'halcyon', 'aetherion']
+    const { host, guest } = await series(3131, 3, ids)
+
+    const seen: string[] = []
+    for (let n = 0; n < 3; n++) {
+      const room = host.current()!
+      expect(room.round, `round counter before round ${n + 1}`).toBe(n)
+      const packet = await raceRound(host, guest, [])
+      expect(packet.round).toBe(n)
+      expect(packet.seriesLength).toBe(3)
+      seen.push(packet.trackId)
+    }
+    expect(seen).toEqual(ids)
+    // The series is over and stops there rather than walking off the end of
+    // the running order.
+    const done = host.current()!
+    expect(done.round).toBe(3)
+    expect(done.series.length).toBe(3)
+  })
+
+  it('reopens the room between rounds with everybody unready', async () => {
+    const { host, guest } = await series(3232, 3, ['rustfall', 'halcyon', 'aetherion'])
+    await raceRound(host, guest, [])
+    const room = host.current()!
+    // A ready you gave for Elkarim is not a ready for Halcyon Bay -- the same
+    // rule setTrack applies, arriving between rounds.
+    expect(room.members.every((m) => !m.ready)).toBe(true)
+    expect(room.status).not.toBe('racing')
+  })
+
+  it('carries the table into the next round’s packet', async () => {
+    const { host, guest } = await series(3333, 3, ['rustfall', 'halcyon', 'aetherion'])
+    const table: SeriesStanding[] = [
+      { playerId: 'p-guest', name: 'Guestley', avatarId: null, points: 15, finishes: [1], isLocal: false },
+    ]
+    await raceRound(host, guest, table)
+    // Round 2's packet carries what round 1 scored. Every client folds its
+    // round into the SAME table, which is the only way eight clients stay on
+    // one series.
+    const next = await raceRound(host, guest, table)
+    expect(next.round).toBe(1)
+    expect(next.standings).toHaveLength(1)
+    expect(next.standings[0].points).toBe(15)
+  })
+
+  it('will not put the same circuit in two rounds', async () => {
+    const { host } = await series(3434, 3, ['rustfall', 'halcyon', 'aetherion'])
+    // Round 1 to a circuit already sitting in round 3 is refused: "no repeats"
+    // is a promise about `trackIds`, and setTrack edits one round.
+    const clash = await settle(host.setTrack('aetherion', 3), 10)
+    expect(clash.ok).toBe(false)
+    // Somewhere else entirely is fine, and only round 1 moves.
+    const ok = unwrap(await settle(host.setTrack('neonspire', 3), 10))
+    expect(ok.series.trackIds).toEqual(['neonspire', 'halcyon', 'aetherion'])
+  })
+
+  it('says which round it is on every directory row', async () => {
+    const { host, guest, world } = await series(3535, 5,
+      ['rustfall', 'halcyon', 'aetherion', 'cryostatic', 'emberfall'])
+    const localId = host.current()!.localId
+    const mine = async (): Promise<LobbySummary> =>
+      unwrap(await settle(host.list(), 10)).find((r) => r.hostId === localId)!
+
+    const before = await mine()
+    expect(before.seriesLength).toBe(5)
+    expect(before.seriesRound).toBe(1)
+    expect(before.trackId).toBe('rustfall')
+
+    await raceRound(host, guest, [])
+    const after = await mine()
+    expect(after.seriesRound).toBe(2)
+    // And the circuit a row advertises is the one COMING, not the one raced.
+    expect(after.trackId).toBe('halcyon')
+    expect(world.lobbies.size).toBeGreaterThan(0)
+  })
+})
+
+describe('a lobby of length 1 is a single race and nothing else', () => {
+  it('advertises no round counter and ends after one race', async () => {
+    const { host, guest } = await series(4141, 1, ['rustfall'])
+    const row = unwrap(await settle(host.list(), 10))
+      .find((r) => r.hostId === host.current()!.localId)!
+    // The two fields a browser row reads to decide whether to say anything at
+    // all. A length of 1 is the signal to say nothing.
+    expect(row.seriesLength).toBe(1)
+    expect(row.seriesRound).toBe(1)
+
+    const packet = await raceRound(host, guest, [])
+    // Byte for byte the packet a single race produced before series existed,
+    // plus the three fields that say it is one round of one.
+    expect(packet.round).toBe(0)
+    expect(packet.seriesLength).toBe(1)
+    expect(packet.standings).toEqual([])
+    expect(packet.trackId).toBe('rustfall')
+    expect(packet.laps).toBe(3)
+
+    const after = host.current()!
+    expect(after.round).toBe(1)
+    expect(after.series.length).toBe(1)
+    // Nothing to show: no round was scored into a table, because nobody
+    // handed one over.
+    expect(after.standings).toEqual([])
+  })
+
+  it('fills a short or malformed plan rather than starting a round with no circuit', async () => {
+    const world = stillWorld(4242)
+    const svc = track(createMockLobbyService({ world, failureRate: 0, latencyScale: 0 }))
+    const room = unwrap(await settle(svc.create({
+      name: 'Sloppy', region: 'oce', maxPlayers: 4, private: false,
+      // Three rounds asked for, one circuit named, and a duplicate and an id
+      // this build does not have thrown in.
+      series: { length: 3, trackIds: ['neonspire', 'neonspire', 'not-a-track'], laps: 3 },
+    }), 10))
+    expect(room.series.length).toBe(3)
+    expect(room.series.trackIds).toHaveLength(3)
+    expect(new Set(room.series.trackIds).size).toBe(3)
+    expect(room.series.trackIds[0]).toBe('neonspire')
+  })
+
+  it('only ever offers the four lengths the contract names', async () => {
+    const world = stillWorld(4343)
+    const svc = track(createMockLobbyService({ world, failureRate: 0, latencyScale: 0 }))
+    // A length nobody should be able to ask for falls back to a single race
+    // rather than to a series that never ends.
+    const room = unwrap(await settle(svc.create({
+      name: 'Seven', region: 'oce', maxPlayers: 4, private: false,
+      series: { length: 7 as SeriesLength, trackIds: ['rustfall'], laps: 3 },
+    }), 10))
+    expect(SERIES_LENGTHS).toContain(room.series.length)
+    expect(room.series.length).toBe(1)
   })
 })

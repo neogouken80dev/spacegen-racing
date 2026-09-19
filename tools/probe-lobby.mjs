@@ -23,10 +23,18 @@
  *      check it is to hold a cursor still and wait.
  *
  *   3. A FAILED REQUEST PRODUCES A VISIBLE ERROR, NOT AN EMPTY LIST. Two ways
- *      in: `?net=live`, where `lobbyService()` throws by design and the screen
- *      must catch it rather than take the front end down; and `?net=mock`,
- *      whose 6% failure dice is rolled by hammering Refresh until one comes up
- *      -- and the rows have to STILL BE THERE when it does.
+ *      in: `?net=live`, whose directory this harness answers with a flat
+ *      refusal (the real one is a Netlify Function, and there is not one here)
+ *      so the screen must render an error rather than an empty list; and
+ *      `?net=mock`, whose 6% failure dice is rolled by hammering Refresh until
+ *      one comes up -- and the rows have to STILL BE THERE when it does.
+ *
+ *      `?net=live` USED TO THROW OUT OF `lobbyService()` and this probe leant
+ *      on that. It no longer does -- net/live.ts exists -- so the failure is
+ *      now an ordinary refused request, which is a better test of the same
+ *      screen. The endpoint is stubbed below rather than left to 404, because
+ *      a 404 logs a console error and this harness treats console errors as
+ *      faults.
  *
  *   4. START IS DISABLED WITH A REASON. Read as text, in all three of its
  *      blocked states, plus the one state where it is genuinely available.
@@ -39,12 +47,41 @@
  *   6. A LOCKED AVATAR CANNOT BE EQUIPPED. Pressed, and the worn portrait has
  *      to be the same one afterwards.
  *
+ *   7. THE TAB STRIP IS MEASURED, NOT LOOKED AT. The profile is three pages
+ *      now, and the two ways a tab strip fails on a phone are geometric: it
+ *      wraps to a second row -- which draws the selected tab's underline
+ *      through the middle of the block instead of on the rule -- or a tab
+ *      comes out under the 44px a thumb needs. Both are read off rectangles.
+ *      styles.css turns the strip into a vertical RAIL under `max-height:
+ *      560px`, so which shape to demand depends on the viewport.
+ *
+ *   8. THE CAR IS ONE VALUE, AND BOTH SCREENS WRITE IT. This is the whole
+ *      point of the restructure and it is the thing a photograph is worst at:
+ *      either screen looks correct whichever id it happens to be showing. So
+ *      a chassis is changed in the profile and read back off the garage's
+ *      card, then changed on the garage's card and read back off the
+ *      profile's tile, with `frontEnd.selectedChassisId` as the referee.
+ *      Checked here too: `__GARAGE_PREVIEW__` still belongs to the GARAGE's
+ *      preview and not to the profile's, which is the second such widget in
+ *      the process and would otherwise have taken the handle three other
+ *      probes measure the garage with.
+ *
+ *   9. AN UNSAVED NAME SURVIVES A TAB PRESS. tabs.ts hides an off panel with
+ *      `hidden` so nothing inside it stays focusable, which is right and
+ *      which would have eaten a half-typed name had the field been put on a
+ *      page rather than beside them.
+ *
+ *  10. OFFLINE STOPS WHAT THE ACCOUNT HOLDS AND NOTHING ELSE. A portrait
+ *      refuses; a chassis, which is a device key that costs nothing, does
+ *      not. One boolean in ui/profile.ts separates them and the screen looks
+ *      the same either way round.
+ *
  * FOUR PAGE LOADS, BECAUSE `?net=` IS READ ONCE PER LOAD.
  *
- *   perfect   the photography, the cursor test, create, room, profile. No
- *             failure dice, so a shot is the same every run.
+ *   perfect   the photography, the cursor test, create, room, all three
+ *             profile pages. No failure dice, so a shot is the same every run.
  *   mock      the two failure paths, which need the dice.
- *   live      the "this build has no backend" path, which is deterministic.
+ *   live      the "the directory will not answer" path, which is deterministic.
  *   blocked   perfect again, with localStorage throwing on property access --
  *             a private window -- for the `ephemeral` banner, which must be a
  *             DIFFERENT sentence from `offline`.
@@ -72,6 +109,14 @@ const server = createServer(async (req, res) => {
     if (p === '/api/leaderboard') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ rows: [], rank: 0 }))
+      return
+    }
+    // The signalling endpoint, refusing. See note 3 in the header: this probe
+    // is about what the SCREEN does with a backend that will not answer, and
+    // tools/probe-netcode.mjs is where the real handler is exercised.
+    if (p === '/api/signal') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({ ok: false, error: 'server' }))
       return
     }
     if (p === '/' || p.endsWith('/')) p += 'index.html'
@@ -249,12 +294,23 @@ const readRoom = (page) => page.evaluate(() => {
   }
 })
 
+/**
+ * The identity card, plus the PORTRAITS page.
+ *
+ * SCOPED TO ONE PAGE ON PURPOSE. The profile is three grids of `.sgpf__tile`
+ * now, so a bare `querySelectorAll('.sgpf__tile')` counts thirty-five things
+ * and reports the roster as broken -- which is exactly what it did the first
+ * time this probe met the tabbed screen. Everything below that is about
+ * portraits reads inside `[data-page="portrait"]`; the tabs and the other two
+ * pages have `readPages` to themselves.
+ */
 const readProfile = (page) => page.evaluate(() => {
   const vis = (sel) => {
     const e = document.querySelector(sel)
     return !!e && !e.hidden && getComputedStyle(e).display !== 'none'
   }
-  const tiles = [...document.querySelectorAll('.sgpf__tile')]
+  const P = '.sgpf__page[data-page="portrait"] '
+  const tiles = [...document.querySelectorAll(P + '.sgpf__tile')]
   return {
     worn: document.querySelector('.sgpf__portrait')?.dataset.avatar ?? '',
     wornName: document.querySelector('.sgpf__wearing')?.textContent ?? '',
@@ -263,11 +319,11 @@ const readProfile = (page) => page.evaluate(() => {
     offline: vis('.sgpf__flag--offline'),
     ephemeral: vis('.sgpf__flag--ephemeral'),
     credits: document.querySelector('.sgpf__stat--credits .sgpf__statV')?.textContent ?? '',
-    count: document.querySelector('.sgpf__pickCount')?.textContent ?? '',
-    nameMsg: document.querySelector('.sgpf__msg:not(.sgpf__msg--pick)')?.textContent ?? '',
-    nameErr: document.querySelector('.sgpf__msg:not(.sgpf__msg--pick)')?.dataset.name ?? '',
-    pickMsg: document.querySelector('.sgpf__msg--pick')?.textContent ?? '',
-    refused: document.querySelector('.sgpf__msg--pick')?.dataset.refused ?? '',
+    count: document.querySelector(P + '.sgpf__pickCount')?.textContent ?? '',
+    nameMsg: document.querySelector('.sgpf__msg--name')?.textContent ?? '',
+    nameErr: document.querySelector('.sgpf__msg--name')?.dataset.name ?? '',
+    pickMsg: document.querySelector(P + '.sgpf__msg--pick')?.textContent ?? '',
+    refused: document.querySelector(P + '.sgpf__msg--pick')?.dataset.refused ?? '',
     tiles: tiles.length,
     owned: tiles.filter((t) => t.dataset.status === 'owned').length,
     buyable: tiles.filter((t) => t.dataset.status === 'buyable').length,
@@ -278,6 +334,80 @@ const readProfile = (page) => page.evaluate(() => {
       t.querySelector('.sgpf__art')?.dataset.art === 'fallback').length,
   }
 })
+
+/**
+ * The tab strip and all three pages at once.
+ *
+ * The strip geometry is read as RECTANGLES rather than trusted to a class,
+ * because the two failures worth catching here are both geometric and both
+ * invisible in a still: a strip that has silently wrapped onto a second row
+ * (which puts the selected tab's underline through the middle of the block
+ * instead of on the rule -- styles.css has the same note about the results
+ * screen), and a tab under the 44px a thumb needs.
+ */
+const readPages = (page) => page.evaluate(() => {
+  const tabs = [...document.querySelectorAll('.sgpf .sg-tab')].map((b) => {
+    const r = b.getBoundingClientRect()
+    return {
+      id: b.dataset.tab ?? '',
+      label: b.textContent ?? '',
+      on: b.getAttribute('aria-selected') === 'true',
+      x: Math.round(r.left), y: Math.round(r.top),
+      w: Math.round(r.width), h: Math.round(r.height),
+    }
+  })
+  const pages = {}
+  for (const el of document.querySelectorAll('.sgpf__page')) {
+    const tiles = [...el.querySelectorAll('.sgpf__tile')]
+    const panel = el.closest('.sg-tabpanel')
+    pages[el.dataset.page ?? '?'] = {
+      shown: !!panel && !panel.hidden && getComputedStyle(panel).display !== 'none',
+      count: el.querySelector('.sgpf__pickCount')?.textContent ?? '',
+      lede: el.querySelector('.sgpf__lede')?.textContent ?? '',
+      now: el.querySelector('.sgpf__now')?.textContent ?? '',
+      msg: el.querySelector('.sgpf__msg--pick')?.textContent ?? '',
+      refused: el.querySelector('.sgpf__msg--pick')?.dataset.refused ?? '',
+      tiles: tiles.length,
+      locked: tiles.filter((t) => t.dataset.status === 'locked').length,
+      on: tiles.find((t) => t.classList.contains('is-on'))?.dataset.item ?? '',
+      // The tick and the tag are the two non-colour channels on the marker.
+      onTag: tiles.find((t) => t.classList.contains('is-on'))
+        ?.querySelector('.sgpf__tileTag')?.textContent ?? '',
+      sideways: el.scrollWidth > el.clientWidth + 1,
+    }
+  }
+  const canvas = document.querySelector('.sgpf__prev canvas')
+  return {
+    tabs,
+    rows: new Set(tabs.map((t) => t.y)).size,
+    cols: new Set(tabs.map((t) => t.x)).size,
+    selected: tabs.find((t) => t.on)?.id ?? '',
+    pages,
+    name: document.querySelector('.sgpf__in')?.value ?? '',
+    preview: canvas
+      ? { w: Math.round(canvas.getBoundingClientRect().width),
+        h: Math.round(canvas.getBoundingClientRect().height) }
+      : null,
+  }
+})
+
+/**
+ * Press a tab the way a player does, by its id rather than by its label.
+ *
+ * WAITS FOR THE PANEL, NOT FOR A DURATION. tabs.ts hides an off page with the
+ * `hidden` attribute, so every tile on it is `display: none` and a click on
+ * one fails with "element is not visible" after thirty seconds of Playwright
+ * retrying -- which is how a tab switch that has not landed yet shows up:
+ * as a timeout in whatever ran next, several lines away from the cause.
+ */
+async function selectTab(page, id) {
+  await page.locator(`.sgpf .sg-tab[data-tab="${id}"]`).click()
+  await page.waitForFunction((t) => {
+    const panel = document.querySelector(`.sgpf__page[data-page="${t}"]`)?.closest('.sg-tabpanel')
+    return !!panel && !panel.hidden && getComputedStyle(panel).display !== 'none'
+  }, id, { timeout: 8000 })
+  await page.waitForTimeout(180)
+}
 
 /**
  * THE INVARIANT, checked wherever a room is read.
@@ -317,9 +447,16 @@ async function checkFit(page, where) {
 console.log(`\nLOBBY PROBE — ${KIND} ${VIEWPORT.width}x${VIEWPORT.height}\n`)
 
 // ---------------------------------------------------------------------------
-// PASS 1 — ?net=live: the build has no backend, and that must be a SCREEN
+// PASS 1 — ?net=live against a directory that refuses, and that must be a
+// SCREEN rather than an empty list or a dead front end.
+//
+// This pass used to be "the build has no backend", because `lobbyService()`
+// threw for the live profile. net/live.ts exists now, so what it tests is the
+// case that actually happens in the field -- the endpoint answering with a
+// refusal -- and the harness's own server is what refuses. The real endpoint
+// is exercised by tools/probe-netcode.mjs, which mounts it for real.
 // ---------------------------------------------------------------------------
-console.log('-- ?net=live: no backend in this build ------------------------')
+console.log('-- ?net=live: the directory refuses ---------------------------')
 {
   const { ctx, page } = await open('live')
   await page.locator('.sg-title__multi .sg-btn--violet').click()
@@ -331,22 +468,27 @@ console.log('-- ?net=live: no backend in this build ------------------------')
   if (!st.error) note('?net=live shows no error state at all')
   if (st.rows !== 0) note('?net=live somehow produced rows')
   if (st.listVisible) note('?net=live left an empty list up instead of an error')
-  if (!/not available|unavailable|not implemented/i.test(st.errorText)) {
-    note('the unavailable-backend message does not say what is wrong: ' + st.errorText)
+  if (!/not available|unavailable|not implemented|did not answer|could not/i.test(st.errorText)) {
+    note('the failed-directory message does not say what is wrong: ' + st.errorText)
   }
-  // ...and nothing else on the screen offers to do something it cannot.
+  // The controls STAY LIVE, and that is the right answer for this state --
+  // which is the one thing that changed when `live` stopped being a throw. A
+  // build with no backend at all could fairly grey the whole bar out; a
+  // directory that did not answer THIS time is a thing to retry, and a filter
+  // the player cannot touch while they wait reads as a broken screen rather
+  // than a quiet one. What must not happen is a Retry that is missing.
   const live = await page.evaluate(() => [
     ...document.querySelectorAll(
       '.sglb--browser .sglb__bar input, .sglb--browser .sglb__bar select,'
       + '.sglb--browser .sglb__bar button, .sglb--browser .sglb__foot .sg-btn'),
   ].filter((e) => e.disabled === false).map((e) => e.className || e.tagName))
   say(`controls still live: ${live.length ? live.join(' | ') : 'none'}`)
-  if (live.length) {
-    note(`the browser has no backend but ${live.length} control(s) are still live: `
-      + live.join(', '))
-  }
+  const retry = await page.evaluate(() =>
+    [...document.querySelectorAll('.sglb--browser button')]
+      .some((b) => !b.hidden && !b.disabled && /retry|refresh/i.test(b.textContent || '')))
+  if (!retry) note('a directory that refused offers the player no way to try again')
   say('shot ' + await shoot(page, 'browser-no-backend'))
-  await checkFit(page, 'no-backend browser')
+  await checkFit(page, 'refused-directory browser')
   await ctx.close()
 }
 
@@ -680,7 +822,14 @@ await page.waitForTimeout(300)
   checkStartAgrees(r, 'host not ready')
   if (r.startDisabled !== true) note('Start was available while the host was not ready')
   if (!/ready|connect/i.test(r.why)) note(`the block does not say what it is waiting on: "${r.why}"`)
-  if (!r.alone) note('a one-person lobby does not say the grid will be filled with AI')
+  // ONLY WHEN THE ROOM IS ACTUALLY A ONE-PERSON ROOM. The world ticks every
+  // 1.6s and a bot can walk in during the 600-2200ms the local link takes to
+  // come up, at which point the advisory is correctly absent and this assertion
+  // was failing the probe for the mock doing its job. Which side of that race
+  // a run lands on moves with the seed.
+  if (r.members.length === 1 && !r.alone) {
+    note('a one-person lobby does not say the grid will be filled with AI')
+  }
   if (!r.hostControls) note('the host has no circuit controls')
   await checkFit(page, 'room')
   say('shot ' + await shoot(page, 'room-start-blocked'))
@@ -770,6 +919,51 @@ await page.waitForTimeout(900)
   if (!back) note('there is no way back into the lobby you are still a member of')
   if (mine === 0) note('your own lobby is not marked as yours in the directory')
   say('shot ' + await shoot(page, 'browser-in-a-lobby'))
+}
+
+// --- 11. CHANGING YOUR CAR WHILE YOU ARE SITTING IN A LOBBY ----------------
+//
+// ui/lobby.ts publishes the loadout ONCE, from `enterRoom`, which was exactly
+// right while the garage was the only way to choose one: you walked through
+// it on the way in and could not reach it again without leaving. The profile
+// is reachable from a button on the lobby browser's own head, so "joined in
+// the Solaire, went and picked the Bulwark" is now an ordinary thing to do --
+// and the room would go on showing the Solaire to seven other people, and the
+// grid in `RaceStartPacket` would be built from it.
+//
+// The fix is `publishLoadout()` in ui/frontend.ts and this is the only thing
+// that can see it: the member row is somebody ELSE's view of your choice, and
+// a screenshot of the profile is right either way. We are still a member of
+// the lobby created above -- that is what the block before this just proved.
+{
+  await goto(page, 'profile')
+  await page.waitForTimeout(700)
+  await selectTab(page, 'vehicle')
+  const pick = await page.evaluate(() => {
+    const tiles = [...document.querySelectorAll('.sgpf__page[data-page="vehicle"] .sgpf__tile')]
+    const t = tiles.find((x) => !x.classList.contains('is-on'))
+    return t ? { id: t.dataset.item, name: t.querySelector('.sgpf__tileName')?.textContent ?? '' } : null
+  })
+  if (!pick) {
+    note('no other chassis to switch to while in a lobby')
+  } else {
+    await page.locator(`.sgpf__tile[data-chassis="${pick.id}"]`).click()
+    await page.waitForTimeout(600)
+    await goto(page, 'room')
+    await page.waitForTimeout(1200)
+    const r = await readRoom(page)
+    const me = r.members.find((m) => m.me)
+    say(`picked ${pick.name} in the profile; the room now shows "${me?.car ?? '(no row)'}"`)
+    if (!me) note('the room lost the local member while the profile was open')
+    else if (!me.car.includes(pick.name)) {
+      note(`the room still publishes "${me.car}" after the profile chose ${pick.name}`)
+    }
+    say('shot ' + await shoot(page, 'room-loadout-followed'))
+  }
+  await goto(page, 'lobby')
+  // Same reason as the block above: a cursor left sitting on a row pins it.
+  await page.mouse.move(6, 6)
+  await page.waitForTimeout(1500)
 }
 
 // ---------------------------------------------------------------------------
@@ -911,6 +1105,161 @@ await page.waitForTimeout(900)
   say('shot ' + await shoot(page, 'profile'))
 }
 
+// --- 7. THE THREE PAGES, PHOTOGRAPHED AND MEASURED -------------------------
+//
+// A tab rail is the easiest thing in a phone layout to get wrong, and the two
+// ways it goes wrong are both geometry rather than appearance: it wraps to a
+// second row (which draws the selected tab's underline through the middle of
+// the block rather than on the rule beneath it), or a tab drops under the
+// 44px a thumb needs. Both are read off rectangles here. The strip is
+// horizontal on a desk and in portrait, and styles.css turns it into a
+// vertical RAIL under `max-height: 560px` -- which a landscape phone is -- so
+// which shape to demand is a function of the viewport, not a constant.
+const RAIL = LANDSCAPE || VIEWPORT.height <= 560
+{
+  const first = await readPages(page)
+  say(`strip: ${first.tabs.length} tabs, ${first.rows} row(s), ${first.cols} column(s)`
+    + ` — ${RAIL ? 'rail expected' : 'strip expected'}`)
+  if (first.tabs.length !== 3) note(`the profile has ${first.tabs.length} tabs, expected 3`)
+  if (first.tabs.some((t) => !t.id)) note('a tab has no data-tab — nothing can address it')
+  if (RAIL) {
+    if (first.cols !== 1) note(`the rail is ${first.cols} columns wide, so it is not a rail`)
+  } else if (first.rows !== 1) {
+    note(`the tab strip wrapped onto ${first.rows} rows at ${VIEWPORT.width}px`)
+  }
+  for (const t of first.tabs) {
+    if (t.h < 44) note(`tab "${t.label}" is ${t.h}px tall — under the 44px thumb floor`)
+  }
+
+  for (const id of ['portrait', 'vehicle', 'pilot']) {
+    await selectTab(page, id)
+    const r = await readPages(page)
+    const p = r.pages[id]
+    if (r.selected !== id) note(`pressing the ${id} tab selected "${r.selected}"`)
+    if (!p) { note(`there is no ${id} page`); continue }
+    if (!p.shown) note(`the ${id} page is selected and not visible`)
+    // Exactly one panel at a time: `hidden` on the others is what keeps their
+    // buttons out of the focus walk, and a stylesheet can defeat it.
+    const alsoOn = Object.entries(r.pages).filter(([k, v]) => k !== id && v.shown)
+    if (alsoOn.length) note(`the ${id} page is up and so is ${alsoOn.map(([k]) => k).join(', ')}`)
+    if (p.sideways) note(`the ${id} page scrolls sideways`)
+    if (!p.count) note(`the ${id} page never says what is owned`)
+    if (!p.on) note(`the ${id} page marks nothing as in use`)
+    if (!p.onTag) note(`the ${id} page's marker is a colour with no word beside it`)
+    say(`${id}: ${p.tiles} tiles, ${p.locked} locked, in use "${p.on}" (${p.onTag})`)
+    say(`  "${p.count}"`)
+    if (id !== 'portrait') {
+      // The two rosters that are free say so, rather than leaving the
+      // question of what is locked unanswered -- see paintLoadout().
+      if (p.locked !== 0) note(`the ${id} page has ${p.locked} locked tiles and no shop`)
+      if (!/unlocked/i.test(p.count)) note(`the ${id} page does not say that nothing is locked`)
+      if (!p.now) note(`the ${id} page does not describe what is selected`)
+    }
+    if (id === 'vehicle') {
+      if (!r.preview) note('the vehicle page has no preview canvas')
+      else {
+        say(`  preview canvas ${r.preview.w}x${r.preview.h}`)
+        if (r.preview.w < 80 || r.preview.h < 60) {
+          note(`the vehicle preview is ${r.preview.w}x${r.preview.h} — collapsed`)
+        }
+      }
+    } else if (r.preview) {
+      // The context is allowed to exist for ONE page of one screen.
+      note(`the ${id} page is up and a preview canvas is still alive`)
+    }
+    await checkFit(page, 'profile/' + id)
+    say('shot ' + await shoot(page, 'profile-' + id))
+  }
+}
+
+// --- 8. ONE SELECTION, TWO SCREENS -----------------------------------------
+//
+// The whole point of the restructure. A screenshot of either screen looks
+// right whichever value it is showing; the only way to catch two ids that
+// disagree is to change one in one place and read it in the other, both ways
+// round, with the front end's own getter as the referee in between.
+{
+  await selectTab(page, 'vehicle')
+  const started = await page.evaluate(() => window.__GAME__.frontEnd.selectedChassisId)
+  const other = await page.evaluate((cur) =>
+    [...document.querySelectorAll('.sgpf__page[data-page="vehicle"] .sgpf__tile')]
+      .map((t) => t.dataset.item).find((id) => id !== cur), started)
+  if (!other) {
+    note('the vehicle page offers only one chassis — nothing to change to')
+  } else {
+    await page.locator(`.sgpf__tile[data-chassis="${other}"]`).click()
+    await page.waitForTimeout(300)
+    const fe = await page.evaluate(() => window.__GAME__.frontEnd.selectedChassisId)
+    const r = await readPages(page)
+    say(`profile picked ${other}: front end says ${fe}, tile marked "${r.pages.vehicle.on}"`)
+    if (fe !== other) note(`the profile changed a tile and the front end still says ${fe}`)
+    if (r.pages.vehicle.on !== other) note('the profile did not mark the chassis it just set')
+
+    // ...and the garage is showing the same car, without having been told.
+    await goto(page, 'garage')
+    await page.waitForTimeout(700)
+    const garage = await page.evaluate(() => ({
+      lit: document.querySelector('.sg-col--chassis .sg-card.is-sel')?.dataset.chassis ?? '',
+      // SCOPED TO THE GARAGE. The track screen's briefing reuses
+      // `.sg-detail__name` and comes first in the DOM, so the bare selector
+      // reads an empty div until somebody has opened the track list.
+      name: document.querySelector('.sg-screen--garage .sg-detail__name')?.textContent ?? '',
+      // THE DEBUG HANDLE STILL BELONGS TO THE GARAGE. There are two of these
+      // widgets now and garagePreview.ts publishes the handle from its
+      // constructor, so the later one would take it over -- and probe-garage,
+      // probe-pilots and probe-vehicle would all be measuring a hidden box.
+      // `live` is true only between a show() and its hide(), so it separates
+      // the two without waiting on a frame count.
+      dbgLive: window.__GARAGE_PREVIEW__?.debug()?.live ?? null,
+      dbgChassis: window.__GARAGE_PREVIEW__?.debug()?.chassisId ?? '',
+    }))
+    say(`garage: card ${garage.lit} "${garage.name}", preview handle live=${garage.dbgLive}`
+      + ` on ${garage.dbgChassis}`)
+    if (garage.lit !== other) note(`the garage still has ${garage.lit} selected, not ${other}`)
+    if (garage.dbgLive !== true) {
+      note('__GARAGE_PREVIEW__ is not live on the garage screen — a second preview took the handle')
+    }
+    if (garage.dbgChassis !== other) {
+      note(`__GARAGE_PREVIEW__ is showing ${garage.dbgChassis}, not ${other}`)
+    }
+
+    // The other direction: choose in the garage, read it in the profile.
+    await page.locator(`.sg-card[data-chassis="${started}"]`).click()
+    await page.waitForTimeout(300)
+    await goto(page, 'profile')
+    await page.waitForTimeout(500)
+    await selectTab(page, 'vehicle')
+    const back = await readPages(page)
+    say(`garage picked ${started}: profile tile marked "${back.pages.vehicle.on}"`)
+    if (back.pages.vehicle.on !== started) {
+      note(`the profile shows ${back.pages.vehicle.on} after the garage chose ${started}`)
+    }
+  }
+}
+
+// --- 9. A HALF-TYPED NAME SURVIVES A TAB PRESS -----------------------------
+//
+// tabs.ts hides an off panel with the `hidden` attribute -- deliberately, so
+// nothing inside it stays focusable -- which would have taken an unsaved name
+// field away and brought it back stamped over if the field had been put on a
+// page. It is on the identity card instead, and this is the assertion that
+// says so; it cannot be seen in a photograph of either tab.
+{
+  const real = await page.evaluate(() => document.querySelector('.sgpf__in').value)
+  await page.locator('.sgpf__in').fill('Half Typed')
+  await selectTab(page, 'vehicle')
+  await selectTab(page, 'pilot')
+  await selectTab(page, 'portrait')
+  const kept = await page.evaluate(() => document.querySelector('.sgpf__in').value)
+  say(`unsaved name across three tab presses: "${kept}"`)
+  if (kept !== 'Half Typed') note(`a tab press ate an unsaved name ("${kept}")`)
+  await page.locator('.sgpf__in').fill(real)
+}
+
+// Everything below drives the PORTRAITS page, so it has to be the one up: the
+// other two pages are `hidden`, and a hidden tile is not clickable.
+await selectTab(page, 'portrait')
+
 // --- 6. A LOCKED AVATAR CANNOT BE EQUIPPED ---------------------------------
 {
   const before = await readProfile(page)
@@ -940,8 +1289,48 @@ await page.waitForTimeout(900)
   id)
   if (!armed) note('a buy happened on one press — a mis-tap now costs credits')
   say('shot ' + await shoot(page, 'profile-buy-armed'))
+
+  // NOTHING GOES BETWEEN THE TWO PRESSES OF THE ACTUAL PURCHASE.
+  //
+  // The arm disarms itself after four seconds -- the product's own behaviour,
+  // and the reason the only control in the game that spends credits is safe
+  // to leave lying around. A full-page screenshot of this build under
+  // swiftshader measures 2.4-2.9s, so putting the shot above BETWEEN the two
+  // presses was a race against that timer: about one run in three the window
+  // had closed, the "second" press armed the tile afresh, the wait below then
+  // watched THAT arm expire, and the probe reported a purchase that had never
+  // been asked for. Re-arming on demand narrowed the race without closing it.
+  //
+  // So the shot and the purchase stop sharing a window. Pressing ANY other
+  // tile disarms (every path through `pressAvatar` starts with `disarm`), so
+  // pressing the worn portrait puts the screen in a known, unarmed state and
+  // answers "Already wearing ..." -- and the pair below then runs 160ms
+  // apart, nowhere near four seconds. The two-press rule itself was already
+  // proved by `armed` above; this part is about the money.
+  await page.locator(`.sgpf__tile[data-avatar="${before.worn}"]`).click()
+  await page.waitForTimeout(350)
   await page.locator(`.sgpf__tile[data-avatar="${id}"]`).click()
-  await page.waitForTimeout(900)
+  await page.waitForTimeout(160)
+  await page.locator(`.sgpf__tile[data-avatar="${id}"]`).click()
+  // WAIT FOR THE ANSWER, NOT FOR A DURATION. The mock's latency is bimodal on
+  // purpose and its slow mode reaches ~2.2s, so a fixed 900ms read this tile
+  // while the purchase was still in flight and reported "buying an avatar cost
+  // nothing" about a buy that had not happened yet. Which arm of the
+  // distribution a given call draws moves with the world's seed, so the same
+  // assertion passed and failed depending on how many lobbies the directory
+  // happened to mint first -- a flake that says nothing about the feature.
+  await page.waitForFunction((a) => {
+    const t = document.querySelector(`.sgpf__tile[data-avatar="${a}"]`)
+    if (!t || t.classList.contains('is-armed')) return false
+    // "Buying…" is the IN-FLIGHT state and it is not an answer. Waiting only
+    // for the confirm to disarm caught the request on its way out, which is
+    // how this read back "cost nothing" about a purchase that had not been
+    // charged yet.
+    const msg = document.querySelector(
+      '.sgpf__page[data-page="portrait"] .sgpf__msg--pick')?.textContent ?? ''
+    return !/buying/i.test(msg)
+  }, id, { timeout: 12000 }).catch(() => note('the buy never came back'))
+  await page.waitForTimeout(200)
   const after = await readProfile(page)
   say(`bought ${id}: credits ${before.credits} -> ${after.credits}, worn ${after.worn}`)
   say(`  "${after.pickMsg}"`)
@@ -1029,8 +1418,33 @@ console.log('\n-- ?net=mock: the failure dice -------------------------------')
   const mine = await m.evaluate(() => document.querySelector('.sgpf__in').value)
   let gotOffline = false
   for (let i = 0; i < 140 && !gotOffline; i++) {
+    // THE FIELD CAN GO DEAD UNDER THIS LOOP, and then both of the lines below
+    // are aimed at a disabled control and Playwright retries them for thirty
+    // seconds before the run dies with no idea why. `load()` re-rolls the
+    // connection on every entry to the screen, so an iteration can leave the
+    // ACCOUNT offline -- which disables the name field and the Claim button,
+    // correctly, because nothing can be claimed without a server -- without
+    // this loop having seen the `offline` NameError it is here to catch.
+    // Re-entering the screen re-rolls the connection, which is the contract's
+    // own documented way back from offline and what the banner's Try again
+    // button does.
+    if (await m.evaluate(() =>
+      document.querySelector('.sgpf__namerow .sg-btn')?.disabled === true)) {
+      await goto(m, 'lobby')
+      await goto(m, 'profile')
+      await m.waitForTimeout(400)
+      continue
+    }
     await m.locator('.sgpf__in').fill(mine)
-    await m.locator('.sgpf__namerow .sg-btn').click()
+    // CLAIM IS DISABLED WHILE A CLAIM IS IN FLIGHT, and under ?net=mock one
+    // takes 110-1100ms. Clicking straight into the next iteration hit a
+    // button that was still busy with the last one, and Playwright then waited
+    // its full thirty seconds for a control that only comes back when the
+    // request lands. Wait for it, and let a click that loses the race be
+    // retried by the loop rather than fail the probe.
+    await m.locator('.sgpf__namerow .sg-btn:not([disabled])')
+      .waitFor({ timeout: 8000 }).catch(() => {})
+    await m.locator('.sgpf__namerow .sg-btn').click({ timeout: 4000 }).catch(() => {})
     await m.waitForTimeout(80)
     await m.waitForFunction(() => {
       const el = document.querySelector('.sgpf__msg:not(.sgpf__msg--pick)')
@@ -1068,6 +1482,37 @@ console.log('\n-- ?net=mock: the failure dice -------------------------------')
       if (p.nameDisabled !== true) note('an offline profile still offers a live name field')
       if (p.ephemeral) note('offline and ephemeral were shown together with storage working')
       say('shot ' + await shoot(m, 'profile-offline'))
+
+      // 10. OFFLINE STOPS WHAT THE ACCOUNT HOLDS, AND NOTHING ELSE.
+      //
+      // A portrait belongs to the server: it is bought there and worn there,
+      // so with the server out of reach it must refuse, and the block above
+      // and the `locked` test both prove it does. A CHASSIS does not: it is a
+      // localStorage key this device owns, it costs nothing, and the garage
+      // will change it with the account server on fire. Both presses go
+      // through the same `refuse()` in ui/profile.ts and are separated only
+      // by its `held` argument -- which is precisely the kind of boolean that
+      // is written the wrong way round and never noticed, because the screen
+      // looks identical either way.
+      await selectTab(m, 'vehicle')
+      const was = await m.evaluate(() => window.__GAME__.frontEnd.selectedChassisId)
+      const alt = await m.evaluate((cur) =>
+        [...document.querySelectorAll('.sgpf__page[data-page="vehicle"] .sgpf__tile')]
+          .map((t) => t.dataset.item).find((id) => id !== cur), was)
+      if (!alt) {
+        note('no second chassis to try while offline')
+      } else {
+        await m.locator(`.sgpf__tile[data-chassis="${alt}"]`).click()
+        await m.waitForTimeout(300)
+        const got = await m.evaluate(() => window.__GAME__.frontEnd.selectedChassisId)
+        const pg = await readPages(m)
+        say(`  offline chassis change ${was} -> ${got}: "${pg.pages.vehicle.msg}"`)
+        if (got !== alt) {
+          note('an offline ACCOUNT blocked a chassis change the account does not hold')
+        }
+        say('shot ' + await shoot(m, 'profile-offline-vehicle'))
+      }
+      await selectTab(m, 'portrait')
     }
   }
   if (!offlineBanner) note('never reached the offline account state in 90 profile loads')

@@ -215,8 +215,12 @@ export interface LobbySummary {
   /** Private lobbies are listed but need the join code. They are NOT hidden:
    *  a friend who was given the code still has to find the row. */
   private: boolean
+  /** The circuit coming next -- round 1's for a lobby that has not started. */
   trackId: string
   laps: number
+  /** 1 for a single race. A browser row says "Round 2 of 5" from these two. */
+  seriesLength: SeriesLength
+  seriesRound: number
   status: LobbyStatus
   /**
    * Round-trip to the HOST, milliseconds, or null while it is being measured.
@@ -238,7 +242,14 @@ export interface LobbyMember {
   pilotId: string
   ready: boolean
   isHost: boolean
-  /** To the host. The host's own row is always 0. */
+  /**
+   * Round trip TO THE HOST, published by the host and read by everybody.
+   *
+   * So the HOST's row reads 0 for every reader, including guests -- not the
+   * reader's own row. Getting that backwards photographs perfectly and is
+   * wrong: a guest would see itself at 0 and the host at its own latency,
+   * which inverts who the room is waiting for.
+   */
   pingMs: number | null
   /** True while their peer connection is still coming up, or has dropped. */
   connecting: boolean
@@ -252,8 +263,14 @@ export interface LobbyRoom {
   private: boolean
   /** Shown to the host so they can pass it on. Null on a public lobby. */
   joinCode: string | null
-  trackId: string
-  laps: number
+  series: SeriesPlan
+  /**
+   * Rounds already finished. 0 before the first race, `series.length` when the
+   * series is over, so `series.trackIds[round]` is the circuit coming next.
+   */
+  round: number
+  /** Empty until the first round has been scored. */
+  standings: readonly SeriesStanding[]
   maxPlayers: number
   status: LobbyStatus
   members: readonly LobbyMember[]
@@ -262,13 +279,83 @@ export interface LobbyRoom {
   localId: string
 }
 
+// ---------------------------------------------------------------------------
+// Series
+// ---------------------------------------------------------------------------
+
+/**
+ * A LOBBY RUNS A SERIES, AND A SINGLE RACE IS A SERIES OF ONE.
+ *
+ * There is no separate "circuit lobby". Modelling one-offs and championships as
+ * two shapes would give every screen, every packet and every scoring path two
+ * cases to get right, and the two would drift -- which is exactly what happened
+ * to single-player, where circuit mode had to grow its own grid generator
+ * because the single-race one answered differently for every car the player
+ * might be in (see the long comment in main.ts's startRace).
+ *
+ * So `length: 1` is a normal race, and everything downstream reads the same
+ * fields. The UI is free to hide the round counter when there is one round.
+ *
+ * LENGTHS ARE 1, 3, 5 OR 8 and that is a design call, not a technical limit.
+ * Eight is the full Grand Circuit and runs about forty minutes -- a real
+ * commitment to ask of eight strangers, and the reason single-player's circuit
+ * can be saved and resumed while an online one cannot. Three and five are what
+ * people actually finish together.
+ */
+export const SERIES_LENGTHS = [1, 3, 5, 8] as const
+export type SeriesLength = (typeof SERIES_LENGTHS)[number]
+
+export interface SeriesPlan {
+  length: SeriesLength
+  /**
+   * The circuits, in running order. Exactly `length` of them, no repeats.
+   *
+   * FIXED WHEN THE LOBBY IS CREATED, NOT DRAWN PER ROUND. Everyone can see
+   * what they signed up for, a player deciding whether to join can judge the
+   * whole commitment, and -- the part that actually matters -- the running
+   * order does not have to be agreed over the wire between rounds, which is
+   * one fewer thing for a peer-to-peer room to disagree about.
+   */
+  trackIds: readonly string[]
+  /** Laps per round. One value for the series: a 3-lap opener and a 7-lap
+   *  finale is a fine idea and a different feature. */
+  laps: number
+}
+
+/** One driver's line in the series table, between rounds and at the end. */
+export interface SeriesStanding {
+  playerId: string | null
+  name: string
+  avatarId: string | null
+  points: number
+  /** Finishing position per round played, 1-8, or 0 for a round they missed. */
+  finishes: readonly number[]
+  isLocal: boolean
+}
+
+/**
+ * WHAT HAPPENS WHEN SOMEBODY LEAVES MID-SERIES, written down because it is the
+ * question a series raises that a single race does not.
+ *
+ * Their slot keeps racing under AI, and they keep scoring -- zero for the
+ * rounds they miss, since `finishes` records a 0 and the points table pays
+ * nothing for it. They are NOT removed from the standings: a table that
+ * silently drops a driver rewrites the history of the rounds already raced,
+ * and the player who beat them in round 1 should keep having beaten them.
+ *
+ * If they come back, they take their own slot again and score normally from
+ * that round on. The slot is theirs for the whole series.
+ *
+ * A HOST WHO LEAVES IS DIFFERENT and is the unavoidable cost of peer-to-peer:
+ * the room has no server to outlive them. The series ends, and the standings
+ * as they stand are shown rather than discarded.
+ */
 export interface CreateLobbyOptions {
   name: string
   region: RegionId
   maxPlayers: number
   private: boolean
-  trackId: string
-  laps: number
+  series: SeriesPlan
 }
 
 export interface LobbyFilter {
@@ -351,6 +438,11 @@ export interface RaceStartPacket {
   localPlayerId: string
   trackId: string
   laps: number
+  /** 0-based index of this round within the series. */
+  round: number
+  seriesLength: SeriesLength
+  /** The table going into this round. Empty on round 0. */
+  standings: readonly SeriesStanding[]
   /** Feeds `SimConfig.seed`. Every client must use this and nothing else. */
   seed: number
   grid: readonly MultiplayerSlot[]
@@ -478,8 +570,32 @@ export interface LobbyService {
   onRoom: (room: LobbyRoom | null) => void
   /** The host pressed Start. Every client gets this, host included. */
   onStart: (packet: RaceStartPacket) => void
-  /** A human-readable reason the room ended under the player. */
-  onClosed: (reason: 'hostLeft' | 'kicked' | 'error') => void
+  /**
+   * A human-readable reason the room ended under the player.
+   *
+   * `unreachable` EXISTS BECAUSE IT IS THE COMMONEST PEER-TO-PEER FAILURE and
+   * folding it into `error` tells the player nothing they can act on. Between a
+   * tenth and a fifth of connections will not traverse NAT without a TURN
+   * relay this project does not yet have; when that happens the player deserves
+   * that sentence rather than a spinner or a shrug. `detail` carries it.
+   */
+  onClosed: (reason: 'hostLeft' | 'kicked' | 'unreachable' | 'error', detail?: string) => void
+  /**
+   * The transport for the round currently starting, or null outside a race.
+   *
+   * The lobby owns the peer mesh -- it built it to run the room -- so the race
+   * borrows it rather than dialling its own. That is also why a series works at
+   * all: the mesh OUTLIVES a round, and only the per-round lockstep state is
+   * torn down between them.
+   */
+  transport(): RaceTransport | null
+  /**
+   * The round is over. Advances the series, banks the standings, disposes the
+   * round's lockstep state (not the mesh), clears readies and reopens the room.
+   *
+   * Host calls it with the result; guests get the new room through `onRoom`.
+   */
+  endRound(standings: readonly SeriesStanding[]): Promise<void>
   dispose(): void
 }
 
@@ -499,8 +615,42 @@ export interface RaceTransport {
   /** Inputs from a peer, for a frame that may be ahead of the local one. */
   onInput: (playerId: string, frame: number, packed: number) => void
   onHash: (playerId: string, frame: number, hash: string) => void
-  /** A peer's link died. The sim substitutes AI for their slot. */
+  /**
+   * A peer's WIRE died. This is a fact about the network, not an instruction
+   * to the sim -- see `onRoundDrop`, which is the one the race acts on.
+   */
   onDropped: (playerId: string) => void
+  /**
+   * The room has AGREED that a peer's slot becomes AI, starting at `aiFromFrame`.
+   *
+   * THE FRAME IS THE WHOLE POINT AND THE FIRST CUT OMITTED IT. Every client
+   * must hand that slot to `stepAI` on exactly the same frame: substitute one
+   * frame apart and the two clients make a different number of draws from the
+   * AI's rng, their streams part company, and the drop CAUSES the desync it was
+   * meant to survive. Measured during development -- it presents as a netcode
+   * bug and is a missing integer.
+   *
+   * `aiFromFrame` is one past the last frame that peer was heard for, which is
+   * safe by construction: a client can only have stepped a frame it held every
+   * input for, so nobody has stepped past it. No hold-the-last-input fill is
+   * needed, and a player whose wifi dies mid-corner finishes the corner on
+   * their own steering before the AI takes the wheel.
+   */
+  onRoundDrop: (playerId: string, aiFromFrame: number) => void
+  /**
+   * The clients have diverged, detected from the hashes above.
+   *
+   * THERE IS NO SUCH THING AS A SMALL DESYNC in a deterministic sim: a 1e-4
+   * difference in yaw becomes a different line, then a collision on one client
+   * and not the other, then a different finishing order. The thing that
+   * diverges IS the result. So a desync voids the round rather than being
+   * papered over -- and with `SeriesPlan`, papering over it would write the lie
+   * into rounds 3, 4 and 5 as well.
+   *
+   * It does not end the SERIES. The peers are fine; eight people should not
+   * lose their evening over one bad round.
+   */
+  onDesync: (frame: number) => void
   /** Worst round trip in the room right now, for the HUD's connection pip. */
   readonly worstPingMs: number
   dispose(): void

@@ -19,6 +19,7 @@
  * styles.css. update() feeds both and never asks which is on screen.
  */
 import './styles.css'
+import './series.css'
 import type { ItemId, RaceState, RacerState } from '../sim/types'
 import type { Track } from '../sim/track'
 import { ITEMS, ITEM_ORDER } from '../content/items'
@@ -72,6 +73,15 @@ export interface PodiumLine {
 export interface PodiumInfo {
   lines: PodiumLine[]
   /**
+   * What series this crowned, over "CHAMPIONSHIP".
+   *
+   * Defaults to the Grand Circuit's, because that was the only series when
+   * this card was built. A lobby passes its own -- "3-ROUND SERIES" -- since
+   * the eight-round Grand Circuit is a specific thing with a specific running
+   * order and a three-round lobby is not it.
+   */
+  eyebrow?: string
+  /**
    * The line naming where the PLAYER finished. Always present, including when
    * they are on the podium -- losing has to look like something, and the
    * player has to be able to find themselves either way.
@@ -80,6 +90,57 @@ export interface PodiumInfo {
   /** The top two cannot be separated; say so rather than crowning one. */
   tied: boolean
   canSkip: boolean
+}
+
+/**
+ * WHY A LOCKSTEP RACE IS NOT MOVING, IN THE PLAYER'S WORDS.
+ *
+ * Deterministic lockstep means everybody waits for the slowest, so a race with
+ * one late peer in it does not slow down -- it STOPS, with the cars parked
+ * mid-corner and every other part of the UI still running. That is
+ * indistinguishable from the game having crashed, and net/lockstep.ts's stall
+ * policy exists entirely to stop it being: "a race that silently freezes is
+ * the one outcome with no explanation available to the person looking at it."
+ * This is where the explanation goes.
+ *
+ * IT IS A PROJECTION OF `LockstepRunner`, NOT A COPY OF IT. Everything here
+ * comes straight off the runner -- `verdict`, `waitingFor`, `waitingToLoad` --
+ * and the HUD's whole job is to turn those three into one sentence. Deciding
+ * anything (how long is too long, who counts as waiting, whether a name has
+ * earned an announcement) belongs to the policy, which is tested on fake
+ * timers with no browser; a HUD that made any of those calls would be a second
+ * stall policy with no tests and a worse view of the facts.
+ */
+export interface NetStatus {
+  /**
+   * What the runner is doing.
+   *
+   * `desync` and `ejected` are both "the round is over" and are deliberately
+   * two words rather than one: a desync voids the round FOR EVERYBODY, and an
+   * ejection means the round carried on perfectly well without you. See
+   * `RunnerVerdict` in net/lockstep.ts, which makes the same distinction for
+   * the same reason.
+   */
+  verdict: 'racing' | 'waiting' | 'desync' | 'ejected'
+  /**
+   * Who we are blocked on, by display name.
+   *
+   * EMPTY IS A REAL AND COMMON STATE. The runner only fills this once the
+   * announce threshold has passed (300ms), so an ordinary hiccup is a
+   * `waiting` verdict with nobody named -- and the right thing to draw for it
+   * is nothing at all. A banner that flashed for a fifth of a second on every
+   * jitter would read as the UI being broken rather than the network.
+   */
+  waitingFor: readonly string[]
+  /**
+   * They have never sent anything: still loading the circuit, not lagging.
+   *
+   * A DIFFERENT SENTENCE, because it is a different situation with a different
+   * deadline behind it -- twenty seconds rather than five, and nothing wrong
+   * with anybody. "Waiting for Ada" and "Waiting for Ada to load" tell the
+   * player two different things about whether to keep waiting.
+   */
+  loading: boolean
 }
 
 export interface Hud {
@@ -109,6 +170,16 @@ export interface Hud {
    * and puts up the three names, the three cars and the player's own result.
    */
   setPodium(info: PodiumInfo | null): void
+  /**
+   * What the wire is doing, or `null` for a race with no wire.
+   *
+   * SAFE TO CALL EVERY FRAME AND CHEAP TO CALL EVERY FRAME. game/main.ts reads
+   * the runner once per rendered frame and pushes the answer; the work is one
+   * string comparison unless the sentence actually changed, which is the same
+   * contract `setFinish` takes. `null` is the single-player and single-race
+   * case and draws nothing at all -- byte for byte the HUD that shipped.
+   */
+  setNetStatus(info: NetStatus | null): void
   /** The podium's own skip control. Separate from `skipButton` because the two
    *  leave different phases and wiring one button to both is how a skip ends
    *  up firing in the wrong one. */
@@ -378,6 +449,32 @@ function setText(node: HTMLElement, value: string): void {
   if (node.textContent !== value) node.textContent = value
 }
 
+/**
+ * One line, from a `NetStatus`. Exported so a test can read every branch
+ * without a DOM, which is the only way the grammar gets checked at all: a
+ * screenshot of a stall shows one of these and says nothing about the other
+ * five.
+ *
+ * '' MEANS DRAW NOTHING, and it is the answer for two of the four verdicts.
+ * `racing` is the ordinary case. `waiting` with nobody named is a stall that
+ * has not yet lasted `STALL_ANNOUNCE_MS`, which is the runner saying "this is
+ * still inside the ordinary jitter" -- and 300ms of banner is worse than the
+ * 300ms of stall it describes.
+ */
+export function netSentence(info: NetStatus): string {
+  if (info.verdict === 'desync') return 'ROUND VOID — THE RACE CAME APART'
+  if (info.verdict === 'ejected') return 'DROPPED FROM THE ROUND'
+  if (info.verdict !== 'waiting') return ''
+  const who = info.waitingFor
+  if (who.length === 0) return ''
+  const tail = info.loading ? ' TO LOAD' : ''
+  if (who.length === 1) return `WAITING FOR ${who[0].toUpperCase()}${tail}`
+  if (who.length === 2) {
+    return `WAITING FOR ${who[0].toUpperCase()} AND ${who[1].toUpperCase()}${tail}`
+  }
+  return `WAITING FOR ${who.length} PLAYERS${tail}`
+}
+
 function fmtTime(t: number): string {
   if (!isFinite(t) || t <= 0) return '00:00.00'
   const m = Math.floor(t / 60)
@@ -538,8 +635,13 @@ class HudImpl implements Hud {
   private readonly hintEl: HTMLElement
   private hint = false
   private hintT = 0
+  private readonly netEl: HTMLElement
+  private readonly netText: HTMLElement
+  /** The last sentence drawn, so a per-frame push costs one string compare. */
+  private netKey = ''
   private readonly podWrap: HTMLElement
   private readonly podRows: HTMLElement
+  private readonly podEyebrow: HTMLElement
   private readonly podYou: HTMLElement
   private readonly podTied: HTMLElement
   readonly podiumSkipButton: HTMLButtonElement
@@ -819,6 +921,20 @@ class HudImpl implements Hud {
     this.hintEl.textContent = 'GO ON GREEN FOR A ROCKET START'
     this.hintEl.hidden = true
 
+    // --- THE CONNECTION LINE -----------------------------------------------
+    // LAST IN THE CENTRE STACK, so it is the lowest thing in it -- below the
+    // numerals and below the hint. That band is where the HUD already puts "a
+    // sentence about the moment", and it is below the vanishing point: a
+    // banner across the middle of the frame during a stall would be parked on
+    // the racing line, which is the part of the picture the player is still
+    // reading while they wait for the race to come back.
+    this.netEl = div('sg-ctr sg-ctr__net', centre)
+    div('sg-ctr__netPip', this.netEl)
+    this.netText = div('sg-ctr__netText', this.netEl)
+    this.netEl.hidden = true
+    this.netEl.setAttribute('role', 'status')
+    this.netEl.setAttribute('aria-live', 'polite')
+
     // --- FINISH CEREMONY ---------------------------------------------------
     // Two pieces, deliberately at opposite ends of the frame so the middle --
     // where the car is, and the whole point of the shot -- stays empty.
@@ -858,7 +974,12 @@ class HudImpl implements Hud {
     // to recognise a chassis silhouette to know what happened.
     this.podWrap = div('sg-pod', root)
     const podHead = div('sg-pod__head', this.podWrap)
-    div('sg-pod__eyebrow', podHead).textContent = 'GRAND CIRCUIT'
+    // THE EYEBROW NAMES THE SERIES, because there are two of them now. A
+    // three-round lobby crowned under "GRAND CIRCUIT" claims a championship
+    // it did not run, and the Grand Circuit is a specific eight-round thing
+    // with its own argued running order.
+    this.podEyebrow = div('sg-pod__eyebrow', podHead)
+    this.podEyebrow.textContent = 'GRAND CIRCUIT'
     div('sg-pod__title', podHead).textContent = 'CHAMPIONSHIP'
     this.podTied = div('sg-pod__tied', podHead)
     this.podTied.hidden = true
@@ -1033,6 +1154,54 @@ class HudImpl implements Hud {
     this.hintEl.style.setProperty('--k', '1')
   }
 
+  /**
+   * The stall line.
+   *
+   * THE SENTENCE IS BUILT HERE AND THE DECISION IS NOT. Every branch below is
+   * grammar: one name, two names, three or more, and whether they are loading.
+   * What counts as waiting, how long is long enough to say so and who is
+   * "still loading" are all net/lockstep.ts's, arrived at with measurements
+   * and pinned on fake timers.
+   *
+   * TWO NAMES ARE SPELLED OUT AND THREE ARE COUNTED, which is a readability
+   * call rather than a width one: "Waiting for Ada and Ben" is a fact about
+   * two people you can picture, and "Waiting for Ada, Ben and Cyd" is a list
+   * you have to parse to learn a number you could have been told. Past two,
+   * the number IS the information -- and in an eight-player room the list
+   * would not fit on a phone anyway.
+   */
+  setNetStatus(info: NetStatus | null): void {
+    const text = info ? netSentence(info) : ''
+    const kind = !info ? ''
+      : info.verdict === 'desync' || info.verdict === 'ejected' ? 'dead'
+        : info.loading ? 'load' : 'wait'
+    const key = kind + '|' + text
+    if (key === this.netKey) return
+    this.netKey = key
+
+    const on = text !== ''
+    this.netEl.hidden = !on
+    /**
+     * THE ROCKET-START HINT STANDS DOWN WHILE THE WIRE IS THE STORY.
+     *
+     * The commonest stall in the whole game is during the COUNTDOWN -- a peer
+     * still building a circuit it has never loaded, which the twenty-second
+     * load grace exists for -- so these two want the same moment more often
+     * than not. The hint teaches a timing the player cannot use, because the
+     * countdown is not advancing; the line under it says why nothing is
+     * advancing. Teaching somebody to react to lights that are frozen is worse
+     * than saying nothing, so the hint goes -- and comes back when the stall
+     * clears, if there is still countdown left for it to be about.
+     */
+    if (on) {
+      this.netEl.dataset.kind = kind
+      setText(this.netText, text)
+      this.hintEl.hidden = true
+    } else if (this.hint && this.hintT > 0) {
+      this.hintEl.hidden = false
+    }
+  }
+
   setPodium(info: PodiumInfo | null): void {
     const on = info !== null
     if (on !== this.podOn) {
@@ -1057,9 +1226,10 @@ class HudImpl implements Hud {
     // really a guard against the per-frame `canSkip` update rebuilding three
     // rows sixty times a second.
     const key = info.lines.map((l) => `${l.place}/${l.pilot}/${l.chassis}/${l.points}`).join('|')
-      + '|' + info.you + '|' + (info.tied ? 't' : '')
+      + '|' + info.you + '|' + (info.tied ? 't' : '') + '|' + (info.eyebrow ?? '')
     if (key !== this.podKey) {
       this.podKey = key
+      setText(this.podEyebrow, info.eyebrow ?? 'GRAND CIRCUIT')
       while (this.podRows.firstChild) this.podRows.removeChild(this.podRows.firstChild)
       for (const l of info.lines) {
         const row = div('sg-pod__row', this.podRows)

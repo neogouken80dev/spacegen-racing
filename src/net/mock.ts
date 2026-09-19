@@ -46,11 +46,12 @@
  * WHAT IS DELIBERATELY NOT SIMULATED is listed at the bottom of this file.
  */
 import {
-  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, NAME_RULES, REGIONS,
+  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, NAME_RULES, REGIONS, SERIES_LENGTHS,
   type AccountService, type CreateLobbyOptions, type JoinError, type LobbyFilter,
   type LobbyMember, type LobbyRoom, type LobbyService, type LobbyStatus,
   type LobbySummary, type MultiplayerSlot, type NameError, type PlayerProfile,
-  type RaceStartPacket, type RegionId, type Result,
+  type RaceStartPacket, type RaceTransport, type RegionId, type Result,
+  type SeriesLength, type SeriesPlan, type SeriesStanding,
 } from './types'
 import { Rng } from '../sim/rng'
 import {
@@ -410,6 +411,58 @@ const LOBBY_NAMES: readonly string[] = [
 ]
 
 const TRACK_IDS: readonly string[] = TRACKS.map((t) => t.id)
+
+/**
+ * The circuit a lobby is on RIGHT NOW.
+ *
+ * Clamped rather than allowed to run off the end, because `round` legitimately
+ * reaches `series.length` the moment the last round is banked -- a series that
+ * is over still has to render a row, a room and a results screen, and all three
+ * want the circuit that was just raced rather than `undefined`.
+ *
+ * net/live.ts computes the same expression at its own two call sites. Kept in
+ * step deliberately: the two implementations of one contract agreeing about
+ * which track a lobby is on is not optional.
+ */
+function curTrack(lb: MockLobby): string {
+  const ids = lb.series.trackIds
+  return ids[Math.max(0, Math.min(lb.round, ids.length - 1))] ?? TRACK_IDS[0]
+}
+
+/** True once every round has been raced. */
+function seriesOver(lb: MockLobby): boolean {
+  return lb.round >= lb.series.length
+}
+
+/**
+ * A `SeriesPlan` the rest of this file can trust, from one a caller supplied.
+ *
+ * EVERY FIELD IS UNTRUSTED. `create()` takes this straight off a UI that a
+ * probe, a test or a future screen can all drive, and three of the four things
+ * that can be wrong with a plan are silent rather than loud: a length that is
+ * not one of the four produces a series that never ends, a track id this build
+ * does not have produces a round that cannot start, and a repeat produces a
+ * "series" that is the same circuit twice. The fourth -- too few circuits for
+ * the length -- is the one the contract calls out ("Exactly `length` of them,
+ * no repeats"), and it is filled from the roster rather than refused, because a
+ * short list is a caller being lazy and not a caller being wrong.
+ */
+function cleanSeries(p: SeriesPlan | undefined): SeriesPlan {
+  const length: SeriesLength = SERIES_LENGTHS.includes(p?.length as SeriesLength)
+    ? (p!.length as SeriesLength)
+    : 1
+  const ids: string[] = []
+  for (const id of p?.trackIds ?? []) {
+    if (ids.length >= length) break
+    if (TRACK_IDS.includes(id) && !ids.includes(id)) ids.push(id)
+  }
+  for (const id of TRACK_IDS) {
+    if (ids.length >= length) break
+    if (!ids.includes(id)) ids.push(id)
+  }
+  return { length, trackIds: ids, laps: Math.max(1, Math.min(20, Math.floor(p?.laps ?? 3) || 3)) }
+}
+
 const CHASSIS_IDS: readonly string[] = CHASSIS.map((c) => c.id)
 const PILOT_IDS: readonly string[] = PILOTS.map((p) => p.id)
 const REGION_IDS: readonly RegionId[] = REGIONS.map((r) => r.id)
@@ -514,8 +567,31 @@ export interface MockLobby {
   maxPlayers: number
   private: boolean
   joinCode: string | null
-  trackId: string
-  laps: number
+  /**
+   * THE SERIES, WHICH IS WHERE `trackId` AND `laps` WENT.
+   *
+   * A lobby no longer has a circuit, it has a running order, and the circuit is
+   * whichever one `round` points at -- see `curTrack`. A single race is a
+   * series of length 1 and takes the identical path, which is the whole point
+   * of the contract modelling it that way: there is one set of fields to fill
+   * in and one set to read, not two.
+   */
+  series: SeriesPlan
+  /** Rounds already finished. 0 before the first race, `series.length` when it
+   *  is over. Matches `LobbyRoom.round` exactly. */
+  round: number
+  /**
+   * The table, as last banked by `endRound`.
+   *
+   * STORED, NEVER COMPUTED. Totalling a round means the points table, the
+   * countback and the tie-break, all of which game/circuit.ts already owns --
+   * and net/ must not depend on game/ (see GRID_SIZE above for the same rule
+   * biting the same way). The client that just raced the round is the one with
+   * the finishing order in hand, so it does the arithmetic and hands the answer
+   * down. net/live.ts does exactly the same thing with exactly the same
+   * reasoning, so the mock and the real service behave identically here.
+   */
+  standings: SeriesStanding[]
   status: LobbyStatus
   members: MockMember[]
   createdAt: number
@@ -661,8 +737,18 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
       maxPlayers,
       private: isPrivate,
       joinCode: isPrivate ? joinCode(rng) : null,
-      trackId: pickOne(TRACK_IDS),
-      laps: pickOne([3, 3, 5, 5, 7]),
+      // MOST LOBBIES IN THE DIRECTORY ARE SINGLE RACES, and a minority are
+      // series -- which is both what a real directory would look like and what
+      // the browser needs to be photographed against. A list where every row
+      // says "Round 1 of 3" would never show the single-race row, and that row
+      // is the one the contract insists must read as an ordinary race.
+      series: cleanSeries({
+        length: pickOne([1, 1, 1, 3, 3, 5, 8] as const),
+        trackIds: [pickOne(TRACK_IDS)],
+        laps: pickOne([3, 3, 5, 5, 7]),
+      }),
+      round: 0,
+      standings: [],
       status: 'open',
       members: [host],
       createdAt: at,
@@ -683,6 +769,12 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
     const extra = seeded ? rng.int(maxPlayers) : 0
     for (let i = 0; i < extra; i++) lb.members.push(makeBot(false, at))
     lb.status = lb.members.length >= maxPlayers ? 'full' : 'open'
+    // A SEEDED SERIES IS PART-WAY THROUGH. The directory a player walks into
+    // should not look like it was created a moment ago, and "Round 3 of 5" on
+    // a row is a thing the browser has to render and therefore a thing the
+    // world has to produce. Never the last round: a lobby whose series is over
+    // is a lobby that is about to close, which is a different row.
+    if (seeded && lb.series.length > 1) lb.round = rng.int(lb.series.length - 1)
     if (seeded && lb.status === 'full' && chance(0.5)) {
       lb.status = 'racing'
       lb.raceEndsAt = at + between(RACE_MIN_MS, RACE_MAX_MS)
@@ -716,8 +808,14 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
       // The code is the host's to pass on. A joiner already used it and showing
       // it to them again invites them to re-share a room they do not own.
       joinCode: lb.hostId === forPlayerId ? lb.joinCode : null,
-      trackId: lb.trackId,
-      laps: lb.laps,
+      // Copied, not shared. The room is a snapshot the UI is allowed to hold on
+      // to and diff against the next one (see above), and handing out the live
+      // arrays would make every diff decide nothing had changed -- which is
+      // exactly the bug this function exists to prevent, arriving one field
+      // deeper than it used to.
+      series: { ...lb.series, trackIds: [...lb.series.trackIds] },
+      round: lb.round,
+      standings: lb.standings.map((s) => ({ ...s, finishes: [...s.finishes] })),
       maxPlayers: lb.maxPlayers,
       status: lb.status,
       members: lb.members.map((m) => ({
@@ -754,8 +852,19 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
       players: lb.members.length,
       maxPlayers: lb.maxPlayers,
       private: lb.private,
-      trackId: lb.trackId,
-      laps: lb.laps,
+      // The circuit COMING NEXT, which for a lobby that has not started is
+      // round 1's. The contract says so in as many words, and it is the only
+      // reading that makes the column useful: a row advertising the circuit a
+      // lobby finished twenty minutes ago is advertising the wrong race.
+      trackId: curTrack(lb),
+      laps: lb.series.laps,
+      seriesLength: lb.series.length,
+      // 1-BASED, AND CLAMPED TO THE LAST ROUND. `round` counts rounds FINISHED,
+      // so the round being played (or waited for) is one more -- which is what
+      // "Round 2 of 5" means to the person reading the row. A finished series
+      // reads "Round 5 of 5" rather than 6 of 5, for the same reason curTrack
+      // clamps: the row still has to say something true.
+      seriesRound: Math.min(lb.round + 1, lb.series.length),
       status: lb.status,
       pingMs: lb.probe.ms,
     }
@@ -842,8 +951,16 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
       // Stamped per reader on delivery. The host's own copy names the host,
       // which is right for the value `start()` returns to the caller.
       localPlayerId: lb.hostId,
-      trackId: lb.trackId,
-      laps: lb.laps,
+      trackId: curTrack(lb),
+      laps: lb.series.laps,
+      // WHICH ROUND THIS IS, 0-BASED, AND THE TABLE GOING INTO IT. Both are in
+      // the broadcast rather than left to each client's own copy of the room
+      // for the reason every other field is: eight clients reading eight
+      // slightly different rooms would score the same race into eight slightly
+      // different tables, and a series is exactly a chain of those.
+      round: Math.min(lb.round, lb.series.length - 1),
+      seriesLength: lb.series.length,
+      standings: lb.standings,
       seed,
       grid,
       inputDelay: inputDelayFor(worst),
@@ -966,7 +1083,37 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
       return
     }
     if (lb.status === 'racing') {
+      /**
+       * A ROUND THE LOCAL PLAYER IS IN ENDS WHEN THEY SAY IT DOES.
+       *
+       * `raceEndsAt` is a made-up duration for a made-up race, which is right
+       * for the ninety-odd lobbies in the directory that nobody is in. It is
+       * wrong for the one the player is actually racing: their round ends when
+       * they cross the line and call `endRound`, and that is a real number of
+       * seconds away that this timer knows nothing about. Letting the clock
+       * reopen the room underneath them would reset their readies mid-race and,
+       * worse, advance the series a round they had not scored yet -- so the
+       * table would come back a round short and the podium would fire early.
+       *
+       * So a watched lobby's race is not on a timer at all. This was not an
+       * issue before series: a reopened room was cosmetic.
+       */
+      if (clientsIn(lb).length > 0) return
       if (at < lb.raceEndsAt) return
+      // Nobody real is in it, so the world scores the round for them: the
+      // series advances, which is what makes a browser row's "Round 2 of 5"
+      // become "Round 3 of 5" while somebody is watching the list. The
+      // STANDINGS are not invented -- see MockLobby.standings for why the mock
+      // never totals a round -- so a directory series carries its round number
+      // and an empty table, which is all a row ever reads.
+      lb.round = Math.min(lb.round + 1, lb.series.length)
+      if (seriesOver(lb)) {
+        // The series is over and the room with it. A lobby that sat on a
+        // finished series for ever would be a permanent row advertising a race
+        // that cannot be joined.
+        closeLobby(lb, 'hostLeft')
+        return
+      }
       if (chance(REOPEN_SHARE)) {
         // Some of the field goes again. The rest have had enough.
         const keep = 1 + rng.int(Math.max(1, lb.members.length - 1))
@@ -1775,8 +1922,9 @@ export function createMockLobbyService(opts: MockNetOptions = {}): LobbyService 
             maxPlayers,
             private: o.private,
             joinCode: o.private ? joinCode(world.rng) : null,
-            trackId: TRACK_IDS.includes(o.trackId) ? o.trackId : TRACK_IDS[0],
-            laps: Math.max(1, Math.min(20, Math.floor(o.laps) || 3)),
+            series: cleanSeries(o.series),
+            round: 0,
+            standings: [],
             status: 'open',
             members: [],
             createdAt: at,
@@ -1923,8 +2071,34 @@ export function createMockLobbyService(opts: MockNetOptions = {}): LobbyService 
           if (!h.ok) return fail<LobbyRoom>(h.error)
           const lb = h.lb
           if (!TRACK_IDS.includes(trackId)) return fail<LobbyRoom>('notrack')
-          lb.trackId = trackId
-          lb.laps = Math.max(1, Math.min(20, Math.floor(laps) || lb.laps))
+          /**
+           * IT CHANGES THE CIRCUIT FOR THE ROUND COMING NEXT, AND NOTHING ELSE.
+           *
+           * The contract's `setTrack` predates series and still has exactly one
+           * track in its signature, so the only sane reading is "the one the
+           * room is showing" -- which is `series.trackIds[round]`. Rewriting
+           * the whole running order from one id would silently discard a plan
+           * eight people looked at before they joined, and rewriting a round
+           * already raced would make the standings describe a series that never
+           * happened.
+           *
+           * A DUPLICATE IS REFUSED RATHER THAN SWAPPED. "No repeats" is a
+           * contract promise about `trackIds`, and a host reaching for a
+           * circuit that is already round 4 is asking for something the series
+           * cannot give. `notrack` is the honest answer; the UI greys the
+           * button out before it can be pressed.
+           *
+           * net/live.ts does the same edit-in-place. They must agree.
+           */
+          const ids = [...lb.series.trackIds]
+          const at = Math.max(0, Math.min(lb.round, ids.length - 1))
+          if (ids[at] !== trackId && ids.includes(trackId)) return fail<LobbyRoom>('notrack')
+          ids[at] = trackId
+          lb.series = {
+            ...lb.series,
+            trackIds: ids,
+            laps: Math.max(1, Math.min(20, Math.floor(laps) || lb.series.laps)),
+          }
           // EVERYONE's ready, including the host's: a ready you gave for
           // Elkarim is not a ready for Zhen-9.
           for (const m of lb.members) m.ready = false
@@ -1949,6 +2123,65 @@ export function createMockLobbyService(opts: MockNetOptions = {}): LobbyService 
           lb.members = lb.members.filter((m) => m.playerId !== playerId)
           lb.status = lb.members.length >= lb.maxPlayers ? 'full' : 'open'
           world.notifyKicked(playerId)
+          world.pushRoom(lb)
+        },
+        () => {},
+      )
+    },
+
+    /**
+     * NULL, ALWAYS, AND THAT IS THE CORRECT ANSWER RATHER THAN A GAP.
+     *
+     * A transport carries frames of input between peers. There are no peers:
+     * the mock's other seven cars are AI inside this one browser, every client
+     * attached to a mock world shares one JS heap, and the race the player
+     * drives is simulated entirely locally. Returning a fake one would hand
+     * game/main.ts a `LockstepRunner` gating a race on inputs that no peer will
+     * ever publish -- so the countdown would stall for twenty seconds and then
+     * eject everybody, which is a convincing imitation of a broken network and
+     * nothing else.
+     *
+     * Null means "race it locally", which is what the whole mock does, and it
+     * is the branch game/main.ts takes when there is nothing on the wire. The
+     * bottom of this file has said "NO RaceTransport" since it was written;
+     * this is that statement with a signature on it.
+     */
+    transport(): RaceTransport | null { return null },
+
+    /**
+     * The round is over. Bank the table, advance the series, reopen the room.
+     *
+     * THE STANDINGS ARE TAKEN ON TRUST AND NOT CHECKED. The caller raced the
+     * round and this did not; there is nothing here to check them against, and
+     * a mock that second-guessed its own client would be testing an argument
+     * the real service cannot have either (net/live.ts banks the host's table
+     * verbatim and pushes it to everybody).
+     *
+     * IT IS IDEMPOTENT PAST THE END. `round` stops at `series.length`, so a
+     * second call after the last round does not walk the counter off the end
+     * of `trackIds` -- which matters because a desync and a finish can both
+     * reach here for the same round, and the loser of that race must not
+     * advance the series twice.
+     */
+    endRound(standings: readonly SeriesStanding[]): Promise<void> {
+      return call(
+        delay(),
+        () => {
+          const lb = currentLobby()
+          if (!lb || lb.status === 'closed') return
+          if (standings.length > 0) {
+            lb.standings = standings.map((s) => ({ ...s, finishes: [...s.finishes] }))
+          }
+          if (lb.status === 'racing') lb.round = Math.min(lb.round + 1, lb.series.length)
+          // BACK TO THE ROOM, READIES CLEARED. The next round is a different
+          // circuit, so a ready given for the last one is not a ready for it --
+          // the same rule `setTrack` applies, arriving for the same reason.
+          // The room reopens even when the series is over: the final standings
+          // are the last thing everybody looks at, and closing the room out
+          // from under them would replace them with a browser.
+          for (const m of lb.members) m.ready = false
+          lb.status = lb.members.length >= lb.maxPlayers ? 'full' : 'open'
+          lb.raceEndsAt = 0
           world.pushRoom(lb)
         },
         () => {},
@@ -2003,10 +2236,16 @@ export function resetSharedWorld(): void {
 // WHAT THIS MOCK DELIBERATELY DOES NOT DO
 // ---------------------------------------------------------------------------
 //
-//   - NO RaceTransport. types.ts declares it and says it is implemented when
-//     netcode lands; a mock of it would be a mock of the one thing that cannot
-//     be faked convincingly (frame-accurate input exchange), and the UI does
-//     not touch it -- the race does.
+//   - NO RaceTransport. `transport()` returns null and always will: a mock of
+//     it would be a mock of the one thing that cannot be faked convincingly
+//     (frame-accurate input exchange between machines), and there are no other
+//     machines. The race takes the local branch instead, which is the same
+//     branch single player takes. See the method for the longer argument.
+//   - NO SCORING. `endRound` banks the table it is handed and advances the
+//     round; it never totals one. The points table, the countback and the
+//     tie-break all live in game/circuit.ts, and net/ must not depend on game/
+//     -- see GRID_SIZE. net/live.ts has the same shape for the same reason, so
+//     the two implementations of the contract agree by construction.
 //   - NO SIGNALLING. No offer/answer/candidate mailbox, because nothing above
 //     the seam can observe one. `connecting` is the whole of what a UI knows
 //     about ICE, and that is simulated.

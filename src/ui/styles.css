@@ -73,6 +73,106 @@
   --sg-num: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 
+  /* ======================================================================
+     THE MENU TYPE SCALE
+     ----------------------------------------------------------------------
+     Eleven named steps, each a clamp, and every menu rule in this sheet and
+     in settings.css refers to one of them instead of carrying its own
+     triple. That is the whole point: the next time somebody says "a bit
+     bigger" it is one line, not a hundred.
+
+     NOTHING IN THE HUD READS THESE. The in-race layer above keeps every size
+     it had, because those were tuned against the racing line, the glare
+     budget and thumb reach, and a shared token is exactly how a menu change
+     reaches into a race. Menus and HUD are two type systems on purpose;
+     the tokens below are the menu one, and the grep that proves the HUD
+     never touches them is `var(--sg-fs-` inside the HUD section.
+
+     WHY EVERY MENU LABEL IN THE GAME WAS SMALL, which is a measurement and
+     not a matter of taste. Every size here was `clamp(min, N vmin, max)`
+     with N between 1.1 and 2.6, and vmin is the SHORT edge of the viewport:
+
+       phone portrait   412x915   vmin 4.12   1.1vmin =  4.5px
+       phone landscape  915x412   vmin 4.12   1.1vmin =  4.5px
+       desktop         1440x810   vmin 8.10   1.1vmin =  8.9px
+       desktop        1920x1080   vmin 10.8   1.1vmin = 11.9px
+
+     Every one of those lands at or under the clamp's own MINIMUM, so on
+     every screen anyone actually plays on the fluid middle term did nothing
+     and the minimum was the shipping size -- and the minimums were 8 to
+     13px. The whole sheet was rendering at its floor while looking, in a
+     screenshot, merely understated. (The same failure mode as the dropped
+     shorthands in tests/styles.test.ts: legible is not the same as right.)
+
+     So the fix is at both ends. Floors a phone can read, caps a desktop can
+     read, and a coefficient big enough that the ramp between them is real:
+     every step below reaches its cap at about 800px of viewport height and
+     sits on its floor on a phone, with a genuine slope in between.
+
+     VMIN STAYS THE FLUID UNIT. vw would size a 915x412 landscape phone off
+     its 915px long edge and hand a phone desktop-sized type; vmin gives
+     both phone orientations the same size, which is right, because they are
+     the same phone. (settings.css was mixing vw and vmin for this; it now
+     uses these tokens and the inconsistency is gone.)
+
+     AND TEN NEAR-IDENTICAL SIZES BETWEEN 8 AND 16px WERE NOT A HIERARCHY.
+     8->11, 9->12, 10->13, 10->14 and 11->16 were all doing "small label",
+     and nobody sees a 1px step -- it reads as noise, not as rank. They
+     collapse into three honest ones: micro, caption, body.
+     ====================================================================== */
+
+  /* The reading ramp. phone / 1440x810 desktop:                            */
+  --sg-fs-micro:   clamp(11px, 1.7vmin, 13px);   /* 11 / 13  tracked eyebrow caps, numerals beside a bar */
+  --sg-fs-caption: clamp(13px, 2.0vmin, 15px);   /* 13 / 15  the second line under a name; table rows */
+  --sg-fs-body:    clamp(15px, 2.4vmin, 18px);   /* 15 / 18  default reading size: prose, settings rows */
+  --sg-fs-strong:  clamp(17px, 2.8vmin, 22px);   /* 17 / 22  a name in a list, a tab, a section head */
+  --sg-fs-title:   clamp(21px, 3.5vmin, 28px);   /* 21 / 28  panel titles */
+  --sg-fs-head:    clamp(26px, 4.5vmin, 37px);   /* 26 / 36  screen heads */
+  --sg-fs-hero:    clamp(31px, 5.7vmin, 50px);   /* 31 / 46  the one number a screen is about */
+  --sg-fs-mega:    clamp(38px, 8.0vmin, 84px);   /* 38 / 65  the one-word screen */
+
+  /* The action ramp, three steps, kept separate from the reading ramp
+     because a button's size states PRIORITY and the ramp above states
+     information hierarchy -- two different axes. The game has exactly three
+     button weights and they have to stay tellable apart. */
+  --sg-fs-act:      clamp(16px, 2.7vmin, 23px);  /* 16 / 22  ordinary action */
+  --sg-fs-act-lg:   clamp(19px, 3.3vmin, 31px);  /* 19 / 27  the action a screen exists for */
+  --sg-fs-act-hero: clamp(26px, 5.2vmin, 56px);  /* 26 / 42  PLAY, and nothing else */
+
+  /* --- leading ----------------------------------------------------------
+     A bigger font in a box with the same leading is not more readable, it is
+     just bigger. Three values: display type that must not gap, a single
+     line of label, and actual prose. The sheet was running 1.25-1.45 on
+     paragraphs, which is under the comfortable range for a sans on a dark
+     ground -- light type on dark blooms optically and needs MORE leading
+     than the same setting inverted, not less. */
+  --sg-lh-tight: 1.12;
+  --sg-lh-snug: 1.3;
+  --sg-lh-body: 1.5;
+
+  /* --- tracking ---------------------------------------------------------
+     Caps need letterspacing; this sheet had several labels at 0.24-0.28em,
+     which is past the point where a word stops being a word and becomes a
+     row of letters. 0.2em is the widest anything needs. */
+  --sg-ls-caps: 0.14em;
+  --sg-ls-caps-wide: 0.2em;
+
+  /* --- the quiet menu ink -----------------------------------------------
+     --sg-mute (#5b6d8c) measures 3.6:1 against the menu panel ground, which
+     fails AA for text under 18.5px -- and --sg-mute was carrying almost
+     every label in the menus that was under 12px. The smallest type in the
+     UI had the weakest contrast in the UI, which is the wrong way round.
+
+     A NEW TOKEN RATHER THAN A BRIGHTER --sg-mute, because --sg-mute is read
+     by the HUD (empty item slots, the fps readout, the warning ring) where
+     it is doing a deliberate job against a moving picture and a glare
+     budget. 5.8:1: clearly quieter than --sg-dim (7.8:1), and legible. */
+  --sg-quiet: #7d90b0;
+
+  /* --- touch ------------------------------------------------------------
+     The floor for anything a thumb has to hit. This is played on phones. */
+  --sg-tap: 44px;
+
   /* --- safe areas ------------------------------------------------------ */
   --sg-sat: env(safe-area-inset-top, 0px);
   --sg-sar: env(safe-area-inset-right, 0px);
@@ -1524,9 +1624,17 @@
   font-family: var(--sg-display);
   font-style: italic;
   letter-spacing: 0.1em;
-  font-size: clamp(15px, 2.2vmin, 24px);
+  font-size: var(--sg-fs-act);
+  line-height: var(--sg-lh-tight);
   color: #06101c;
   padding: 0.62em 1.5em;
+  /* A THUMB, NOT A CURSOR. Every .sg-btn in the game is a menu button and
+     every menu is playable on a phone, so the floor is the floor everywhere
+     rather than behind a `pointer: coarse` query -- a laptop with a
+     touchscreen reports fine pointer and is still poked at. The padding is
+     em-based and already carries most of the way there; this catches the
+     short-label cases (Save, Track) that were landing at 24px. */
+  min-height: var(--sg-tap);
   border: 0;
   border-radius: 999px;
   cursor: pointer;
@@ -1553,7 +1661,7 @@
 }
 
 .sg-btn--huge {
-  font-size: clamp(26px, 5.6vmin, 62px);
+  font-size: var(--sg-fs-act-hero);
   padding: 0.5em 1.5em;
   letter-spacing: 0.14em;
   box-shadow: 0 9px 0 #06546f, 0 22px 44px rgba(0, 0, 0, 0.55);
@@ -1573,7 +1681,7 @@
 }
 
 .sg-btn--start {
-  font-size: clamp(18px, 3.1vmin, 34px);
+  font-size: var(--sg-fs-act-lg);
   padding: 0.5em 1.7em;
   letter-spacing: 0.12em;
 }
@@ -1591,7 +1699,7 @@
 /* A second-tier primary: smaller than --huge, wider than default, for the
    Grand Circuit button that sits under PLAY without competing with it. */
 .sg-btn--wide {
-  font-size: clamp(14px, 2.4vmin, 22px);
+  font-size: var(--sg-fs-act);
   padding: 0.5em 1.9em;
   letter-spacing: 0.12em;
 }
@@ -1632,10 +1740,23 @@
 }
 
 .sg-title__cline {
-  font-size: clamp(10px, 1.45vmin, 13px);
-  letter-spacing: 0.14em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
   color: var(--sg-dim);
+}
+
+/* THE TITLE SCREEN SITS OVER A LIVE RACE, and its scrim is deliberately thin
+   across the middle band so the track shows through (see the note on
+   .sg-fe[data-screen="title"]). A colour alone therefore cannot promise
+   contrast: over Halcyon Bay's dawn sky this line and the launch hint sat at
+   roughly 2:1 against whatever happened to be behind them. The halo is the
+   answer cheer.ts already uses over the road -- it occludes a few hundred
+   pixels around the glyphs rather than putting a bar across the picture. */
+.sg-title__cline,
+.sg-hint {
+  text-shadow: 0 1px 3px rgba(2, 5, 12, 0.92), 0 0 10px rgba(2, 5, 12, 0.8);
 }
 
 .sg-title__cline:empty { display: none; }
@@ -1700,10 +1821,11 @@
 }
 
 .sg-hint {
-  font-size: clamp(11px, 1.6vmin, 15px);
-  letter-spacing: 0.16em;
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
 }
 
 /* --- track select -------------------------------------------------------
@@ -1721,7 +1843,15 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1.05fr 1.3fr 1.15fr;
+  /* THE BRIEFING TOOK WIDTH OFF THE MAP, and the reason is the chips.
+     Five surface chips and four feature chips wrap against this column, and
+     at a size a player can read they went from two rows to three and from
+     one row to two -- 60px, taken straight out of the elevation graph and
+     the note under it, which is the part of the panel that says what the
+     lap is actually like. 50px of width buys the surface mix back down to
+     two rows. The route map is a shape in a square box and had the slack;
+     the briefing is a column of text and did not. */
+  grid-template-columns: 1fr 1.22fr 1.28fr;
   gap: clamp(10px, 1.6vmin, 20px);
 }
 
@@ -1849,14 +1979,18 @@
 
 /* --- briefing panel ----------------------------------------------------- */
 
+/* Tighter than .sg-detail's own rhythm on purpose: this panel stacks nine
+   blocks where the garage's stacks five, so the gap is the one place the
+   extra four can come from without any of them losing air of its own. */
 .sg-detail--track {
-  gap: clamp(5px, 1vmin, 11px);
+  gap: clamp(4px, 0.8vmin, 9px);
 }
 
 .sg-trk__world {
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.25vmin, 12px);
-  letter-spacing: 0.22em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
   color: var(--sg-cyan);
 }
@@ -1874,10 +2008,11 @@
 
 .sg-fact__k {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.1vmin, 11px);
-  letter-spacing: 0.2em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
 }
 
 .sg-fact__v {
@@ -1885,14 +2020,15 @@
   align-items: center;
   gap: 6px;
   font-family: var(--sg-num);
-  font-size: clamp(11px, 1.7vmin, 16px);
+  font-size: var(--sg-fs-body);
+  line-height: var(--sg-lh-snug);
   font-variant-numeric: tabular-nums;
   color: var(--sg-ink);
 }
 
 .sg-fact__word {
   font-family: var(--sg-display);
-  font-size: clamp(10px, 1.45vmin, 14px);
+  font-size: var(--sg-fs-caption);
   letter-spacing: 0.06em;
 }
 
@@ -1925,11 +2061,12 @@
 
 .sg-trk__label {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.1vmin, 11px);
-  letter-spacing: 0.2em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
-  color: var(--sg-mute);
-  margin-top: 2px;
+  color: var(--sg-quiet);
+  margin-top: 4px;
 }
 
 .sg-trk__label--row {
@@ -1974,8 +2111,8 @@
    landscape phone, so the panel is full at both ends of the range. */
 .sg-trk__elev {
   flex: 1 1 auto;
-  min-height: 34px;
-  max-height: clamp(90px, 20vh, 190px);
+  min-height: 30px;
+  max-height: clamp(84px, 18vh, 170px);
   border-radius: var(--sg-r-sm);
   border: 1px solid rgba(122, 190, 255, 0.18);
   background: rgba(122, 190, 255, 0.06);
@@ -2009,10 +2146,17 @@
 
 .sg-chip {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 11px);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  padding: 3px 8px;
+  /* The pill grew with the type in it. A chip whose padding stays at 3px
+     while the label goes from 8px to 11px reads as a tighter chip, not a
+     bigger label -- which is the "box did not grow" failure. Horizontally
+     it is modest, because five surface chips wrap against the briefing
+     column's width and every extra row of them is 30px taken off the
+     elevation graph and the note underneath it. */
+  padding: clamp(4px, 0.7vmin, 6px) clamp(8px, 1.15vmin, 10px);
   border-radius: 999px;
   border: 1px solid var(--sg-line);
   background: rgba(14, 22, 40, 0.7);
@@ -2056,7 +2200,8 @@
 .sg-head__title {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(20px, 3.6vmin, 44px);
+  font-size: var(--sg-fs-head);
+  line-height: var(--sg-lh-tight);
   letter-spacing: 0.1em;
   color: var(--sg-ink);
 }
@@ -2077,14 +2222,27 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: 8px;
+  /* AND min-width. A grid item's automatic minimum is its MIN-CONTENT, and
+     the min-content of a list column is the widest card in it -- a nowrap
+     vehicle name plus a nowrap locomotion tag. So `1fr 1fr` was never two
+     equal halves: at 412px the chassis column demanded 297px, took it, and
+     pushed the whole garage 72px off the right of the screen. It was doing
+     this before this pass too, by 7px, which is small enough to look like a
+     rounding error rather than the same bug. The column now shrinks and the
+     card ellipsises inside it, which is what the card was built to do. */
+  min-width: 0;
+  gap: 10px;
 }
 
 .sg-col__title {
   font-family: var(--sg-display);
-  font-size: clamp(10px, 1.5vmin, 14px);
-  letter-spacing: 0.28em;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  /* Was 0.28em. At the size this label actually rendered (10px on a phone)
+     that is wide enough that CHASSIS stops being a word and becomes seven
+     letters in a row. */
+  letter-spacing: var(--sg-ls-caps-wide);
+  color: var(--sg-quiet);
   text-transform: uppercase;
   flex: none;
 }
@@ -2092,7 +2250,7 @@
 .sg-list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
   overflow-y: auto;
   min-height: 0;
   padding-right: 4px;
@@ -2105,7 +2263,13 @@
   gap: 10px;
   width: 100%;
   text-align: left;
-  padding: 9px 12px;
+  /* Vertical padding is deliberately the smaller half: there are eight
+     circuits and six pilots, and a list a player has to scroll to learn how
+     many options exist is a worse list than a slightly tighter one. The
+     44px floor holds the card comfortably above a thumb-sized target
+     regardless. */
+  padding: clamp(8px, 1.15vmin, 11px) clamp(12px, 1.8vmin, 17px);
+  min-height: var(--sg-tap);
   border-radius: var(--sg-r-md);
   background: rgba(14, 22, 40, 0.78);
   border: 2px solid rgba(122, 190, 255, 0.16);
@@ -2157,7 +2321,8 @@
 
 .sg-card__name {
   font-family: var(--sg-display);
-  font-size: clamp(13px, 1.9vmin, 19px);
+  font-size: var(--sg-fs-strong);
+  line-height: var(--sg-lh-snug);
   letter-spacing: 0.06em;
   white-space: nowrap;
   overflow: hidden;
@@ -2165,18 +2330,19 @@
 }
 
 .sg-card__sub {
-  font-size: clamp(10px, 1.35vmin, 13px);
+  font-size: var(--sg-fs-caption);
   color: var(--sg-dim);
-  line-height: 1.25;
+  line-height: var(--sg-lh-snug);
 }
 
 .sg-card__tag {
   margin-left: auto;
   flex: none;
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 11px);
-  letter-spacing: 0.14em;
-  padding: 3px 7px;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
+  padding: clamp(4px, 0.6vmin, 6px) clamp(8px, 1.2vmin, 11px);
   border-radius: 999px;
   border: 1px solid var(--sg-line);
   color: var(--sg-dim);
@@ -2271,10 +2437,10 @@
   bottom: 8px;
   z-index: 1;
   pointer-events: none;
-  font-size: clamp(8px, 1.1vmin, 11px);
-  letter-spacing: 0.2em;
+  font-size: var(--sg-fs-micro);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
   opacity: 0.9;
   transition: opacity 260ms ease;
 }
@@ -2287,9 +2453,14 @@
 
 /* How the Loadout column is divided between the two. Scoped to the garage on
    purpose: .sg-detail is shared with the track screen's briefing, which has no
-   preview above it and must keep filling its column. */
+   preview above it and must keep filling its column.
+
+   62/38 rather than the old 56/44: the panel's contents (a name, a nickname,
+   six bars, the pilot's perk and the locomotion note) grew with the type and
+   the car did not -- a render has no minimum legible size. At 56% the note
+   was cut mid-sentence behind the panel's own scroll edge. */
 .sg-garage .sg-detail {
-  flex: 1 1 56%;
+  flex: 1 1 62%;
 }
 
 /* --- detail panel ------------------------------------------------------- */
@@ -2299,8 +2470,9 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: clamp(6px, 1.2vmin, 14px);
-  padding: clamp(10px, 1.8vmin, 20px);
+  gap: clamp(7px, 1.35vmin, 15px);
+  /* Grew with the type inside it. */
+  padding: clamp(13px, 2.2vmin, 26px);
   border-radius: var(--sg-r-lg);
   background: rgba(10, 17, 32, 0.8);
   border: 2px solid var(--sg-line);
@@ -2311,13 +2483,16 @@
 .sg-detail__name {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(20px, 3.4vmin, 40px);
+  font-size: var(--sg-fs-title);
   letter-spacing: 0.02em;
-  line-height: 1;
+  /* Was line-height 1, which clipped the descender of a name like
+     "Halcyon Bay" against the line under it. */
+  line-height: var(--sg-lh-tight);
 }
 
 .sg-detail__nick {
-  font-size: clamp(11px, 1.6vmin, 16px);
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
   color: var(--sg-gold);
   font-style: italic;
   letter-spacing: 0.04em;
@@ -2332,15 +2507,23 @@
 
 .sg-stat {
   display: grid;
-  grid-template-columns: 4.6em 1fr 2.1em;
+  /* The two outer tracks are em, and an em of WHAT was never said -- the rule
+     had no font-size, so they resolved against the 16px UA default and stayed
+     put while the labels inside them grew. Naming the size makes the tracks
+     track: 6em holds "Handling" at --sg-fs-micro in the display face with
+     caps tracking, and 3.6em holds "7 +0.7" at --sg-fs-caption plus the
+     pilot's bonus beside it. */
+  font-size: var(--sg-fs-caption);
+  grid-template-columns: 6em minmax(0, 1fr) 3.6em;
   align-items: center;
   gap: 8px;
 }
 
 .sg-stat__k {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 12px);
-  letter-spacing: 0.14em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
   color: var(--sg-dim);
   text-transform: uppercase;
 }
@@ -2397,7 +2580,7 @@
 /* The pilot's own number, alongside the chassis one, in the same yellow. */
 .sg-stat__b {
   font-family: var(--sg-num);
-  font-size: clamp(8px, 1.2vmin, 11px);
+  font-size: var(--sg-fs-micro);
   color: #ffd84d;
   font-variant-numeric: tabular-nums;
   margin-left: 3px;
@@ -2411,9 +2594,9 @@
  * quantity on a panel whose whole credibility is that its numbers are real.
  */
 .sg-detail__perk {
-  margin-top: 6px;
-  font-size: clamp(9px, 1.3vmin, 12px);
-  line-height: 1.35;
+  margin-top: 8px;
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-body);
   color: #ffd84d;
   display: flex;
   gap: 6px;
@@ -2429,7 +2612,7 @@
 
 .sg-stat__v {
   font-family: var(--sg-num);
-  font-size: clamp(10px, 1.5vmin, 14px);
+  font-size: var(--sg-fs-caption);
   text-align: right;
   color: var(--sg-ink);
   font-variant-numeric: tabular-nums;
@@ -2437,11 +2620,11 @@
 
 .sg-detail__note {
   margin-top: auto;
-  font-size: clamp(10px, 1.4vmin, 13px);
+  font-size: var(--sg-fs-caption);
   color: var(--sg-dim);
-  line-height: 1.45;
+  line-height: var(--sg-lh-body);
   border-left: 3px solid var(--sg-line);
-  padding-left: 9px;
+  padding-left: clamp(11px, 1.6vmin, 15px);
 }
 
 /* --- options row -------------------------------------------------------- */
@@ -2463,9 +2646,9 @@
 
 .sg-seg__k {
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.25vmin, 12px);
-  letter-spacing: 0.2em;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  letter-spacing: var(--sg-ls-caps-wide);
+  color: var(--sg-quiet);
   text-transform: uppercase;
 }
 
@@ -2479,9 +2662,12 @@
 
 .sg-seg__btn {
   font-family: var(--sg-display);
-  font-size: clamp(10px, 1.4vmin, 14px);
+  font-size: var(--sg-fs-caption);
   letter-spacing: 0.12em;
-  padding: 0.42em 1em;
+  /* These were 19px tall. Three of them side by side is the quality picker,
+     and it sits at the bottom of the garage where a thumb reaches it. */
+  min-height: var(--sg-tap);
+  padding: 0.42em 1.15em;
   border: 0;
   background: transparent;
   color: var(--sg-dim);
@@ -2504,7 +2690,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: clamp(10px, 1.35vmin, 13px);
+  font-size: var(--sg-fs-caption);
   color: var(--sg-dim);
   letter-spacing: 0.04em;
 }
@@ -2557,7 +2743,7 @@
   justify-content: flex-start;
   overflow-y: auto;
   overscroll-behavior: contain;
-  gap: clamp(10px, 2vmin, 24px);
+  gap: clamp(8px, 1.4vmin, 16px);
 }
 
 /* The buttons take all the slack, so they sit on the bottom edge whatever the
@@ -2568,7 +2754,8 @@
 .sg-results__title {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(22px, 4.4vmin, 54px);
+  font-size: var(--sg-fs-head);
+  line-height: var(--sg-lh-tight);
   letter-spacing: 0.12em;
   color: var(--sg-gold);
   text-shadow: 0 4px 0 rgba(0, 0, 0, 0.5), 0 0 44px rgba(255, 210, 63, 0.4);
@@ -2580,12 +2767,13 @@
    forgets where it is. */
 .sg-results__where {
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.35vmin, 14px);
-  letter-spacing: 0.24em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
   color: var(--sg-dim);
   flex: none;
-  margin-top: -0.4em;
+  margin-top: -0.2em;
   text-align: center;
 }
 
@@ -2609,9 +2797,7 @@
   .sg-tabpanel { gap: 6px; }
   .sg-tabs { margin-top: 4px; padding-bottom: 3px; }
   .sg-results__meta { gap: clamp(10px, 2.4vmin, 24px); }
-  /* The run score stays the loudest thing on the screen, just less tall. */
-  .sg-score-v { font-size: clamp(24px, 4.4vh, 34px); }
-  .sg-row { padding-top: 3px; padding-bottom: 3px; }
+  .sg-row { padding-top: 4px; padding-bottom: 4px; }
 }
 
 .sg-results__rows {
@@ -2687,10 +2873,22 @@
 .sg-row {
   position: relative;
   display: grid;
-  grid-template-columns: 2.4em 1fr auto auto;
+  grid-template-columns: var(--sg-row-pos) minmax(0, 1fr) auto auto;
   align-items: center;
   gap: clamp(6px, 1.4vmin, 16px);
-  padding: clamp(5px, 1vmin, 10px) clamp(8px, 1.6vmin, 16px);
+  /* NAMED, because `.is-you` below has to subtract the rail width from this
+     exact value and two copies of one clamp is two chances to change one of
+     them. */
+  --sg-row-px: clamp(10px, 1.9vmin, 18px);
+  /* Wide enough for "8th" set in italic display at --sg-fs-title, which is
+     what .sg-row__p is. It was 2.4em against no stated font-size -- 38px
+     against a 28px italic "8th" that needs 58. */
+  --sg-row-pos: clamp(46px, 7.6vmin, 66px);
+  /* Vertical padding is the tighter half of the pair on purpose. Eight
+     finishers is the content of this screen and the row grew 34% taller when
+     the two lines inside it grew -- padding is the part that can come back
+     without any of the type losing size. */
+  padding: clamp(5px, 1.05vmin, 10px) var(--sg-row-px);
   border-radius: var(--sg-r-md);
   background: rgba(14, 22, 40, 0.82);
   border: 2px solid rgba(122, 190, 255, 0.16);
@@ -2729,7 +2927,7 @@
   border-left-color: var(--sg-cyan);
   border-left-width: var(--sg-you-rail-on);
   /* The 4px the rail took back, so nothing in the row moves. */
-  padding-left: calc(clamp(8px, 1.6vmin, 16px) - (var(--sg-you-rail-on) - var(--sg-you-rail)));
+  padding-left: calc(var(--sg-row-px) - (var(--sg-you-rail-on) - var(--sg-you-rail)));
   background: linear-gradient(
     90deg,
     rgba(34, 211, 255, 0.26),
@@ -2771,7 +2969,8 @@
 .sg-row__p {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(16px, 2.6vmin, 30px);
+  font-size: var(--sg-fs-title);
+  line-height: var(--sg-lh-tight);
   color: var(--sg-ink);
   text-align: center;
 }
@@ -2791,7 +2990,8 @@
   align-items: baseline;
   gap: 0.5em;
   font-family: var(--sg-display);
-  font-size: clamp(12px, 1.8vmin, 18px);
+  font-size: var(--sg-fs-strong);
+  line-height: var(--sg-lh-snug);
   letter-spacing: 0.06em;
   white-space: nowrap;
   min-width: 0;
@@ -2825,11 +3025,11 @@
   flex: none;
   font-family: var(--sg-ui);
   font-style: normal;
-  font-size: 9px;
+  font-size: var(--sg-fs-micro);
   font-weight: 800;
   line-height: 1;
-  letter-spacing: 0.14em;
-  padding: 3px 5px 2px;
+  letter-spacing: var(--sg-ls-caps);
+  padding: 4px 6px 3px;
   border-radius: 3px;
   background: var(--sg-cyan);
   /* Near-black rather than pure: 10.7:1 against the chip, and it keeps the
@@ -2840,8 +3040,12 @@
   box-shadow: 0 0 0 1px rgba(4, 18, 26, 0.5);
 }
 
+/* The second line of a standings row is the vehicle, under the pilot's name:
+   a caption about a caption, so it sits one step below the caption ramp
+   rather than on it. It is also eight rows' worth of height. */
 .sg-row__chassis {
-  font-size: clamp(9px, 1.25vmin, 12px);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
   color: var(--sg-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -2851,14 +3055,14 @@
 .sg-row__time,
 .sg-row__best {
   font-family: var(--sg-num);
-  font-size: clamp(11px, 1.6vmin, 16px);
+  font-size: var(--sg-fs-body);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .sg-row__best {
   color: var(--sg-green);
-  font-size: clamp(9px, 1.35vmin, 13px);
+  font-size: var(--sg-fs-caption);
 }
 
 .sg-results__meta {
@@ -2875,15 +3079,17 @@
 
 .sg-meta__k {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 12px);
-  letter-spacing: 0.24em;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
+  color: var(--sg-quiet);
   text-transform: uppercase;
 }
 
 .sg-meta__v {
   font-family: var(--sg-num);
-  font-size: clamp(16px, 2.8vmin, 32px);
+  font-size: var(--sg-fs-title);
+  line-height: var(--sg-lh-tight);
   font-variant-numeric: tabular-nums;
   color: var(--sg-ink);
 }
@@ -2970,7 +3176,7 @@
     padding-top: 2px;
   }
   .sg-results__cta .sg-btn--huge {
-    font-size: clamp(14px, 3.1vmin, 26px);
+    font-size: var(--sg-fs-act-lg);
     padding: 0.42em 1.15em;
     box-shadow: 0 5px 0 #06546f, 0 12px 22px rgba(0, 0, 0, 0.5);
   }
@@ -2978,7 +3184,41 @@
     box-shadow: 0 5px 0 #7a5600, 0 12px 22px rgba(0, 0, 0, 0.5);
   }
   .sg-results__cta .sg-btn--huge:active { transform: translateY(3px); }
-  .sg-results__cta .sg-btn { font-size: clamp(11px, 2.4vmin, 18px); }
+  .sg-results__cta .sg-btn { font-size: var(--sg-fs-act); padding-inline: 1.05em; }
+
+  /* FOUR TABS, ONE ROW. The strip is `flex-wrap: wrap` by design so a fifth
+     page needs no breakpoint -- but once each tab became a 44px target with
+     legible tracking, four of them were 400px on a 396px strip and Global
+     dropped to a second line. A wrapped strip also puts the selected tab's
+     underline through the middle of the block instead of on the rule under
+     it, because the marker is positioned against its own tab.
+     The LABEL gives way, never the target: tracking and side padding come
+     off, min-height does not. */
+  /* FOUR TABS, ONE ROW -- AND THE SELECTOR HAS TO OUT-SPECIFY THE BASE RULE,
+     for the same reason the screen's own `display: grid` above does.
+
+     `.sg-tabs` and `.sg-tab` are defined in the RESULTS TABS section about
+     1700 lines BELOW this block. Two rules at equal specificity are decided
+     by source order, so a plain `.sg-tab { padding-inline: ... }` here loses
+     to the `padding` shorthand down there and does nothing at all -- which
+     is what the first cut of this did, measured as a strip that still wrapped
+     with the override applied and inert in devtools. Scoping to the screen
+     makes it (0,2,1) and it wins.
+
+     The strip also takes the whole grid cell rather than 96% of it: it is
+     already inset by the screen's padding and this grid's padding-inline,
+     and that last 4% was the 15px the fourth tab needed. Wrapping matters
+     beyond tidiness -- the selected tab's underline is positioned against
+     its own tab, so a wrapped strip draws the marker through the middle of
+     the block instead of on the rule under it. */
+  .sg-fe[data-screen="results"] .sg-tab {
+    padding-inline: clamp(5px, 1.4vw, 12px);
+    letter-spacing: 0.06em;
+  }
+  .sg-fe[data-screen="results"] .sg-tabs {
+    width: 100%;
+    gap: 3px;
+  }
 }
 
 /* ===========================================================================
@@ -3007,8 +3247,27 @@
 
   /* A column, hard left, with its rule down the right-hand side instead of
      along the bottom -- the panel still reads as attached to the selected tab,
-     just from the side. */
-  .sg-tabs {
+     just from the side.
+     -------------------------------------------------------------------------
+     EVERY SELECTOR HERE IS PREFIXED `.sg-fe` AND THAT IS NOT DECORATION.
+     The base `.sg-tabs` / `.sg-tab` rules live about 1700 lines BELOW this
+     block, at the same specificity, so on source order the base wins every
+     property both of them set -- and this block was losing `width`, `margin`,
+     `padding`, `border-bottom`, the tab padding and the radius. It rendered
+     acceptably enough that nobody looked, right up until the marker.
+     The marker is what made it visible. This block asks for a bar down the
+     RIGHT-HAND rule (`left: auto; right: -7px; top/bottom: 22%; width: 2px;
+     height: auto`) and lost `left`, `right`, `bottom` and `height` to the base
+     rule's horizontal bar -- leaving left 10%, right 10%, top 22%, bottom -7px,
+     width 2px, height 2px. Over-constrained, so it drew as a 2x2 cyan DOT in
+     the corner of the tab. On the results screen, in landscape, on a phone.
+     `.sg-fe` is an ancestor of the strip and costs one class of specificity,
+     which is enough to win regardless of order. Moving the block would also
+     work and would risk every other cascade interaction in 2000 lines; this
+     does not. The same trap is documented one block above and it killed a
+     short-viewport rule outright -- if a third instance turns up, reorder the
+     file rather than adding a third patch. */
+  .sg-fe .sg-tabs {
     flex-direction: column;
     flex-wrap: nowrap;
     align-items: stretch;
@@ -3020,21 +3279,21 @@
     border-bottom: none;
     border-right: 1px solid var(--sg-line);
   }
-  .sg-tab {
+  .sg-fe .sg-tab {
     border-radius: 3px 0 0 3px;
-    padding: 9px 8px 9px 10px;
+    padding: 9px 10px 9px 12px;
     text-align: right;
-    font-size: 10px;
-    letter-spacing: 0.14em;
+    font-size: var(--sg-fs-caption);
+    letter-spacing: var(--sg-ls-caps);
   }
-  .sg-tab.is-on {
+  .sg-fe .sg-tab.is-on {
     border-color: var(--sg-line);
     border-bottom-color: var(--sg-line);
     border-right-color: transparent;
   }
   /* The selected marker rotates with the strip: a bar down the rule, not one
      along it. */
-  .sg-tab.is-on::after {
+  .sg-fe .sg-tab.is-on::after {
     left: auto;
     right: -7px;
     top: 22%;
@@ -3069,7 +3328,7 @@
 .sg-paused__title {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(34px, 8vmin, 96px);
+  font-size: var(--sg-fs-mega);
   letter-spacing: 0.16em;
   color: var(--sg-ink);
   text-shadow: 0 6px 0 rgba(0, 0, 0, 0.5), 0 0 50px rgba(34, 211, 255, 0.35);
@@ -3115,11 +3374,11 @@
      less than half so the six stat bars AND the locomotion note underneath
      them still fit without the panel having to be scrolled. */
   .sg-prev {
-    flex: 1 1 40%;
-    min-height: 118px;
+    flex: 1 1 34%;
+    min-height: 112px;
   }
   .sg-garage .sg-detail {
-    flex: 1 1 60%;
+    flex: 1 1 66%;
   }
 }
 
@@ -3197,6 +3456,30 @@
   .sg-prev__hint {
     display: none;
   }
+  /* AND THE CONTROLS HINT, for the same reason and at the same breakpoint.
+     "Steer left thumb - DRIFT and ITEM right thumb" is a third of the width
+     of the option row, and at 915x412 the row could no longer hold it plus
+     the quality picker plus START RACE: the button wrapped to a second line
+     and took 52px off a garage that has 276 to begin with. It is onboarding
+     text on a screen whose controls are drawn on the screen anyway. */
+  .sg-controls {
+    display: none;
+  }
+  /* The card gives back the width the bigger name needs: at 915 wide the
+     chassis column is 285px and "Bulwark MK-IV" was ellipsising. */
+  .sg-card {
+    padding: 8px 10px;
+  }
+  .sg-card__tag {
+    padding: 3px 7px;
+    letter-spacing: 0.08em;
+  }
+  /* One step down the ramp, on the one viewport where the list column is
+     285px wide: at --sg-fs-strong "Bulwark MK-IV" was 150px in a 145px slot
+     and ellipsised to "Bulwark MK-...". Still up from the 13px it was. */
+  .sg-card__name {
+    font-size: var(--sg-fs-body);
+  }
   /* Give the width back to the briefing: the route map has slack to spare in
      this aspect and the briefing is the column running out of room. */
   .sg-tracks {
@@ -3218,6 +3501,40 @@
 }
 
 @media (max-width: 560px) {
+  /* TWO LIST COLUMNS DO NOT FIT ON A 412px PHONE ANY MORE, and the honest
+     answer is one column rather than type small enough for two.
+
+     Measured: a 412px screen gives each of two columns 187px, of which the
+     card spends 28 on padding, 16 on the colour chip, 20 on gaps and 82 on
+     the locomotion tag -- leaving 41px for the name. "Bulwark MK-IV" in 41px
+     is "B...". Stacked, the same card has 324px and every name fits whole
+     with its nickname under it.
+
+     This is the same move .sg-tracks already makes at this breakpoint, one
+     screen over, and for the same reason. The briefing panel gives back the
+     height: 40vh rather than 50 -- it scrolls internally, so what it loses is
+     empty panel, and what the lists gain is a third card each. */
+  .sg-garage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .sg-col--detail {
+    grid-column: 1;
+    grid-row: 1;
+    height: 43vh;
+  }
+  /* A FIXED SLICE, not a percentage, for the same reason the landscape block
+     below gives one: the six bars and the perk line under the car have a
+     size they cannot be argued below, and a percentage lets the car take
+     room they need. It is still a car you can see and still one you can
+     turn. */
+  .sg-prev {
+    flex: 0 0 clamp(100px, 13vh, 132px);
+    min-height: 0;
+  }
+  .sg-col--chassis { grid-row: 2; }
+  .sg-col--pilot { grid-row: 3; }
+
   .sg-opts {
     justify-content: center;
   }
@@ -3226,14 +3543,23 @@
     justify-content: center;
   }
   .sg-row {
-    grid-template-columns: 2em 1fr auto;
+    grid-template-columns: var(--sg-row-pos) minmax(0, 1fr) auto;
   }
   .sg-row__best {
     display: none;
   }
+  /* THE BRIEFING HAD NO HEIGHT, AND TOOK IT FROM THE BUTTON ROW.
+     Row 2 was `auto`, so the circuit list stood at its full content height --
+     eight cards, about 570px -- and row 3 got what was left of a 915px phone
+     after a 30vh map, which was nothing. The briefing then painted PAST the
+     bottom of the grid and under the TO GARAGE button, which is the same
+     stacking failure the results CTA had. Both rows are now shrinkable and
+     both scroll inside themselves, so the briefing always has a panel and
+     the button always has clear air. Pre-existing; it is fixed here because
+     "the briefing is unreadable on a phone" is the thing being worked on. */
   .sg-tracks {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1.3fr) minmax(0, 1fr);
   }
   .sg-col--route {
     grid-column: 1;
@@ -3904,7 +4230,9 @@
 .sgset-slider__in {
   flex: 1 1 auto;
   min-width: 0;
-  height: 22px;
+  /* The track is drawn by the UA at its own size; this is the HIT box, and
+     a fader dragged with a thumb needs the full target. */
+  height: var(--sg-tap);
   accent-color: var(--sg-cyan);
   cursor: pointer;
 }
@@ -3916,10 +4244,10 @@
 
 .sgset-slider__v {
   font-family: var(--sg-num);
-  font-size: clamp(10px, 1.4vmin, 13px);
+  font-size: var(--sg-fs-micro);
   font-variant-numeric: tabular-nums;
   color: var(--sg-dim);
-  min-width: 2.4em;
+  min-width: 2.6em;
   text-align: right;
 }
 
@@ -4343,19 +4671,25 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
+  gap: 3px;
 }
 
 .sg-score-k {
-  font-size: 10px;
+  font-size: var(--sg-fs-micro);
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.22em;
+  letter-spacing: var(--sg-ls-caps-wide);
   color: var(--sg-dim);
 }
 
+/* THE ONLY SIZE IN THE MENUS THAT WAS IN vw, AND IT SHOWED. 6vw is the LONG
+   edge on a landscape phone: measured at 915x412 this rendered at 52px on a
+   412px-tall screen, half the height of the standings list underneath it,
+   while the same phone in portrait got the 30px floor. Same phone, same
+   number, 22px apart. --sg-fs-hero is vmin, so both orientations get 31px
+   and a desktop gets 46. */
 .sg-score-v {
-  font-size: clamp(30px, 6vw, 52px);
+  font-size: var(--sg-fs-hero);
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -4364,10 +4698,10 @@
 }
 
 .sg-score-rank {
-  font-size: 11px;
+  font-size: var(--sg-fs-caption);
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.16em;
+  letter-spacing: var(--sg-ls-caps);
   color: var(--sg-green);
 }
 
@@ -4379,17 +4713,20 @@
 }
 
 .sg-name__k {
-  font-size: 10px;
+  font-size: var(--sg-fs-micro);
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.2em;
+  letter-spacing: var(--sg-ls-caps-wide);
   color: var(--sg-dim);
 }
 
 .sg-name__in {
   width: 8.5em;
-  padding: 5px 8px;
-  font-size: 14px;
+  padding: 8px 10px;
+  /* A text field is a touch target too, and this one is the last thing
+     between a qualifying run and a name on the board. */
+  min-height: var(--sg-tap);
+  font-size: var(--sg-fs-body);
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.12em;
@@ -4420,16 +4757,21 @@
   width: var(--sg-table-w);
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 8px 10px 9px;
+  gap: clamp(5px, 0.85vmin, 8px);
+  /* The tables carried 8px of padding around 12px rows on a 1440x810 screen
+     with half of it empty. Air is the other half of legibility: the type
+     could not grow inside a box that did not. Spent to a budget, though --
+     see .sg-tabpanel: the Records page has two of these stacked and the
+     screen it sits on has a fixed button row under it. */
+  padding: clamp(9px, 1.3vmin, 12px) clamp(12px, 1.8vmin, 18px) clamp(10px, 1.4vmin, 13px);
 }
 
 .sg-board__title {
-  font-size: 9px;
+  font-size: var(--sg-fs-micro);
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.2em;
-  color: var(--sg-mute);
+  letter-spacing: var(--sg-ls-caps-wide);
+  color: var(--sg-quiet);
   text-align: center;
 }
 
@@ -4437,7 +4779,7 @@
 .sg-rec__rows {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 /* One row shape, shared by the leaderboard and the global board. */
@@ -4445,13 +4787,13 @@
   display: grid;
   grid-template-columns: 1.8em minmax(0, 1fr) minmax(0, 0.9fr) 5.8em;
   align-items: baseline;
-  gap: 2px 12px;
-  padding: 4px 8px;
-  border-radius: 2px;
+  gap: 2px clamp(10px, 1.6vmin, 16px);
+  padding: clamp(5px, 0.9vmin, 7px) clamp(9px, 1.4vmin, 14px);
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.03);
-  font-size: 12px;
+  font-size: var(--sg-fs-caption);
   font-weight: 500;
-  line-height: 1.35;
+  line-height: var(--sg-lh-snug);
   color: var(--sg-dim);
 }
 
@@ -4468,7 +4810,7 @@
   box-shadow: inset 3px 0 0 var(--sg-cyan);
 }
 
-.sg-board__n { font-variant-numeric: tabular-nums; color: var(--sg-mute); }
+.sg-board__n { font-variant-numeric: tabular-nums; color: var(--sg-quiet); }
 
 .sg-board__name,
 .sg-board__car {
@@ -4477,12 +4819,12 @@
   white-space: nowrap;
 }
 
-.sg-board__name { letter-spacing: 0.08em; }
+.sg-board__name { letter-spacing: 0.06em; }
 
 /* Cyan means "vehicle", on every tab. */
 .sg-board__car,
 .sg-rec__car {
-  font-size: 11px;
+  font-size: var(--sg-fs-micro);
   color: var(--sg-cyan);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4543,22 +4885,25 @@
   display: grid;
   grid-template-columns: 1.6em minmax(0, 1fr) 3.1em 2.8em;
   align-items: center;
-  gap: 2px 10px;
-  padding: 5px 8px;
+  gap: 2px clamp(9px, 1.4vmin, 14px);
+  /* Named for the same reason .sg-row's is: `.is-you` subtracts the rail
+     from it four lines down. */
+  --sg-crow-px: clamp(9px, 1.4vmin, 14px);
+  padding: clamp(6px, 1.1vmin, 10px) var(--sg-crow-px);
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.03);
   /* Same rail as .sg-row so `.is-you` is one rule for both. */
   border: 1px solid transparent;
   border-left: var(--sg-you-rail) solid rgba(122, 190, 255, 0.16);
-  font-size: 12px;
-  line-height: 1.3;
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
   color: var(--sg-dim);
 }
 
 .sg-crow.is-you {
   border-left-color: var(--sg-cyan);
   border-left-width: var(--sg-you-rail-on);
-  padding-left: calc(8px - (var(--sg-you-rail-on) - var(--sg-you-rail)));
+  padding-left: calc(var(--sg-crow-px) - (var(--sg-you-rail-on) - var(--sg-you-rail)));
   background: linear-gradient(
     90deg,
     rgba(34, 211, 255, 0.26),
@@ -4586,7 +4931,7 @@
 .sg-crow__p {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: 15px;
+  font-size: var(--sg-fs-body);
   color: var(--sg-ink);
   text-align: center;
 }
@@ -4607,13 +4952,13 @@
   gap: 0.5em;
   min-width: 0;
   font-family: var(--sg-display);
-  font-size: 12px;
+  font-size: var(--sg-fs-caption);
   letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
 .sg-crow__chassis {
-  font-size: 10px;
+  font-size: var(--sg-fs-micro);
   color: var(--sg-cyan);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4625,20 +4970,20 @@
 .sg-crow__gain {
   font-family: var(--sg-num);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: var(--sg-fs-micro);
   color: var(--sg-green);
   text-align: right;
 }
 
 .sg-crow__gain.is-dnf {
   color: var(--sg-red);
-  font-size: 10px;
+  font-size: var(--sg-fs-micro);
 }
 
 .sg-crow__pts {
   font-family: var(--sg-num);
   font-variant-numeric: tabular-nums;
-  font-size: 15px;
+  font-size: var(--sg-fs-body);
   font-weight: 700;
   color: var(--sg-ink);
   text-align: right;
@@ -4649,30 +4994,31 @@
    so it is the largest type on the page. */
 .sg-circuit__you {
   font-family: var(--sg-display);
-  font-size: 13px;
+  font-size: var(--sg-fs-body);
+  line-height: var(--sg-lh-snug);
   letter-spacing: 0.06em;
   color: var(--sg-cyan);
   text-align: center;
-  padding: 1px 0 2px;
+  padding: 2px 0 4px;
 }
 
 .sg-circuit__you:empty { display: none; }
 
 .sg-board__empty,
 .sg-board__note {
-  font-size: 10px;
+  font-size: var(--sg-fs-micro);
   font-weight: 500;
-  line-height: 1.4;
-  color: var(--sg-mute);
+  line-height: var(--sg-lh-body);
+  color: var(--sg-quiet);
   text-align: center;
-  padding: 3px 0 0;
+  padding: 5px 0 0;
 }
 
 .sg-board__note:empty { display: none; }
 
 .sg-btn--small {
-  padding: 5px 12px;
-  font-size: 12px;
+  padding: 6px 16px;
+  font-size: var(--sg-fs-caption);
 }
 
 /* ===========================================================================
@@ -4687,10 +5033,12 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 4px;
-  margin: 10px auto 0;
+  margin: 6px auto 0;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--sg-line);
-  width: min(96%, 520px);
+  /* Wider now that each tab is a 44px target with room for its label: four
+     of them at the old 520px would have wrapped to two rows. */
+  width: min(96%, 640px);
 }
 
 .sg-tab {
@@ -4699,13 +5047,15 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: 3px 3px 0 0;
-  padding: 6px 16px 7px;
-  font-size: 11px;
+  padding: 6px clamp(14px, 2.2vmin, 22px) 7px;
+  /* A tab is a button and these were 26px tall. */
+  min-height: var(--sg-tap);
+  font-size: var(--sg-fs-caption);
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.18em;
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
   cursor: pointer;
   transition: color 140ms linear, background 140ms linear;
 }
@@ -4787,8 +5137,23 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(10px, 2vmin, 24px);
+  gap: clamp(8px, 1.4vmin, 16px);
   width: 100%;
+  /* AND THE PANEL IS A SCROLL CONTAINER ON EVERY VIEWPORT, not only inside
+     the phone grid below.
+
+     The block above .sg-results__cta explains that a flex column lets a tall
+     panel paint UNDER the button row, because the buttons are later in the
+     DOM -- and says the phone grid fixed it "properly rather than by shaving
+     numbers". Desktop kept the flex column and kept the bug: at 1440x810 the
+     Records page is the tallest of the four, and with type a player can read
+     it ran 50px past its box and put "Saved on this device only." behind
+     NEXT RACE. Overflow here bounds the panel to the row it was given, so
+     the CTA can never be painted over again, on any screen, by any future
+     page. It only actually scrolls when a page is genuinely taller than the
+     screen. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   /* Same reason as .sg-tabpanels above -- this is the second link in the
      chain, and one unbroken link is enough to stop the shrink. */
   flex: 0 1 auto;
@@ -4820,13 +5185,13 @@
      records at three lines apiece is twelve rows of table above a leaderboard. */
   grid-template-columns: minmax(0, 1fr) 5.8em minmax(0, 0.9fr);
   align-items: baseline;
-  gap: 2px 12px;
-  padding: 4px 8px;
-  border-radius: 2px;
+  gap: 2px clamp(10px, 1.6vmin, 16px);
+  padding: clamp(5px, 0.9vmin, 7px) clamp(9px, 1.4vmin, 14px);
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.03);
-  font-size: 12px;
+  font-size: var(--sg-fs-caption);
   font-weight: 500;
-  line-height: 1.35;
+  line-height: var(--sg-lh-snug);
   color: var(--sg-dim);
 }
 
@@ -4838,7 +5203,7 @@
 }
 
 .sg-rec__k {
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4853,19 +5218,19 @@
 
 .sg-rec__who {
   grid-column: 1 / span 2;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--sg-quiet);
 }
 
 .sg-rec__new {
   grid-column: 3;
   justify-self: start;
   align-self: center;
-  font-size: 9px;
+  font-size: var(--sg-fs-micro);
   font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.2em;
+  letter-spacing: var(--sg-ls-caps-wide);
   color: var(--sg-green);
 }
 

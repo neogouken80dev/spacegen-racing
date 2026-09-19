@@ -17,12 +17,34 @@ import { CHASSIS, CHASSIS_BY_ID, getDerived, getLocomotion } from '../content/ch
 import { PILOTS } from '../content/pilots'
 import { TUNING as T } from '../content/tuning'
 import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types'
-// TYPES ONLY, DELIBERATELY. `net/index.ts` is lazy on purpose -- naming it
-// starts a mock directory ticking -- and the Game has no business reaching for
-// a service anyway: the front end owns the lobby and hands this file the one
-// packet that comes out of it. `import type` cannot emit a runtime import, so
-// that stays true however this file is later edited.
-import type { RaceStartPacket } from '../net/types'
+/**
+ * THE TYPES-ONLY RULE, AND THE ONE THING THAT BROKE IT.
+ *
+ * It used to read: `net/index.ts` is lazy on purpose -- naming it starts a
+ * mock directory ticking -- and the Game has no business reaching for a
+ * service anyway, because the front end owns the lobby and hands this file the
+ * one packet that comes out of it. `import type` cannot emit a runtime import,
+ * so the rule enforced itself.
+ *
+ * NETCODE MADE IT FALSE, AND IN EXACTLY TWO PLACES.
+ *
+ *   `raceTransport()`  A packet cannot carry inputs. The lobby owns the peer
+ *                      mesh -- it built it to run the room -- so the race
+ *                      BORROWS it, and there is no route from a packet to the
+ *                      transport that belongs to the round it announced.
+ *   `lobbyService()`   A round has to be able to END. `endRound(standings)` is
+ *                      what advances a series, and nothing else in the process
+ *                      knows the finishing order.
+ *
+ * Both are still lazy: `lobbyService()` is only ever called on a frame where a
+ * multiplayer packet is live, which means the front end has already created
+ * the service and no directory starts ticking because this module was
+ * imported. The attract loop, the headless harness and every unit test that
+ * never opens a lobby still pay nothing.
+ */
+import { liveLobby, lobbyService, raceTransport } from '../net'
+import { LockstepRunner } from '../net/lockstep'
+import type { RaceStartPacket, SeriesStanding } from '../net/types'
 import { QUALITY_PRESETS, type QualityTier, type RenderQuality } from '../render/api'
 import { createVehicleVisual, disposeVehicleCache, type VehicleVisualEx } from '../render/vehicles'
 import { buildTrackVisual } from '../render/trackMesh'
@@ -53,6 +75,11 @@ import {
 import {
   PODIUM_SKIP_GUARD, podiumCast, podiumDone, podiumSkip, type PodiumCast,
 } from './podium'
+import {
+  applySeriesRound, localSeriesLine, seriesKey, seriesPodiumCast,
+  seriesPodiumNames, type SeriesFinish,
+} from './series'
+import { setRoomNotice } from '../ui/lobby'
 import { createPodiumStage, pilotName, type PodiumStage } from '../render/podium'
 import { ChaseCamera } from './camera'
 import { themeFor } from '../render/themes'
@@ -359,6 +386,35 @@ export class Game {
    * it writes nothing to disk.
    */
   private multiplayer: RaceStartPacket | null = null
+  /**
+   * THE LOCKSTEP GATE FOR THE ROUND NOW RUNNING, OR NULL.
+   *
+   * Null is the ordinary case and covers every race this game shipped with: a
+   * single race, a circuit round, the attract loop, and a lobby race under the
+   * mock (which has no peers -- see `MockLobbyService.transport`). The
+   * fixed-step loop branches on it exactly once, and when it is null the loop
+   * is the one that was there before, line for line.
+   *
+   * PUBLIC, for the same reason `maxSubSteps` is: tools/probe-netcode.mjs
+   * drives two real Chromium contexts against the built bundle and has to be
+   * able to read the runner's verdict, its scheduler and who it is waiting
+   * for. Those are the things a screenshot cannot show, and there is no other
+   * handle on them from outside.
+   */
+  net: LockstepRunner | null = null
+  /**
+   * The series table this client last banked, and the round it belongs to.
+   *
+   * HELD HERE RATHER THAN READ BACK OFF THE ROOM, because the room is not
+   * there yet when it is needed: `finishRace` totals the round and calls
+   * `endRound`, and the push carrying the new room arrives afterwards. The
+   * podium and the results screen both want the table on the frame the race
+   * ends, so it is computed once, used, and handed down.
+   */
+  private seriesTable: readonly SeriesStanding[] = []
+  /** True once `endRound` has been called for the round now finishing, so a
+   *  desync and a flag racing each other cannot advance the series twice. */
+  private roundEnded = false
   private raf = 0
   private reduceMotion = false
   /**
@@ -400,7 +456,10 @@ export class Game {
   private podT = 0
   private podSkipArmed = false
   /** Reused so the per-frame HUD push allocates nothing. */
-  private readonly podCard = { lines: [] as PodiumLine[], you: '', tied: false, canSkip: false }
+  private readonly podCard = {
+    lines: [] as PodiumLine[], you: '', tied: false, canSkip: false,
+    eyebrow: 'GRAND CIRCUIT',
+  }
 
   // Adaptive quality
   private resizeObs: ResizeObserver | null = null
@@ -541,6 +600,12 @@ export class Game {
       // in the wrong cars.
       if (this.multiplayer) {
         this.multiplayer = null
+        this.seriesTable = []
+        // AND THE WIRE WITH IT. The runner holds a transport for a round that
+        // is over, a scheduler keyed on that round's slots, and a reference to
+        // a `Race` this call is about to replace -- so a single race started
+        // out of a lobby would be gated on a peer who is not in it.
+        this.detachNet()
         this.setNameplateRoster(null)
       }
       // A FINISHED SERIES HAS NO NEXT ROUND. Reachable by walking back into the
@@ -575,6 +640,20 @@ export class Game {
     // ROUND -- a different circuit -- so "rematch" would be the wrong promise;
     // frontend.ts relabels it and this is the other half of that.
     this.frontEnd.onRematch = () => {
+      /**
+       * IN A LOBBY THERE IS NO SUCH THING AS A REMATCH.
+       *
+       * The button would re-run the last packet -- same seed, same grid, same
+       * circuit -- on this client alone, while the other seven people are
+       * back in the room waiting for the host to start the next round. That
+       * is not a rematch, it is one player leaving the series and racing a
+       * recording of it.
+       *
+       * The room is where the next round comes from, so that is where it
+       * goes: the standings are there, whose turn it is is there, and the
+       * Start button is there for whoever owns it.
+       */
+      if (this.multiplayer) { this.toRoom(); return }
       if (!this.circuitActive || !this.circuit) { this.startRace(); return }
       if (isComplete(this.circuit)) {
         // The series is over. Stay out of it, keep the standings, and let the
@@ -929,6 +1008,8 @@ export class Game {
      */
     if (this.multiplayer) {
       this.multiplayer = null
+      this.seriesTable = []
+      this.detachNet()
       this.setNameplateRoster(null)
     }
     resetAI()
@@ -1029,30 +1110,25 @@ export class Game {
    * title screen.
    *
    * ==========================================================================
-   * WHAT IS NOT WIRED YET, SAID OUT LOUD SO NOBODY MISTAKES THIS FOR NETCODE
+   * THE WIRE, WHICH IS NOW HERE
    *
-   * THERE IS NO TRANSPORT. `RaceTransport` in net/types.ts is declared and not
-   * implemented, so the other humans' cars are driven by the AI this pass, at
-   * the stand-in pace `standInSkill` derives. The flow is real end to end --
-   * lobby, room, Start, the right eight cars on the right circuit from the
-   * right seed, with the player in their own slot -- and the only missing piece
-   * is the wire. It is the correct milestone for a front-end-first build and it
-   * is NOT a playable multiplayer race: every client is simulating its own
-   * copy of everybody else.
+   * The previous pass said in this space that there was no transport and the
+   * other humans' cars were AI. There is one now, and the difference is
+   * `attachNet` at the bottom of this function: the race is built exactly as
+   * before and then a `LockstepRunner` is put in front of its step.
    *
-   * `packet.inputDelay` IS THEREFORE UNUSED, on purpose. It is the lockstep
-   * tax -- the frames every client holds its own input for so the slowest peer
-   * can keep up -- and buffering the local player's input against peers who do
-   * not exist yet would be latency bought for nothing. It becomes load-bearing
-   * on the day `sendInput`/`onInput` do, and it is in the packet now so that
-   * day does not need a protocol change.
+   * IT IS STILL ONE RACE PATH. Nothing above `attachNet` knows about the wire,
+   * nothing below cares: the runner gates `Race.step`, flips the networked
+   * slots' `isAI` off, and feeds them transported inputs. `packet.inputDelay`
+   * is finally load-bearing -- it is the number of frames every client holds
+   * its own input for -- and it comes from the packet rather than being chosen
+   * here, because a delay two clients disagree about is a desync.
    *
-   * Nor is `isAI` per-client stable, which is the deeper reason this cannot be
-   * finished here: sim/race.ts derives it from `localRacerIndex`, so a slot is
-   * AI on my machine and a person on theirs, and `aiRocketStart` draws from the
-   * shared race RNG. Real lockstep needs every client to step every car from
-   * transported inputs -- which is a change to how inputs arrive, not to this
-   * function, and is exactly what `RaceTransport` is shaped for.
+   * THE MOCK STILL RACES LOCALLY AND THAT IS CORRECT. `transport()` returns
+   * null under `mock` and `perfect`, so `attachNet` does nothing and this is
+   * byte for byte the race the previous pass shipped: a lobby flow that works
+   * end to end on one machine with AI in the other seats. Two behaviours from
+   * one packet, decided by whether there is anybody on the other end.
    */
   private startMultiplayer(packet: RaceStartPacket): void {
     // The track BEFORE the config, because the config has to name the circuit
@@ -1069,11 +1145,99 @@ export class Game {
       this.publishCircuit()
     }
     this.multiplayer = packet
+    // THE TABLE THE ROUND IS SCORED ONTO, FROM THE PACKET AND NOT FROM THE
+    // ROOM. Every client must fold this round into the same table or the
+    // series diverges on the first disagreement, so it arrives in the
+    // broadcast with the seed and the grid. Round 0 carries an empty one.
+    this.seriesTable = packet.standings
+    this.roundEnded = false
     // The name plates take exactly what the packet publishes. THE ONLY CALLER
     // THAT PASSES A ROSTER: a single race, a circuit round and the attract race
     // all leave it null and pay for none of the feature.
     this.setNameplateRoster({ grid: packet.grid, localPlayerId: packet.localPlayerId })
     this.startRace()
+    // AFTER, NOT BEFORE. `startRace` builds the `Race` this gates, and it is
+    // also the one place that can REFUSE a packet -- a grid this client is not
+    // on leaves `this.race` null and `this.multiplayer` cleared, and attaching
+    // a runner to that would be attaching it to the attract loop.
+    this.attachNet(packet)
+  }
+
+  /**
+   * Put the round's lockstep gate in front of the race, if there is a wire.
+   *
+   * ------------------------------------------------------------------------
+   * WHAT IS WIRED TO WHAT, because five callbacks in two directions is exactly
+   * the shape that ends up half-connected:
+   *
+   *   transport -> runner   `onInput` / `onHash` / `onDropped`, all three set
+   *                         by the runner's own constructor. Not here.
+   *   transport -> runner   `onRoundDrop` / `onDesync`: the room's VERDICTS,
+   *                         which a guest applies rather than reaches. Here,
+   *                         because the runner cannot subscribe to messages it
+   *                         does not know the shape of.
+   *   runner -> transport   `announceDrop` / `announceDesync`: the same two
+   *                         verdicts going the other way, and HOST ONLY. The
+   *                         runner already refuses to call them on a guest;
+   *                         wiring them unconditionally is safe and means the
+   *                         host/guest split lives in exactly one file.
+   *
+   * `health` COMES FROM THE MESH AND NOT FROM THE SCHEDULER. The scheduler can
+   * only see that an input has not arrived; the mesh knows whether the wire is
+   * gone. That is the difference between the 5-second "we are not sure" drop
+   * and the immediate "there is nothing to wait for" one, and without this
+   * function the runner would wait five seconds for a peer whose connection
+   * had already failed -- five seconds of frozen race, every time, for no
+   * information.
+   */
+  private attachNet(packet: RaceStartPacket): void {
+    this.net = null
+    const race = this.race
+    if (!race || this.multiplayer !== packet) return
+    // The lobby's transport for THIS round. Null under the mock, which is the
+    // whole of "the mock still races locally".
+    const transport = raceTransport()
+    if (!transport) return
+
+    const players = new Map<number, string>()
+    for (const s of packet.grid) if (s.playerId) players.set(s.slot, s.playerId)
+    // The mesh, for the per-peer wire state. Reached through net/index.ts's
+    // accessor rather than through the service, so this file still names one
+    // module and not two implementations.
+    const mesh = liveLobby()?.mesh ?? null
+
+    const runner = new LockstepRunner({
+      race,
+      transport,
+      players,
+      // `localId` was assigned FROM THE CONFIG inside startRace, which read it
+      // from the packet. Using it here rather than re-deriving keeps the one
+      // number this client's whole race hangs off in one place.
+      localSlot: this.localId,
+      inputDelay: packet.inputDelay,
+      // AUTHORITY IS THE PACKET'S ANSWER, not the service's. Every client
+      // reads the same grid and reaches the same conclusion about who the host
+      // is, which is the property that stops two clients both believing they
+      // may propose drops.
+      authority: packet.grid.some((s) => s.isHost && s.playerId === packet.localPlayerId),
+      health: (slot) => {
+        const id = players.get(slot)
+        const link = id && mesh ? mesh.get(id) : null
+        return link && link.dead ? 'down' : 'up'
+      },
+      announceDrop: (_slot, playerId, frame) => transport.announceDrop(playerId, frame),
+      announceDesync: (frame) => transport.announceDesync(frame),
+    })
+    transport.onRoundDrop = (playerId, frame) => runner.acceptDrop(playerId, frame)
+    transport.onDesync = (frame) => runner.acceptDesync(frame)
+    this.net = runner
+  }
+
+  /** Drop the round's lockstep state. The MESH is not touched -- it belongs to
+   *  the lobby and outlives the round, which is what makes a series cheap. */
+  private detachNet(): void {
+    this.net = null
+    this.hud.setNetStatus(null)
   }
 
   // -------------------------------------------------------------------------
@@ -1100,6 +1264,8 @@ export class Game {
         + `eight-car grid (${this.multiplayer.grid.length} slots, `
         + `localPlayerId ${JSON.stringify(this.multiplayer.localPlayerId)}); refusing`)
       this.multiplayer = null
+      this.seriesTable = []
+      this.detachNet()
       this.setNameplateRoster(null)
       return
     }
@@ -1305,6 +1471,17 @@ export class Game {
 
   private toMenu(): void {
     this.closePodium()
+    // QUITTING A LOBBY ROUND IS QUITTING IT. The room carries on without this
+    // client -- the slot keeps racing under AI and keeps its place in the
+    // standings, which is the contract's rule for a mid-series departure --
+    // and holding a runner for a round this client has walked out of would
+    // keep publishing inputs for a car nobody is driving.
+    this.detachNet()
+    if (this.multiplayer) {
+      this.multiplayer = null
+      this.seriesTable = []
+      this.setNameplateRoster(null)
+    }
     this.phase = 'menu'
     this.race = null
     this.teardownWorld()
@@ -1453,9 +1630,90 @@ export class Game {
       this.beginPodium()
       return
     }
+    // A LOBBY ROUND IS SCORED THE SAME WAY AND IN THE SAME PLACE, for the same
+    // reason the comment above gives: the screen that follows has to be able
+    // to read the table, so the table exists first. `scoreSeriesRound` is a
+    // no-op outside a lobby race, which is the whole of "single player is
+    // unaffected".
+    const mpPodium = this.scoreSeriesRound()
+    if (mpPodium) { this.beginSeriesPodium(); return }
     this.phase = 'results'
     this.hud.root.style.display = 'none'
     this.showResultsScreen()
+  }
+
+  /**
+   * Fold the lobby round that just finished into the series table, and say
+   * whether that finished the series.
+   *
+   * ------------------------------------------------------------------------
+   * THE FINISHING ORDER COMES FROM THE SIM AND THE IDENTITIES COME FROM THE
+   * PACKET, joined on the grid slot. Neither alone is enough: the sim knows
+   * who came where and nothing about who is a person, and the packet knows
+   * who is a person and nothing about the race. `MultiplayerSlot.slot` is
+   * documented as the racer id in the sim, which is what makes the join safe.
+   *
+   * IT IS SCORED FROM `this.multiplayer.grid`, NOT FROM THE CURRENT ROOM. A
+   * player who left during the round is out of the room by now, and reading
+   * the room here would drop them from the table -- which is precisely what
+   * the contract forbids: "a table that silently drops a driver rewrites the
+   * history of the rounds already raced." The grid is who STARTED, and the
+   * round is scored on who started.
+   *
+   * A SLOT THE AI TOOK OVER STILL SCORES, and it scores for the person whose
+   * slot it is. That is not generosity, it is the only consistent reading of
+   * "their slot keeps racing under AI": the car finished 4th, so the row gets
+   * a 4. `applySeriesRound` keeps their name and their avatar rather than
+   * adopting the AI's, so the table still says a person was there.
+   */
+  private scoreSeriesRound(): boolean {
+    const packet = this.multiplayer
+    const race = this.race
+    if (!packet || !race || this.roundEnded) return false
+    this.roundEnded = true
+
+    const racers = race.state.racers
+    const round: SeriesFinish[] = []
+    for (const slot of packet.grid) {
+      const r = racers[slot.slot]
+      if (!r) continue
+      round.push({
+        playerId: slot.playerId,
+        name: slot.name,
+        avatarId: slot.avatarId,
+        position: r.position,
+        finished: r.finished,
+        isLocal: slot.playerId !== null && slot.playerId === packet.localPlayerId,
+      })
+    }
+    this.seriesTable = applySeriesRound(packet.standings, round, packet.round)
+    void this.endSeriesRound(this.seriesTable)
+
+    // WHAT THE ROUND DID TO THE TABLE, waiting in the room for them.
+    //
+    // The room already draws the standings, so this is not the information --
+    // it is the CHANGE, which a table cannot show: a player who was 2nd and
+    // is now 4th reads two identical-looking tables one round apart and has
+    // to remember. A sentence at the moment of arrival is the cheapest
+    // possible answer, and it costs nothing on a single race, which gets
+    // none of it.
+    if (packet.seriesLength > 1) {
+      const me = localSeriesLine(this.seriesTable)
+      const done = packet.round + 1
+      setRoomNotice(me
+        ? `Round ${done} of ${packet.seriesLength} scored — you are ${ORDINAL[me.place] ?? me.place + 'th'} `
+          + `on ${me.points} ${me.points === 1 ? 'point' : 'points'}.`
+        : `Round ${done} of ${packet.seriesLength} scored.`)
+    }
+
+    // THE PODIUM IS THE MOMENT THE SERIES BECOMES COMPLETE, which is the round
+    // index reaching the last one -- asked from the PACKET rather than from
+    // the room for the same reason the table is: the room has not been told
+    // yet. A single race is a series of one, so `round 0 of 1` is complete the
+    // instant it is scored, and a one-off lobby race would get a championship
+    // celebration for finishing one race. It does not: see below.
+    const last = packet.round >= packet.seriesLength - 1
+    return last && packet.seriesLength > 1
   }
 
   /** Build and raise the results screen. Split out of finishRace because the
@@ -1487,7 +1745,59 @@ export class Game {
 
   private beginPodium(): void {
     if (!this.circuit) { this.phase = 'results'; this.showResultsScreen(); return }
-    const cast = podiumCast(standings(this.circuit), 0)
+    this.raisePodium(podiumCast(standings(this.circuit), 0), null)
+  }
+
+  /**
+   * The same celebration at the end of a LOBBY series.
+   *
+   * NOT A SECOND PODIUM. `game/podium.ts` and `render/podium.ts` are both
+   * built, both tested and both take a standings table; everything below the
+   * cast -- the five camera beats, the three parked cars, the confetti, the
+   * skip rule, the reduced-motion behaviour -- is shared with the Grand
+   * Circuit's, and this function's whole job is to build a cast out of a
+   * different kind of table.
+   *
+   * THE TWO THINGS THAT ARE GENUINELY DIFFERENT, and they are both about
+   * names rather than about the scene:
+   *
+   *   WHO. A `StandingRow` carries an entrant with a pilot and a chassis, and
+   *        a `SeriesStanding` carries a person with a claimed name and an
+   *        avatar. `seriesPodiumCast` joins the two through the last round's
+   *        grid, so the SCENE still gets a real car and a real figure to
+   *        build -- render/podium.ts never draws a name, which is what makes
+   *        this work at all.
+   *
+   *   WHAT THE CARD SAYS. Single player prints the pilot's roster name,
+   *        because in single player the driver IS the pilot. Here it prints
+   *        the player's, because "SOCKET" over a car driven by somebody called
+   *        Nova is the wrong name in the one place the game names a winner.
+   */
+  private beginSeriesPodium(): void {
+    const packet = this.multiplayer
+    if (!packet) { this.phase = 'results'; this.showResultsScreen(); return }
+    const table = this.seriesTable
+    const localKey = seriesKey({ playerId: packet.localPlayerId, name: '' })
+    const cast = seriesPodiumCast(table, packet.grid, localKey)
+    this.raisePodium(cast, seriesPodiumNames(table, cast),
+      `${packet.seriesLength}-ROUND SERIES`)
+  }
+
+  /**
+   * Raise the celebration for a cast that is already built.
+   *
+   * ONE BODY FOR BOTH SERIES, split out of `beginPodium` rather than copied,
+   * because everything in it is about the RENDERER and the phase -- tearing
+   * the circuit down, rebuilding the post chain against the one camera,
+   * putting the world up, taking the racing HUD away -- and none of it knows
+   * or cares which kind of series it is celebrating. `names` is the only
+   * parameter: null means "use the pilot roster", which is single player.
+   */
+  private raisePodium(
+    cast: PodiumCast,
+    names: readonly string[] | null,
+    eyebrow = 'GRAND CIRCUIT',
+  ): void {
     // A podium with nobody on it is not a scene. Unreachable with the shipped
     // eight-car grid -- standings() returns a row per entrant -- and cheaper to
     // rule out than to debug at the end of a forty-minute series.
@@ -1522,7 +1832,7 @@ export class Game {
     // entered from, and a results panel left standing over the celebration
     // would also swallow the skip button underneath it.
     this.frontEnd.hide()
-    this.fillPodiumCard(cast)
+    this.fillPodiumCard(cast, names, eyebrow)
     this.hud.root.style.display = ''
     this.hud.setPodium(this.podCard)
     // The score counter lives inside the HUD root and survives `is-ceremony`,
@@ -1536,19 +1846,30 @@ export class Game {
     this.audio.menuMusic('title')
   }
 
-  /** Fill the reused card object. Runs once per podium, not per frame. */
-  private fillPodiumCard(cast: PodiumCast): void {
+  /**
+   * Fill the reused card object. Runs once per podium, not per frame.
+   *
+   * `names` overrides the pilot roster, step for step, and is how a lobby
+   * series names people instead of pilots. Null everywhere else.
+   */
+  private fillPodiumCard(
+    cast: PodiumCast,
+    names: readonly string[] | null,
+    eyebrow: string,
+  ): void {
     const lines: PodiumLine[] = []
-    for (const e of cast.steps) {
+    for (let i = 0; i < cast.steps.length; i++) {
+      const e = cast.steps[i]
       lines.push({
         place: e.place,
-        pilot: pilotName(e.pilotId),
+        pilot: names?.[i] ?? pilotName(e.pilotId),
         chassis: CHASSIS_BY_ID[e.chassisId]?.name ?? e.chassisId,
         points: e.points,
         isLocal: e.isLocal,
       })
     }
     this.podCard.lines = lines
+    this.podCard.eyebrow = eyebrow
     this.podCard.tied = cast.tied
     this.podCard.canSkip = false
     const place = cast.localPlace
@@ -1850,7 +2171,59 @@ export class Game {
           this.lastInput.drift = frame.drift
           this.lastInput.brake = frame.brake
           this.lastInput.lift = frame.lift
-          this.race.setInput(this.localId, frame)
+          /**
+           * THE ONE BRANCH LOCKSTEP ADDS TO THIS LOOP.
+           *
+           * With no wire, the line that has always been here: this client's
+           * own stick straight into its own racer, and every other car driven
+           * by the AI. With a wire, the runner does it instead -- it publishes
+           * this frame's input for a frame `inputDelay` ahead, sets EVERY
+           * networked slot from the tape (the local one included, quantised
+           * and unquantised so this client steps the identical value every
+           * other client will), and answers whether the sim may advance.
+           *
+           * ==================================================================
+           * `accumulator = 0` IS LOAD-BEARING AND IS THE WHOLE BUG.
+           *
+           * The accumulator is real time owed to the simulation. It is added
+           * to every rendered frame and paid down in 16.67ms steps, and that
+           * is exactly right when the only reason a step does not run is that
+           * there is not a whole one owed yet.
+           *
+           * A STALL IS NOT THAT. During a stall the loop keeps being called
+           * sixty times a second and keeps adding 16.67ms of debt, and none of
+           * it is paid because `beforeStep` keeps saying no. Five seconds of
+           * waiting for a peer banks five seconds -- three hundred frames --
+           * of owed simulation. The instant the peer's inputs land, the loop
+           * runs its whole sub-step budget on every rendered frame until the
+           * debt clears, and the race VISIBLY FAST-FORWARDS: cars teleport
+           * down the straight at several times speed, the player's own
+           * steering arrives against a car that is no longer where they saw
+           * it, and a stall that the netcode survived perfectly turns into a
+           * corner nobody could have driven.
+           *
+           * So a stalled frame does not bank time. The sim clock is the frame
+           * counter, and lockstep's whole premise is that the frame counter
+           * advances in step with the slowest peer rather than with the wall
+           * -- time spent waiting is not time the simulation owes, it is time
+           * the simulation did not happen. Zeroing it says exactly that.
+           *
+           * (The mirror of this is already here, four lines below the loop:
+           * `if (steps === this.maxSubSteps) this.accumulator = 0`, which
+           * throws away debt the sub-step cap could not pay. Same reasoning,
+           * different cause.)
+           *
+           * `break`, NOT `continue`. The answer cannot change inside one
+           * rendered frame: no peer input can arrive while this loop is
+           * running, because the message handler that would deliver it is a
+           * callback on the same single thread. Spinning would burn the
+           * sub-step budget re-asking a question with no new information.
+           */
+          if (this.net) {
+            if (!this.net.beforeStep(frame)) { this.accumulator = 0; break }
+          } else {
+            this.race.setInput(this.localId, frame)
+          }
         }
         this.race.step()
         // The victory lap. A separate pass, deliberately: the headless
@@ -1921,7 +2294,146 @@ export class Game {
       }
     }
 
+    // AFTER the sim block and BEFORE the draw, so the line the player reads is
+    // about the frame they are looking at. It also has to run when `simming`
+    // is false: a race that is stalled is a race whose phase is still
+    // 'racing', but one that has been VOIDED needs to leave, and a verdict
+    // that only got looked at on stepping frames would never be seen on the
+    // frames where nothing steps -- which is every frame of a stall.
+    if (this.net) this.netFrame()
+
     this.renderFrame(rawDt)
+  }
+
+  /**
+   * One frame of the wire: say what it is doing, and leave if it is over.
+   *
+   * ------------------------------------------------------------------------
+   * TWO ENDINGS, TWO SENTENCES, AND THEY ARE NOT THE SAME EVENT.
+   *
+   *   DESYNC    the clients diverged, so the round is VOID FOR EVERYBODY.
+   *             net/lockstep.ts is blunt about why there is no third option:
+   *             "there is no such thing as a small desync in a deterministic
+   *             sim" -- a 1e-4 difference in yaw becomes a different line,
+   *             then a collision on one client and not the other, then a
+   *             different finishing order. The thing that diverged IS the
+   *             result. Scoring it would write the lie into rounds 3, 4 and 5
+   *             as well, which is the series-shaped version of the same
+   *             problem, so the round scores NOTHING and everybody keeps the
+   *             table they had.
+   *
+   *   EJECTED   the room decided we were gone and carried on without us. The
+   *             round was fine. THEIRS was fine, anyway -- they ran our slot
+   *             under AI from an agreed frame and scored it, and we have
+   *             simulated frames nobody else ran. So our copy of the result
+   *             is worthless and the host's is not, which is why this one also
+   *             banks nothing: the standings that come back through `onRoom`
+   *             are the real ones, and they will have our slot's AI result in
+   *             our row.
+   *
+   * BOTH GO BACK TO THE ROOM, because in both cases the SERIES is still alive.
+   * A desync costs one round out of five; an ejection costs us one round out
+   * of five. Neither is a reason for eight people to lose their evening, which
+   * is the argument types.ts makes about a desync and which holds just as well
+   * for the other one.
+   */
+  private netFrame(): void {
+    const net = this.net
+    if (!net) return
+    const verdict = net.verdict
+    if (verdict === 'desync' || verdict === 'ejected') {
+      this.hud.setNetStatus({ verdict, waitingFor: [], loading: false })
+      this.abandonRound(verdict)
+      return
+    }
+    this.hud.setNetStatus({
+      verdict,
+      waitingFor: net.waitingFor,
+      loading: net.waitingToLoad,
+    })
+  }
+
+  /**
+   * The round ended badly. Put the race away and go back to the room.
+   *
+   * NOTHING IS SCORED AND `endRound` IS STILL CALLED. Those look contradictory
+   * and are not: `endRound` is what disposes the round's lockstep state and
+   * reopens the room, and it is handed the table UNCHANGED so the series moves
+   * on by one round having awarded nobody anything. A round that ended without
+   * a result still ended -- refusing to advance would leave eight people in a
+   * room whose Start button re-runs a circuit they have already lost half an
+   * hour to.
+   */
+  private abandonRound(why: 'desync' | 'ejected'): void {
+    if (this.roundEnded) return
+    this.roundEnded = true
+    setRoomNotice(why === 'desync'
+      ? 'That round was void: the game came apart between the players, so nobody '
+        + 'scored. The standings are as they were, and the series carries on.'
+      : 'You were dropped from that round and it finished without you. Your car '
+        + 'was driven by the AI from the frame you went quiet; the points on the '
+        + 'table are what it earned.', 'bad')
+    void this.endSeriesRound(this.seriesTable)
+    this.toRoom()
+  }
+
+  /**
+   * Put the race away and go back to the lobby room.
+   *
+   * THE SAME BODY `toMenu` HAS, WITH A DIFFERENT DESTINATION, and it is a
+   * separate function rather than a parameter because the two are reached for
+   * different reasons and one of them is not allowed to forget the wire.
+   * Every way out of a lobby round arrives here: a void round, an ejection,
+   * and the button on the results screen.
+   *
+   * THE RUNNER GOES AND THE MESH STAYS. `detachNet` drops the round's
+   * lockstep state -- its tape, its scheduler, its transport -- and touches
+   * nothing peer-shaped. The connections were built to run the ROOM and they
+   * outlive every round in it, which is the single reason a five-round series
+   * does not pay for five handshakes and five chances to lose somebody.
+   */
+  private toRoom(): void {
+    this.detachNet()
+    this.multiplayer = null
+    this.setNameplateRoster(null)
+    this.race = null
+    this.closePodium()
+    this.phase = 'menu'
+    this.teardownWorld()
+    this.tools.hidden = true
+    this.hud.setFinish(null)
+    this.hud.setRound(null)
+    this.cheer.reset()
+    this.hud.root.style.display = 'none'
+    this.input.setPadsVisible(false)
+    this.audio.endRace()
+    this.audio.music(null, false)
+    this.frontEnd.show('room')
+  }
+
+  /**
+   * Tell the lobby the round is over. Hook 4 of five, and the one nothing
+   * called before this pass -- which is why a series could not reach round 2.
+   *
+   * FIRE AND FORGET, AND DELIBERATELY NOT AWAITED BY ANY CALLER. The
+   * authoritative answer is the `onRoom` that follows, exactly as it is for
+   * every other write on `LobbyService`; a results screen that waited on a
+   * round trip before it would draw is a results screen that does not appear
+   * when the network is bad, which is when it is most wanted.
+   *
+   * EVERY FAILURE IS SWALLOWED, including `lobbyService()` throwing outright.
+   * This runs on the frame a race ends. The worst thing a mis-wired lobby can
+   * do to a player at that moment is take the finish away from them, and the
+   * cost of the alternative is that a series does not advance -- which the
+   * room will show, in words, on the very next screen.
+   */
+  private async endSeriesRound(table: readonly SeriesStanding[]): Promise<void> {
+    if (!this.multiplayer) return
+    try {
+      await lobbyService().endRound(table)
+    } catch (e) {
+      console.warn('multiplayer: the round could not be ended', e)
+    }
   }
 
   private trackFrame(dt: number): void {
@@ -2376,6 +2888,11 @@ export class Game {
     this.resizeObs = null
     document.removeEventListener('visibilitychange', this.onVisibility)
     this.audio.dispose()
+    // The round's lockstep state, before the HUD it pushes status into is
+    // disposed below. The MESH is the lobby's and goes with the lobby
+    // service, which the front end owns and disposes a few lines down.
+    this.net = null
+    this.multiplayer = null
     this.closePodium()
     this.teardownWorld()
     disposeVehicleCache()

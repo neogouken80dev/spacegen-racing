@@ -1,11 +1,22 @@
 /* ==========================================================================
-   SpaceGen Racing — Profile + avatar picker
+   SpaceGen Racing — Profile: identity, and three pages of things you own
 
    Companion sheet to styles.css, on the same terms settings.css took: every
-   colour, radius, shadow and font here is a --sg- token defined there. No new
-   palette, no @import, no external asset.
+   colour, radius, shadow, SIZE and font here is a --sg- token defined there.
+   No new palette, no @import, no external asset.
+
+   TYPE COMES FROM THE TOKENS, NOT FROM CLAMPS OF ITS OWN. styles.css's
+   `--sg-fs-*` ramp exists because ten near-identical clamps between 8 and
+   16px were not a hierarchy and every one of them was rendering at its floor
+   (the argument is written out at the top of that file). This sheet had
+   eleven of the same clamps; they are gone. Anything here that still uses a
+   raw clamp is a LENGTH -- a gap, a padding, a box height -- which the ramp
+   does not cover and which is not what that bug was about.
 
    Prefix: .sgpf- so it cannot collide with .sg-fe / .sg-hud / .sgset / .sglb.
+   The tab strip is .sg-tabs / .sg-tabpanel from styles.css, shared with the
+   results screen; the overrides it needs here are grouped in one block below
+   and every one of them says what it is overriding.
    ========================================================================== */
 
 /* Which screen is up. See the note on the same rule in lobby.css. */
@@ -23,8 +34,13 @@
 }
 
 /* --------------------------------------------------------------------------
-   Body — two columns on a desk, one on a phone. The scroll lives INSIDE each
-   panel rather than on the screen, so the head never leaves.
+   Body — the identity card, then the pages.
+
+   TWO COLUMNS ON ANYTHING WITH WIDTH, and the identity card is the narrow one
+   because it is context rather than content: the offline banner, the credit
+   balance and the name field are true on every page and are read at a glance,
+   while the page beside them is a grid of twenty-four things that wants every
+   pixel it can get. Why it is not a fourth tab is argued in profile.ts.
    -------------------------------------------------------------------------- */
 
 .sgpf__body {
@@ -35,12 +51,42 @@
   gap: clamp(8px, 1.6vmin, 20px);
 }
 
-.sgpf__me,
-.sgpf__pick {
+.sgpf__me {
   min-height: 0;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   padding: clamp(10px, 1.8vmin, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.1vmin, 12px);
+}
+
+/*
+ * NOTHING IN THIS CARD IS COMPRESSIBLE, AND THAT IS NOT TIDINESS.
+ *
+ * A flex item's `min-height: auto` is what normally stops it being squashed
+ * below its own content -- and `.sgpf__msg` sets `min-height: 1.3em` to hold
+ * one line of space open so the row does not jump when a message appears,
+ * which REPLACES the auto and hands the flex algorithm permission to shrink a
+ * three-line message down to one line's worth of box. Photographed at
+ * 915x412 with an offline account: "The server did not answer, so the name
+ * was not claimed..." painted straight through the Offline banner beneath it,
+ * because the card was over-full and the message was the thing that gave way.
+ *
+ * The card is a scroll container. When it is over-full it should scroll, not
+ * telescope, so every child keeps its height and `overflow: auto` does the
+ * job it is there for. `.sgpf__note` still reaches the bottom on a tall card:
+ * `flex: none` leaves its `margin-top: auto` alone.
+ */
+.sgpf__me > * {
+  flex: none;
+}
+
+/* The strip and the panels, stacked. Turns into a row in the rail block at
+   the bottom of this file, which is the only thing that changes. */
+.sgpf__pages {
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: clamp(6px, 1.1vmin, 12px);
@@ -84,27 +130,29 @@
 }
 
 .sgpf__wearingK {
-  font-size: clamp(9px, 1.15vmin, 11px);
-  letter-spacing: 0.18em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
 }
 
 .sgpf__wearing {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(15px, 2.4vmin, 26px);
+  font-size: var(--sg-fs-title);
+  line-height: var(--sg-lh-tight);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--sg-ink);
-  line-height: 1.1;
 }
 
 .sgpf__k {
-  font-size: clamp(9px, 1.15vmin, 11px);
-  letter-spacing: 0.18em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
   margin-top: clamp(2px, 0.8vmin, 8px);
 }
 
@@ -118,16 +166,17 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--sg-num);
-  font-size: clamp(13px, 1.9vmin, 17px);
+  font-size: var(--sg-fs-body);
   letter-spacing: 0.04em;
   color: var(--sg-ink);
   background: rgba(5, 9, 18, 0.9);
   border: 2px solid var(--sg-line);
   border-radius: var(--sg-r-sm);
   padding: 0.5em 0.7em;
-  /* 44px is the smallest target that survives a thumb; the clamp above can go
-     under it on a short viewport, so the floor is stated separately. */
-  min-height: 42px;
+  /* The smallest target that survives a thumb. The padding above scales with
+     the type and can come out under it on a short viewport, so the floor is
+     stated separately, from the same token every other tap target uses. */
+  min-height: var(--sg-tap);
 }
 
 .sgpf__in:focus {
@@ -137,7 +186,7 @@
 }
 
 .sgpf__in:disabled {
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
   border-color: rgba(122, 190, 255, 0.14);
 }
 
@@ -152,13 +201,13 @@
 /* --------------------------------------------------------------------------
    Messages. One element, three moods, and the mood is a data attribute so the
    text is the only thing that changes -- the row never grows or shrinks under
-   a click, which is what makes the picker safe to press twice.
+   a click, which is what makes a grid safe to press twice.
    -------------------------------------------------------------------------- */
 
 .sgpf__msg {
-  font-size: clamp(11px, 1.4vmin, 13px);
-  line-height: 1.35;
-  min-height: 1.35em;
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+  min-height: 1.3em;
   color: var(--sg-dim);
 }
 
@@ -176,8 +225,8 @@
    -------------------------------------------------------------------------- */
 
 .sgpf__flag {
-  font-size: clamp(11px, 1.4vmin, 13px);
-  line-height: 1.4;
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-body);
   border-radius: var(--sg-r-sm);
   border: 2px solid var(--sg-line);
   padding: 0.6em 0.75em;
@@ -228,15 +277,17 @@
 }
 
 .sgpf__statK {
-  font-size: clamp(8px, 1.05vmin, 10px);
-  letter-spacing: 0.16em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
 }
 
 .sgpf__statV {
   font-family: var(--sg-num);
-  font-size: clamp(13px, 1.9vmin, 19px);
+  font-size: var(--sg-fs-strong);
+  line-height: var(--sg-lh-tight);
   color: var(--sg-ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -251,16 +302,95 @@
 }
 
 .sgpf__note {
-  font-size: clamp(10px, 1.25vmin, 12px);
-  line-height: 1.4;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-body);
+  color: var(--sg-quiet);
   margin-top: auto;
   padding-top: 8px;
 }
 
+/* ==========================================================================
+   THE TAB STRIP — what this screen has to change about the shared one, and
+   why each line is here.
+
+   ui/tabs.ts and the .sg-tabs rules in styles.css were written for the
+   RESULTS screen, which centres everything it owns in a column: the strip is
+   `width: min(96%, 640px); margin: 6px auto 0`, the panel container centres
+   its children, and the panel itself does too. All three are right there and
+   all three are wrong here, where the strip is a navigation rail for a
+   two-column screen and the pages are full-bleed grids. Overriding is the
+   correct move rather than forking the component: the keyboard behaviour, the
+   ARIA wiring, the `hidden` panels and the marker dot are the parts worth
+   sharing, and they are untouched.
+   ========================================================================== */
+
+/* Full width of the right-hand column, reading from the left like a page of
+   navigation rather than centred like a caption. */
+.sgpf .sg-tabs {
+  width: 100%;
+  margin: 0;
+  justify-content: flex-start;
+  flex: none;
+}
+
+/* The tab is a page name on this screen, so it takes the label size rather
+   than the caption size the results strip uses for four of them. */
+.sgpf .sg-tab {
+  font-size: var(--sg-fs-caption);
+}
+
+/* `.sg-tabpanels` carries `width: 100%` and `align-items: center` for the
+   results column. Here it is one of two flex children and 100% of the WRONG
+   box once the rail turns it into a row, so it stretches instead. */
+.sgpf .sg-tabpanels {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: stretch;
+}
+
+/* Same for the panel: its child is a panel that fills it, not a 720px block
+   that needs centring.
+
+   AND IT TAKES THE WHOLE CELL. On the results screen a panel is `flex: 0 1
+   auto` so a short page sits under the title with the CTA row beneath it.
+   Here the three pages have very different heights -- twenty-four portraits,
+   five chassis, six pilots -- and a panel that hugs its content would draw
+   its bottom edge in a different place on every tab, with the screen
+   background showing underneath on two of the three. Every other panel in
+   this game fills the cell it was given; these do too, and the content
+   starts at the top of it. */
+.sgpf .sg-tabpanel {
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+}
+
 /* --------------------------------------------------------------------------
-   Picker
+   A page
    -------------------------------------------------------------------------- */
+
+.sgpf__page {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: clamp(10px, 1.8vmin, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 0.9vmin, 10px);
+}
+
+/* Same rule, same reason as `.sgpf__me > *` above: this is a scroll container
+   and a `min-height` set for spacing is also a licence to be squashed. A page
+   that is too tall scrolls; it does not telescope its message line into its
+   grid. */
+.sgpf__page > * {
+  flex: none;
+}
 
 .sgpf__pickhead {
   display: flex;
@@ -273,27 +403,80 @@
 .sgpf__pickTitle {
   font-family: var(--sg-display);
   font-style: italic;
-  font-size: clamp(13px, 2vmin, 22px);
-  letter-spacing: 0.14em;
+  font-size: var(--sg-fs-title);
+  line-height: var(--sg-lh-tight);
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
   color: var(--sg-cyan);
 }
 
 .sgpf__pickCount {
-  font-size: clamp(10px, 1.3vmin, 12px);
-  letter-spacing: 0.1em;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
   text-transform: uppercase;
-  color: var(--sg-mute);
+  color: var(--sg-quiet);
 }
 
-/*
- * auto-fill rather than a fixed count: the grid is the same code at 1440 and at
- * 412, and the tile keeps a legible size at both instead of being squeezed into
- * six columns on a phone.
- */
+/* One line saying where this choice shows up. Three of the words on this
+   screen are close enough together to be confusable; see PAGES in profile.ts. */
+.sgpf__lede {
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-body);
+  color: var(--sg-quiet);
+}
+
+/* What is selected, spelled out. The tiles say WHICH; this says WHAT. */
+.sgpf__now {
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-body);
+  color: var(--sg-dim);
+}
+
+.sgpf__now:empty { display: none; }
+
+/* Where paint and trim land. Empty until they do, and costing nothing while
+   it is -- see the note on `Page.more` in profile.ts. */
+.sgpf__more {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 0.9vmin, 10px);
+}
+
+.sgpf__more:empty { display: none; }
+
+/* --------------------------------------------------------------------------
+   The live car.
+
+   `.sg-prev` is sized for the garage's detail COLUMN, where it is a flex item
+   sharing the height with six stat bars (`flex: 1 1 44%`). Inside a page that
+   scrolls, a percentage basis against an auto height resolves to nothing and
+   the box collapses to its min-height, so it is given an explicit one here.
+   -------------------------------------------------------------------------- */
+
+.sgpf__prev {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.sgpf .sg-prev {
+  flex: 1 1 auto;
+  height: clamp(160px, 30vh, 340px);
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------------------
+   The grids. One tile, three catalogues -- see profile.ts.
+
+   auto-fill rather than a fixed count: the grid is the same code at 1440 and
+   at 412, and the tile keeps a legible size at both instead of being squeezed
+   into six columns on a phone.
+   -------------------------------------------------------------------------- */
+
 .sgpf__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
   gap: clamp(6px, 1vmin, 12px);
   align-content: start;
 }
@@ -331,29 +514,47 @@
   height: clamp(44px, 6vmin, 62px);
   border-radius: 50%;
   overflow: hidden;
-  display: block;
+  display: grid;
+  place-items: center;
   border: 2px solid var(--accent, var(--sg-line));
   background: var(--sg-void);
 }
 
+/*
+ * A CAR HAS NO PHOTOGRAPH, so the vehicle and pilot tiles carry the garage
+ * card's two-colour chip instead -- the same gradient, at tile scale, so a
+ * player who has learned a car by its colours in the garage recognises it
+ * here. Rounded to a pill inside the circular art frame rather than filling
+ * it, which keeps the accent ring readable as a ring.
+ */
+.sgpf__chip {
+  width: 38%;
+  height: 62%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--c1, #fff) 0%, var(--c2, #333) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 12px var(--c1, transparent);
+}
+
 .sgpf__tileName {
-  font-size: clamp(10px, 1.2vmin, 12px);
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
   letter-spacing: 0.04em;
-  line-height: 1.15;
   color: var(--sg-ink);
 }
 
 .sgpf__tileTag {
   font-family: var(--sg-num);
-  font-size: clamp(9px, 1.1vmin, 11px);
-  letter-spacing: 0.1em;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
+  color: var(--sg-quiet);
 }
 
 .sgpf__tileReq {
-  font-size: clamp(9px, 1.1vmin, 11px);
-  line-height: 1.25;
-  color: var(--sg-mute);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-quiet);
   /* Two lines, then ellipsis. A requirement that pushes one tile taller than
      its neighbours makes the whole grid ragged, and the full sentence is put
      on the message line when the tile is pressed anyway. */
@@ -361,7 +562,7 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: 2.5em;
+  min-height: 2.6em;
 }
 
 .sgpf__tileBar {
@@ -390,6 +591,32 @@
   color: var(--sg-green);
 }
 
+/*
+ * EXCEPT WHERE OWNERSHIP IS NOT NEWS.
+ *
+ * Every chassis and every pilot is unlocked from the first launch -- a car is
+ * a balance decision and selling one would be selling a win rate, which is
+ * argued where the player can read it, in the page's own count line. Twelve
+ * green borders saying "owned" on a page where owning is universal is a
+ * signal with no information in it, and it would drown the one border on the
+ * page that DOES mean something: the car you are about to race. So on those
+ * two pages an owned tile is a plain tile, and the only lit tile is the
+ * selected one. The portraits page keeps the green, where it is earned.
+ *
+ * Written against the tile's own kind rather than the page's id so a paint
+ * catalogue dropped onto the vehicle page -- where owning IS news, because
+ * liveries cost credits -- keeps the green without having to opt back in.
+ */
+.sgpf__tile[data-kind='chassis'][data-status='owned'],
+.sgpf__tile[data-kind='pilot'][data-status='owned'] {
+  border-color: var(--sg-line);
+}
+
+.sgpf__tile[data-kind='chassis'][data-status='owned'] .sgpf__tileTag,
+.sgpf__tile[data-kind='pilot'][data-status='owned'] .sgpf__tileTag {
+  color: var(--sg-quiet);
+}
+
 .sgpf__tile[data-status='buyable'] {
   border-color: rgba(255, 210, 63, 0.55);
 }
@@ -416,9 +643,14 @@
   filter: grayscale(0.85);
 }
 
-.sgpf__tile.is-worn {
+/* The one in use, on every page: worn, raced or seated. */
+.sgpf__tile.is-on {
   border-color: var(--sg-cyan);
   background: rgba(34, 211, 255, 0.12);
+}
+
+.sgpf__tile.is-on .sgpf__tileTag {
+  color: var(--sg-cyan);
 }
 
 .sgpf__tile.is-armed {
@@ -432,9 +664,10 @@
 }
 
 /*
- * The worn marker is a TICK as well as a ring, for the same reason the results
- * row carries the word "YOU": a marker that is only a colour is a marker a
- * colourblind player does not have.
+ * The in-use marker is a TICK as well as a ring, for the same reason the
+ * results row carries the word "YOU": a marker that is only a colour is a
+ * marker a colourblind player does not have. The tag says WORN / RACING /
+ * SEATED in words as well, which is the third channel.
  */
 .sgpf__tick {
   position: absolute;
@@ -459,47 +692,157 @@
   transform: rotate(42deg);
 }
 
-.sgpf__tile.is-worn .sgpf__tick {
+.sgpf__tile.is-on .sgpf__tick {
   display: block;
 }
 
-/* --------------------------------------------------------------------------
+/* ==========================================================================
    PHONES.
 
-   Portrait: one column, the identity card first, and the picker grid keeps its
-   auto-fill so it lands on three columns at 412px rather than being told to.
+   Portrait: one column, the identity card first, the strip under it and the
+   page as the one thing that scrolls.
 
-   Landscape: the two columns come back -- a 915x412 phone has the width for
-   them and not the height for a stack -- and everything vertical gets tighter.
-   -------------------------------------------------------------------------- */
+   Landscape: the two columns stay -- a 915x412 phone has the width for them
+   and nothing like the height for a stack -- and the strip becomes a rail.
+   ========================================================================== */
 
 @media (max-width: 900px) and (orientation: portrait) {
   .sgpf__body {
     grid-template-columns: minmax(0, 1fr);
+    /* Identity sizes to its contents; the PAGE is what gives way and scrolls.
+       Deliberately not the whole body: on a phone the wallet, the name field
+       and the two banners are what the player came for first, and a card that
+       scrolls off the top under a grid of twenty-four tiles is a card they
+       have to hunt for. The tab strip has to stay put for the same reason --
+       a rail you have to scroll back up to reach is a rail. */
     grid-template-rows: auto minmax(0, 1fr);
-    /* The identity card sizes to its contents and the PICKER is the thing that
-       scrolls: on a phone the wallet and the name field are what the player
-       came for first, and a card that scrolls them off the top is a card they
-       have to hunt for. */
-    overflow: auto;
   }
 
+  /*
+   * THE CARD IS BOUNDED, AND THEN IT SCROLLS.
+   *
+   * Portrait is the one layout where identity sits ABOVE the pages rather
+   * than beside them, so every pixel it takes is a pixel the page does not
+   * have. Normally it is about 320px of 915 and this rule does nothing. In
+   * the worst honest case -- both account banners up at once AND a name
+   * error above them, which profile.ts's header insists must be possible --
+   * it reaches 620px and left the page 170px: a section head and a sliver of
+   * car, with no way to scroll the card out of the way, because the card is
+   * in the grid's `auto` row and the screen itself does not scroll.
+   *
+   * So the card is capped and becomes its own scroller past the cap. The tab
+   * strip stays put either way, which is the thing that must not move: a
+   * rail you have to scroll back up to find is not a rail.
+   */
   .sgpf__me {
-    overflow: visible;
-  }
-
-  .sgpf__wallet {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    max-height: 52vh;
   }
 
   .sgpf__grid {
-    grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  }
+
+  /* The car is still the biggest thing on the page and there are twelve
+     tiles under it that have to be reachable without three swipes. */
+  .sgpf .sg-prev {
+    height: clamp(120px, 17vh, 170px);
   }
 }
 
-@media (max-height: 520px) {
+/* --------------------------------------------------------------------------
+   THE RAIL.
+
+   THIS CONDITION IS COPIED FROM styles.css AND HAS TO STAY EQUAL TO IT. That
+   sheet turns `.sg-tabs` from a horizontal strip into a vertical rail at
+   exactly this breakpoint -- unscoped, so it applies to this screen too --
+   and the reasoning is sound for this screen as well: a landscape phone has
+   width to spare and no height at all, and a rail buys the one by spending
+   the other. What styles.css cannot do from there is lay THIS screen out
+   around it, which is all that is below. If that query ever moves, this one
+   moves with it, or the strip goes vertical inside a box still stacking it.
+   -------------------------------------------------------------------------- */
+
+@media (max-height: 560px), (max-width: 860px) and (orientation: landscape) {
   .sgpf {
     gap: 6px;
+  }
+
+  /* Rail beside page, rather than strip above it. */
+  .sgpf__pages {
+    flex-direction: row;
+    gap: 0;
+  }
+
+  /*
+   * THE RAIL'S OWN RULES IN styles.css MOSTLY DO NOT APPLY, and this is not a
+   * guess -- it is the failure that file already documents about itself, in
+   * the block immediately above the rail: ".sg-tabs and .sg-tab are defined
+   * in the RESULTS TABS section about 1700 lines BELOW this block. Two rules
+   * at equal specificity are decided by source order."
+   *
+   * The rail block was written with bare `.sg-tabs` / `.sg-tab` selectors, so
+   * every property it sets that the base rules ALSO set loses to them:
+   * `width: auto` to `width: min(96%, 640px)`, `margin: 0` to `margin: 6px
+   * auto 0`, `justify-content: flex-start` to `center`, `border-bottom: none`
+   * to a 1px rule, and the tab's own padding and corner radius.
+   *
+   * The worst of them is the selected marker. The rail asks for a bar down
+   * the right-hand rule -- `left: auto; right: -7px; width: 2px; top: 22%;
+   * bottom: 22%` -- and inherits `left: 10%`, `right: 10%` and `height: 2px`
+   * from the base rule below it. `left`, `right` and `width` all specified is
+   * over-constrained, so `right` is dropped, and what renders is a 2x2 DOT at
+   * ten percent across and twenty-two percent down. Photographed at 915x412
+   * before this block existed: a cyan speck at the top-left corner of the
+   * selected tab and no marker anywhere near the rule.
+   *
+   * Scoped to `.sgpf` these are (0,2,x) and win, which is the same fix the
+   * results screen used one block up. It is a fix for THIS screen only --
+   * the results screen still has the dot, because styles.css is not this
+   * pass's file to edit.
+   */
+  .sgpf .sg-tabs {
+    width: auto;
+    flex: none;
+    flex-wrap: nowrap;
+    border-bottom: none;
+  }
+
+  .sgpf .sg-tab {
+    border-radius: 3px 0 0 3px;
+    padding: 9px 10px 9px 12px;
+  }
+
+  .sgpf .sg-tab.is-on {
+    border-bottom-color: var(--sg-line);
+    border-right-color: transparent;
+  }
+
+  /* The bar the rail asked for: down the rule, not along it. */
+  .sgpf .sg-tab.is-on::after {
+    left: auto;
+    right: -7px;
+    top: 22%;
+    bottom: 22%;
+    width: 2px;
+    height: auto;
+  }
+
+  /*
+   * AND THE IDENTITY CARD GIVES BACK ITS WIDTH.
+   *
+   * 24rem of a 915px landscape phone, with the economy note hidden and the
+   * portrait down to 56px, is a third of the screen holding four stat boxes
+   * and a text field -- while the page it is context FOR was squeezed to
+   * 380px and rendered the portraits grid two tiles across. Context does not
+   * get more room than content. Narrower, with the wallet folded to two rows
+   * because there is height to spend here and no width at all.
+   */
+  .sgpf__body {
+    grid-template-columns: minmax(190px, 15rem) minmax(0, 1fr);
+  }
+
+  .sgpf__wallet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .sgpf__portrait {
@@ -507,13 +850,19 @@
     height: 56px;
   }
 
+  /* The economy note is the one thing on the identity card a player never
+     needs mid-session, and it is four lines. */
   .sgpf__note {
     display: none;
   }
 
+  .sgpf .sg-prev {
+    height: clamp(96px, 30vh, 150px);
+  }
+
   .sgpf__tileReq {
     -webkit-line-clamp: 1;
-    min-height: 1.25em;
+    min-height: 1.3em;
   }
 }
 

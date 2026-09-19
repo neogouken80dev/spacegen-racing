@@ -95,13 +95,16 @@
  * moves nothing. The contract asks for exactly this and says why.
  */
 import './lobby.css'
+import './series.css'
 import { lobbyService } from '../net'
 import {
-  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, REGIONS,
+  LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, REGIONS, SERIES_LENGTHS,
   type CreateLobbyOptions, type JoinError, type LobbyFilter, type LobbyMember,
   type LobbyRoom, type LobbyService, type LobbyStatus, type LobbySummary,
-  type RaceStartPacket, type RegionId,
+  type RaceStartPacket, type RegionId, type SeriesLength,
 } from '../net/types'
+import { SERIES_POINTS, seriesRanking, seriesTracks } from '../game/series'
+import { CIRCUIT_TRACK_IDS } from '../game/circuit'
 import { AVATAR_BY_ID, DEFAULT_AVATAR_ID, placeholderPortrait, portraitFor } from '../content/avatars'
 import { CHASSIS_BY_ID } from '../content/chassis'
 import { PILOTS_BY_ID } from '../content/pilots'
@@ -247,6 +250,68 @@ function nearestLaps(want: number): number {
   return best
 }
 
+/**
+ * What each series length is, in the words a host reads before choosing.
+ *
+ * ONE IS "A SINGLE RACE" AND IS NEVER CALLED A SERIES ANYWHERE THE PLAYER CAN
+ * SEE IT. The contract models it as a series of one so that there is a single
+ * code path, and says outright that the UI is free to hide the round counter
+ * when there is one round. This is the other half of that: a player who wants
+ * one race must not have to understand that they are configuring a
+ * championship of length 1 to get it. Underneath, the same fields.
+ *
+ * THE TIMES ARE THE ARGUMENT, not decoration. types.ts prices the full eight at
+ * about forty minutes and says three and five are what people actually finish
+ * together; a host deciding what to ask of seven strangers is deciding how long
+ * to keep them, and the only honest way to help is to say how long.
+ */
+const SERIES_COPY: Record<SeriesLength, { label: string; sub: string }> = {
+  1: { label: 'Single race', sub: 'one circuit, ~5 min' },
+  3: { label: '3 rounds', sub: 'points series, ~15 min' },
+  5: { label: '5 rounds', sub: 'points series, ~25 min' },
+  8: { label: '8 rounds', sub: 'the Grand Circuit, ~40 min' },
+}
+
+/**
+ * "15-12-10-8-6-4-2-1", written out from the table itself.
+ *
+ * Read from `SERIES_POINTS` rather than typed as a string, which is the same
+ * reason game/series.ts re-exports it instead of copying it: a tuning change to
+ * the ladder must not leave the create screen advertising the old one. The
+ * shape is the argument a host is actually being shown -- a 3-point gap at the
+ * front, a 1-point gap at the back -- so the numbers have to be the real ones.
+ */
+const SERIES_POINTS_LINE = SERIES_POINTS.join('-')
+
+/** 1st, 2nd, 3rd… for a standings place. */
+const ORD_PLACE: readonly string[] = [
+  '—', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th',
+]
+
+const ordinal = (n: number): string => ORD_PLACE[n] ?? `${n}th`
+
+/**
+ * A SENTENCE THE ROOM SCREEN SHOWS ONCE, SET FROM OUTSIDE.
+ *
+ * game/main.ts ends a round, and three of the ways it can end need a word to
+ * the player that only the room screen has anywhere to put: the round is over
+ * and the series moved on, the round was VOID because the clients diverged, or
+ * the round finished perfectly well without us. It cannot say any of it
+ * itself -- it owns a race, not a lobby -- and it reaches the room by calling
+ * `frontEnd.show('room')`, which lands in `enter('room')` below.
+ *
+ * So it leaves the sentence here first. A module-level slot rather than a
+ * method on `LobbyScreens` because the Game holds a `FrontEnd` and never a
+ * `LobbyScreens`, and threading one through ui/frontend.ts would be an edit to
+ * a file this pass does not own. It is read once and cleared, so a stale
+ * "round void" cannot reappear three rounds later.
+ */
+let pendingRoomNotice: { text: string; kind: 'ok' | 'bad' } | null = null
+
+export function setRoomNotice(text: string, kind: 'ok' | 'bad' = 'ok'): void {
+  pendingRoomNotice = text ? { text, kind } : null
+}
+
 // ---------------------------------------------------------------------------
 // Small DOM helpers, same shape as the ones in frontend.ts
 // ---------------------------------------------------------------------------
@@ -338,6 +403,8 @@ interface Row {
   players: HTMLElement
   access: HTMLElement
   track: HTMLElement
+  /** "R2/5", hidden entirely on a single race. Lives inside the track cell. */
+  round: HTMLElement
   status: HTMLElement
   /** The last summary painted into it, so a press knows what it pressed. */
   data: LobbySummary
@@ -416,17 +483,35 @@ class LobbyScreensImpl implements LobbyScreens {
   private readonly cVis: HTMLButtonElement[] = []
   private readonly cTracks: HTMLButtonElement[] = []
   private readonly cLaps: HTMLButtonElement[] = []
+  private readonly cLens: HTMLButtonElement[] = []
+  private readonly cTrackK: HTMLElement
+  private readonly cSeriesHint: HTMLElement
+  private readonly cLapHint: HTMLElement
+  private readonly cOrder: HTMLElement
   private readonly cMsg: HTMLElement
   private readonly cGo: HTMLButtonElement
   private cMaxPlayers = LOBBY_MAX_PLAYERS
   private cPrivate = false
   private cTrackId = TRACKS[0].id
   private cLapCount = nearestLaps(TRACKS[0].laps)
+  /** 1 is a single race, and is the default: the commonest thing a host wants
+   *  is one race, and a create screen that defaults to forty minutes is one
+   *  that gets backed out of. */
+  private cSeries: SeriesLength = 1
   private creating = false
 
   // --- room ---------------------------------------------------------------
   private readonly rName: HTMLElement
   private readonly rChips: HTMLElement
+  private readonly rRound: HTMLElement
+  private readonly rStand: HTMLElement
+  private readonly rStandTitle: HTMLElement
+  private readonly rStandAfter: HTMLElement
+  private readonly rStandRows: HTMLElement
+  private readonly rStandYou: HTMLElement
+  private readonly rSideTitle: HTMLElement
+  private readonly rOrder: HTMLElement
+  private readonly rChangeK: HTMLElement
   private readonly rRegion: HTMLElement
   private readonly rAccess: HTMLElement
   private readonly rCodeWrap: HTMLElement
@@ -651,7 +736,23 @@ class LobbyScreensImpl implements LobbyScreens {
       'A private lobby is still listed — it just needs the four-character code '
       + 'you will be given. Friends still have to find the row.')
 
-    el('div', 'sglb__k', cBody, 'Circuit')
+    // THE LENGTH COMES BEFORE THE CIRCUIT, because it changes what the circuit
+    // question means: for a single race it is THE circuit, and for a series it
+    // is only the opener with seven more behind it. Asking in the other order
+    // makes a host pick a track and then discover it was one of five.
+    el('div', 'sglb__k', cBody, 'Length')
+    const lenGrp = el('div', 'sglbs__lenseg', cBody)
+    for (const n of SERIES_LENGTHS) {
+      const btn = button('sglbs__lenBtn', lenGrp, '')
+      btn.dataset.series = String(n)
+      el('span', 'sglbs__lenLabel', btn, SERIES_COPY[n].label)
+      el('span', 'sglbs__lenSub', btn, SERIES_COPY[n].sub)
+      btn.addEventListener('click', () => { this.cSeries = n; this.paintCreate() })
+      this.cLens.push(btn)
+    }
+    this.cSeriesHint = el('div', 'sglb__hint', cBody, '')
+
+    this.cTrackK = el('div', 'sglb__k', cBody, 'Circuit')
     const trkGrid = el('div', 'sglb__trackgrid', cBody)
     for (const t of TRACKS) {
       const btn = button('sglb__track', trkGrid, '')
@@ -666,6 +767,12 @@ class LobbyScreensImpl implements LobbyScreens {
       this.cTracks.push(btn)
     }
 
+    // THE RUNNING ORDER, SHOWN BEFORE IT IS COMMITTED. The contract fixes it at
+    // creation and gives "everyone can see what they signed up for" as one of
+    // the three reasons; a host who cannot see it either has no way to know
+    // what they are advertising.
+    this.cOrder = el('div', 'sglbs__order', cBody)
+
     el('div', 'sglb__k', cBody, 'Laps')
     const lapGrp = el('div', 'sglb__seg', cBody)
     for (const n of LAP_CHOICES) {
@@ -674,6 +781,11 @@ class LobbyScreensImpl implements LobbyScreens {
       btn.addEventListener('click', () => { this.cLapCount = n; this.paintCreate() })
       this.cLaps.push(btn)
     }
+    // LAPS ARE PER ROUND AND THE SAME FOR ALL OF THEM, which the contract is
+    // explicit about ("a 3-lap opener and a 7-lap finale is a fine idea and a
+    // different feature"). Worth one line, because five rounds of ten laps is
+    // an hour and a half and nothing else on the screen says so.
+    this.cLapHint = el('div', 'sglb__hint', cBody, '')
 
     const cFoot = el('div', 'sglb__foot', c)
     this.cMsg = el('div', 'sglb__msg', cFoot, '')
@@ -692,6 +804,13 @@ class LobbyScreensImpl implements LobbyScreens {
     const rTop = el('div', 'sglbr__top', r)
     this.rName = el('div', 'sglbr__name', rTop, '')
     this.rChips = el('div', 'sglbr__chips', rTop)
+    // FIRST CHIP, BEFORE THE REGION. On round 3 of 5 it is the single most
+    // important fact on the screen -- it says how much of the evening is left
+    // and which table the next race feeds -- and a room that buried it after
+    // "EU West" would be ordering the chips by how long they have existed.
+    // Hidden outright on a single race: see the contract on length 1.
+    this.rRound = el('span', 'sglb__chip sglbs__roundChip', this.rChips, '')
+    this.rRound.hidden = true
     this.rRegion = el('span', 'sglb__chip', this.rChips, '')
     this.rAccess = el('span', 'sglb__chip', this.rChips, '')
     this.rCodeWrap = el('span', 'sglbr__codewrap', this.rChips)
@@ -713,8 +832,32 @@ class LobbyScreensImpl implements LobbyScreens {
     this.rAlone = el('div', 'sglbr__alone', rPeople, '')
     this.rAlone.hidden = true
 
+    /**
+     * THE STANDINGS, BETWEEN THE PEOPLE AND THE CIRCUIT.
+     *
+     * A whole panel of its own rather than a line under the member list,
+     * because between rounds it is what everybody in the room is looking at,
+     * and because it has to hold eight rows with five numbers on each. It sits
+     * in the people column so the two lists share a left edge: "who is here"
+     * and "how they are doing" are the same eight names in a different order,
+     * and putting them in two different columns makes the reader hop.
+     *
+     * IT DOES NOT EXIST AT ALL ON ROUND 1 OR IN A SINGLE RACE, which is not
+     * the same as existing and being empty. An empty standings table before
+     * anybody has raced is a promise of content that is not missing -- it has
+     * not happened yet -- and on a single race it is a promise of a feature
+     * that will never arrive.
+     */
+    this.rStand = el('div', 'sglbs__panel sg-panel', rBody)
+    const stHead = el('div', 'sglbr__panelhead', this.rStand)
+    this.rStandTitle = el('span', 'sglbr__panelTitle', stHead, 'STANDINGS')
+    this.rStandAfter = el('span', 'sglbs__after', stHead, '')
+    this.rStandRows = el('div', 'sglbs__rows', this.rStand)
+    this.rStandYou = el('div', 'sglbs__you', this.rStand, '')
+    this.rStand.hidden = true
+
     const rSide = el('div', 'sglbr__side sg-panel', rBody)
-    el('div', 'sglbr__panelTitle', rSide, 'CIRCUIT')
+    this.rSideTitle = el('div', 'sglbr__panelTitle', rSide, 'CIRCUIT')
     this.rTrackName = el('div', 'sglbr__trackName', rSide, '')
     this.rTrackWorld = el('div', 'sglbr__trackWorld', rSide, '')
     // A GUEST GETS A PANEL WORTH READING. Without this the whole right-hand
@@ -726,8 +869,20 @@ class LobbyScreensImpl implements LobbyScreens {
     this.rTrackHook = el('div', 'sglbr__trackHook', rSide, '')
     this.rTrackNote = el('div', 'sglbr__trackNote', rSide, '')
     this.rGuestNote = el('div', 'sglb__hint', rSide, '')
+    // THE REST OF THE RUNNING ORDER, under the circuit that is next and ABOVE
+    // the host's controls. Read-only for everybody, host included: the
+    // contract fixes the order at creation so that it never has to be agreed
+    // over the wire between rounds, and a control that appeared to reorder it
+    // would be a control that lied.
+    //
+    // Above rather than below because this panel SCROLLS. Appended last, the
+    // order sat under eight circuit buttons and a lap segment and was off the
+    // bottom of the column on a 810px desktop -- present, correct, and never
+    // seen by anybody who did not go looking.
+    this.rOrder = el('div', 'sglbs__order sglbs__order--room', rSide)
+    this.rOrder.hidden = true
     this.rHostOnly = el('div', 'sglbr__hostonly', rSide)
-    el('div', 'sglb__k', this.rHostOnly, 'Change circuit')
+    this.rChangeK = el('div', 'sglb__k', this.rHostOnly, 'Change circuit')
     this.rTrackList = el('div', 'sglbr__tracklist', this.rHostOnly)
     for (const t of TRACKS) {
       const btn = button('sglbr__trackBtn', this.rTrackList, t.name)
@@ -862,7 +1017,7 @@ class LobbyScreensImpl implements LobbyScreens {
       const svc = lobbyService()
       svc.onRoom = (room) => this.onRoom(room)
       svc.onStart = (packet) => this.deps.onStart(packet)
-      svc.onClosed = (reason) => this.onClosed(reason)
+      svc.onClosed = (reason, detail) => this.onClosed(reason, detail)
       this.svc = svc
     } catch (e) {
       this.svcError = e instanceof Error ? e.message : String(e)
@@ -900,7 +1055,15 @@ class LobbyScreensImpl implements LobbyScreens {
       this.deps.goto('browser')
       return
     }
-    this.setMsg(this.rMsg, '', 'wait')
+    // THE ROUND THAT JUST ENDED GETS TO SAY WHY. Taken and cleared: a race
+    // whose round was void must say so on the way back, and must not still be
+    // saying it two rounds later. See `setRoomNotice`.
+    if (pendingRoomNotice) {
+      this.setMsg(this.rMsg, pendingRoomNotice.text, pendingRoomNotice.kind)
+      pendingRoomNotice = null
+    } else {
+      this.setMsg(this.rMsg, '', 'wait')
+    }
     this.scrollToMe = true
     this.paintRoom(room)
   }
@@ -1164,10 +1327,18 @@ class LobbyScreensImpl implements LobbyScreens {
     const ping = el('span', 'sglb__cell sglb__col--ping', root, '')
     const players = el('span', 'sglb__cell sglb__col--players', root, '')
     const access = el('span', 'sglb__cell sglb__col--access', root, '')
-    const track = el('span', 'sglb__cell sglb__col--track', root, '')
+    const trackCell = el('span', 'sglb__cell sglb__col--track', root, '')
+    // TWO SPANS IN ONE CELL, not a ninth column and not one string. A column
+    // would have to be reserved on every row for a field most rows do not
+    // have, on a grid that is already eight wide at 412px; one string could
+    // not be styled apart, and the round badge has to be quieter than the
+    // circuit name or it reads as the more important of the two.
+    const track = el('span', 'sglbs__rowTrack', trackCell, '')
+    const round = el('span', 'sglbs__rowRound', trackCell, '')
+    round.hidden = true
     const status = el('span', 'sglb__cell sglb__col--status', root, '')
     root.addEventListener('click', () => this.choose(s.id))
-    return { root, name, host, region, ping, players, access, track, status, data: s }
+    return { root, name, host, region, ping, players, access, track, round, status, data: s }
   }
 
   /**
@@ -1188,7 +1359,21 @@ class LobbyScreensImpl implements LobbyScreens {
     row.players.textContent = `${s.players}/${s.maxPlayers}`
     row.access.textContent = s.private ? 'Private' : 'Public'
     row.access.dataset.access = s.private ? 'private' : 'public'
+    /**
+     * THE CIRCUIT, AND THE ROUND IF THERE IS ONE.
+     *
+     * A length-1 lobby says "Elkarim · 3L" and nothing else, which is what it
+     * said before series existed and what the contract insists it keeps
+     * saying: "Length 1 must still read as a single race." A series adds one
+     * span, INSIDE the same cell and on the same line, because the row's
+     * height is the one thing this list may never change -- see the header on
+     * the pin, and lobby.css's own opening paragraph.
+     */
+    const isSeries = s.seriesLength > 1
     row.track.textContent = trackName(s.trackId) + ' · ' + s.laps + 'L'
+    row.round.textContent = isSeries ? `R${s.seriesRound}/${s.seriesLength}` : ''
+    row.round.hidden = !isSeries
+    row.root.dataset.series = isSeries ? String(s.seriesLength) : ''
     row.status.textContent = STATUS_LABEL[s.status]
     row.root.dataset.status = s.status
     row.root.classList.toggle('is-mine', s.hostId === this.deps.playerId())
@@ -1202,7 +1387,9 @@ class LobbyScreensImpl implements LobbyScreens {
     row.root.setAttribute('aria-label',
       `${s.name}, hosted by ${s.hostName}, ${REGION_SHORT[s.region] ?? s.region}, `
       + `${s.players} of ${s.maxPlayers} players, ${s.private ? 'private' : 'public'}, `
-      + `${trackName(s.trackId)}, ${s.laps} laps, ${STATUS_LABEL[s.status]}, `
+      + `${trackName(s.trackId)}, ${s.laps} laps, `
+      + (isSeries ? `round ${s.seriesRound} of ${s.seriesLength}, ` : '')
+      + `${STATUS_LABEL[s.status]}, `
       + `ping ${s.pingMs == null ? 'unknown' : Math.round(s.pingMs) + ' milliseconds'}`)
   }
 
@@ -1379,15 +1566,59 @@ class LobbyScreensImpl implements LobbyScreens {
   // Creating
   // -------------------------------------------------------------------------
 
+  /** The circuits this create screen would commit, in running order. */
+  private plannedTracks(): string[] {
+    return seriesTracks(this.cTrackId, this.cSeries, CIRCUIT_TRACK_IDS)
+  }
+
   private paintCreate(): void {
     for (const b of this.cMax) b.classList.toggle('is-on', b.dataset.max === String(this.cMaxPlayers))
     for (const b of this.cVis) b.classList.toggle('is-on', b.dataset.private === String(this.cPrivate))
     for (const b of this.cTracks) b.classList.toggle('is-on', b.dataset.track === this.cTrackId)
     for (const b of this.cLaps) b.classList.toggle('is-on', b.dataset.laps === String(this.cLapCount))
+    for (const b of this.cLens) b.classList.toggle('is-on', b.dataset.series === String(this.cSeries))
+
+    const series = this.cSeries > 1
+    // THE WORD "CIRCUIT" CHANGES MEANING WITH THE LENGTH, so the label does
+    // too. Leaving it as "Circuit" above a list of eight when the host has
+    // chosen five rounds reads as a contradiction they have to resolve.
+    this.cTrackK.textContent = series ? 'Opening circuit' : 'Circuit'
+    this.cSeriesHint.textContent = series
+      ? `${this.cSeries} rounds, scored ${SERIES_POINTS_LINE}. Everybody keeps their `
+        + 'grid slot for the whole series — a driver who leaves keeps their points and '
+        + 'scores nothing for the rounds they miss.'
+      : 'One race, one result. No points table and no rounds.'
+
+    // The order, as rows, and only when there is an order to show. A one-round
+    // "running order" is a list of one, which is the circuit button the host
+    // just pressed said back to them.
+    this.cOrder.hidden = !series
+    if (series) {
+      const ids = this.plannedTracks()
+      this.cOrder.textContent = ''
+      el('div', 'sglb__k', this.cOrder, 'Running order')
+      const list = el('div', 'sglbs__orderList', this.cOrder)
+      for (let i = 0; i < ids.length; i++) {
+        const row = el('div', 'sglbs__orderRow', list)
+        row.dataset.round = String(i + 1)
+        el('span', 'sglbs__orderN', row, String(i + 1))
+        el('span', 'sglbs__orderName', row, trackName(ids[i]))
+        el('span', 'sglbs__orderWorld', row, copyFor(ids[i]).world)
+      }
+    }
+
+    const rounds = series ? this.cSeries : 1
+    const lap = (n: number): string => `${n} ${n === 1 ? 'lap' : 'laps'}`
+    this.cLapHint.textContent = series
+      ? `${lap(this.cLapCount)} in every round — ${lap(this.cLapCount * rounds)} of racing in all.`
+      : 'How far the race runs.'
+
     const named = this.cName.value.trim().length > 0
     this.cGo.disabled = this.creating || !named
     if (!this.creating) {
-      this.cGo.textContent = named ? 'Create lobby' : 'Name it first'
+      this.cGo.textContent = named
+        ? (series ? `Create ${this.cSeries}-round lobby` : 'Create lobby')
+        : 'Name it first'
     }
   }
 
@@ -1405,8 +1636,16 @@ class LobbyScreensImpl implements LobbyScreens {
       region: this.cRegion.value as RegionId,
       maxPlayers: this.cMaxPlayers,
       private: this.cPrivate,
-      trackId: this.cTrackId,
-      laps: this.cLapCount,
+      // A SINGLE RACE GOES DOWN THIS LINE TOO, as a series of one. There is no
+      // `if (single)` anywhere in this screen and there is not meant to be:
+      // the contract's whole argument for `length: 1` is that one shape means
+      // one code path, and a UI that built a different options object for a
+      // one-off would be the second path arriving through the front door.
+      series: {
+        length: this.cSeries,
+        trackIds: this.plannedTracks(),
+        laps: this.cLapCount,
+      },
     }
     const res = await svc.create(opts)
     this.creating = false
@@ -1435,13 +1674,30 @@ class LobbyScreensImpl implements LobbyScreens {
     if (this.on === 'room') this.paintRoom(room)
   }
 
-  private onClosed(reason: 'hostLeft' | 'kicked' | 'error'): void {
+  /**
+   * The room ended under us.
+   *
+   * `unreachable` IS ITS OWN SENTENCE AND THAT IS THE WHOLE REASON IT IS IN
+   * THE ENUM. types.ts spells it out: between a tenth and a fifth of
+   * peer-to-peer connections will not traverse NAT without a relay this
+   * project does not have, which makes it the commonest way a real join fails,
+   * and "that lobby ended unexpectedly" tells a player nothing they can act
+   * on. `detail` carries whatever the transport actually knows -- which ICE
+   * state it died in -- and is shown in the smaller type under it, the same
+   * split the browser's error block already makes between the player's
+   * sentence and the developer's.
+   */
+  private onClosed(reason: 'hostLeft' | 'kicked' | 'unreachable' | 'error', detail?: string): void {
     this.roomModel = null
-    this.notice(
+    const text =
       reason === 'kicked' ? 'The host removed you from that lobby.'
         : reason === 'hostLeft' ? 'The host left, so that lobby closed. '
           + 'With no server in the middle, the host is the game.'
-          : 'That lobby ended unexpectedly.')
+          : reason === 'unreachable' ? 'Your network and the host’s could not reach '
+            + 'each other. Nothing is wrong with either of you — some pairs of '
+            + 'connections cannot be introduced without a relay.'
+            : 'That lobby ended unexpectedly.'
+    this.notice(detail ? `${text} (${detail})` : text)
     if (this.on === 'room' || this.on === 'create') this.deps.goto('browser')
   }
 
@@ -1460,19 +1716,68 @@ class LobbyScreensImpl implements LobbyScreens {
     this.rCodeWrap.hidden = room.joinCode == null
     if (room.joinCode) this.rCode.textContent = room.joinCode
 
-    const def = TRACKS_BY_ID[room.trackId]
-    const copy = copyFor(room.trackId)
-    this.rTrackName.textContent = def ? def.name : room.trackId
-    this.rTrackWorld.textContent = `${copy.world} · ${room.laps} laps · ${copy.difficulty}`
-    this.rTrackHook.textContent = copy.hook ? `"${copy.hook}"` : ''
-    this.rTrackNote.textContent = copy.note
-    this.rGuestNote.textContent = isHost
+    /**
+     * WHERE THE SERIES IS.
+     *
+     * `round` counts rounds FINISHED, so the one coming next is `round + 1` and
+     * `series.trackIds[round]` is the circuit it runs on -- the contract says
+     * both in as many words, and everything below reads them and nothing
+     * recomputes them. `over` is the state a five-round room spends its last
+     * few minutes in: no next circuit, a final table, and a Start button that
+     * has nothing left to start.
+     */
+    const len = room.series.length
+    const isSeries = len > 1
+    const over = room.round >= len
+    const nextRound = Math.min(room.round + 1, len)
+    const trackId = room.series.trackIds[Math.min(room.round, len - 1)] ?? ''
+    const laps = room.series.laps
+
+    this.rRound.hidden = !isSeries
+    this.rRound.textContent = over ? `Series complete · ${len} rounds` : `Round ${nextRound} of ${len}`
+    this.rRound.dataset.state = over ? 'over' : 'live'
+
+    this.paintStandings(room, isSeries)
+
+    const def = TRACKS_BY_ID[trackId]
+    const copy = copyFor(trackId)
+    // "CIRCUIT" ON A ONE-OFF, "ROUND 3" IN A SERIES. The panel answers a
+    // different question in the two cases -- "where are we racing" versus
+    // "what is next" -- and the title is the cheapest place to say which.
+    this.rSideTitle.textContent = over ? 'THE SERIES' : isSeries ? `ROUND ${nextRound}` : 'CIRCUIT'
+    this.rTrackName.textContent = over ? 'All rounds raced' : def ? def.name : trackId
+    this.rTrackWorld.textContent = over
+      ? `${len} rounds · ${laps} laps each`
+      : `${copy.world} · ${laps} laps · ${copy.difficulty}`
+    this.rTrackHook.textContent = over ? '' : copy.hook ? `"${copy.hook}"` : ''
+    this.rTrackNote.textContent = over
+      ? 'The table on the left is final. Leave when you are ready, or the host '
+        + 'can host another.'
+      : copy.note
+    this.rGuestNote.textContent = isHost || over
       ? '' : `Only ${room.members.find((m) => m.isHost)?.name ?? 'the host'} can change this.`
+
+    // The rest of the running order, rounds already raced included, so a
+    // player who joined at round 3 can see what they missed and what is left.
+    this.paintOrder(room, isSeries)
+
     for (const btn of this.rTrackList.querySelectorAll('button')) {
-      btn.classList.toggle('is-on', btn.dataset.track === room.trackId)
+      const id = btn.dataset.track ?? ''
+      btn.classList.toggle('is-on', id === trackId)
+      // A CIRCUIT THAT IS ALREADY SOMEWHERE ELSE IN THE ORDER CANNOT BE
+      // CHOSEN, because the contract promises no repeats and `setTrack` edits
+      // one round rather than the plan. Greyed rather than hidden: the roster
+      // is a fixed eight and a list that shrank as the series went on would
+      // make the host hunt for a button that had moved.
+      btn.disabled = id !== trackId && room.series.trackIds.includes(id)
+      btn.title = btn.disabled ? 'Already in this series.' : ''
     }
-    for (const b of this.rLaps) b.classList.toggle('is-on', b.dataset.laps === String(room.laps))
-    this.rHostOnly.hidden = !isHost
+    for (const b of this.rLaps) b.classList.toggle('is-on', b.dataset.laps === String(laps))
+    this.rChangeK.textContent = isSeries ? `Change round ${nextRound}'s circuit` : 'Change circuit'
+    // A host whose series is over has nothing left to configure. The controls
+    // would all still work and would all change a race that is not going to
+    // happen.
+    this.rHostOnly.hidden = !isHost || over
 
     this.rCount.textContent = `${room.members.length}/${room.maxPlayers}`
     this.paintMembers(room, isHost)
@@ -1488,7 +1793,11 @@ class LobbyScreensImpl implements LobbyScreens {
     // A member who is still connecting CANNOT be ready -- the service says so
     // and will overwrite an optimistic tick with the truth, so the control says
     // so first rather than lying for a round trip.
-    this.rReady.disabled = this.readyBusy || me == null || me.connecting
+    // ...and a series that is over has nothing left to be ready FOR. The
+    // control would still work and would still publish a ready, for a round
+    // that cannot start -- which is a button that responds and achieves
+    // nothing, the worst of the three available behaviours.
+    this.rReady.disabled = this.readyBusy || me == null || me.connecting || over
     // START IS SHOWN TO EVERYBODY, DISABLED, WITH THE REASON.
     //
     // Hiding it from a guest is the tidier-looking choice and it is the wrong
@@ -1500,12 +1809,111 @@ class LobbyScreensImpl implements LobbyScreens {
     if (this.scrollToMe) {
       this.scrollToMe = false
       this.scrollMembersToMe(room.localId)
+      // AND IN THE TABLE, which is the list a player arriving from a finished
+      // round is actually looking for themselves in. Eight rows in a panel
+      // that shows five means the commonest outcome -- being somewhere in the
+      // middle -- puts you off the bottom, and "You are 6th" underneath is an
+      // answer to a question you had to ask rather than a row you can read.
+      const mine = this.rStandRows.querySelector('.sglbs__row.is-you')
+      if (mine instanceof HTMLElement) {
+        this.rStandRows.scrollTop = Math.max(0,
+          mine.offsetTop - (this.rStandRows.clientHeight - mine.offsetHeight) / 2)
+      }
     }
 
     const why = this.startBlock(room, me, isHost)
     this.rWhy.textContent = why
     this.rWhy.dataset.blocked = why ? 'yes' : 'no'
     this.rStart.disabled = this.starting || why !== ''
+  }
+
+  /**
+   * The series table, or nothing at all.
+   *
+   * REBUILT RATHER THAN POOLED, deliberately, and it is the opposite call from
+   * the one the directory rows get. That list is repainted every four seconds
+   * by a poll and a rebuild there drops focus and kills a hover mid-click;
+   * this one changes exactly once per round -- a push arrives, the table is
+   * new -- and eight rows of five spans is not worth a pool that has to be
+   * kept in step with a row count that can change when somebody joins.
+   *
+   * THE ORDER COMES FROM game/circuit.ts, through `seriesRanking`. Points,
+   * countback, shared places and the total order that stops rows swapping
+   * between two renders of the same data are all already argued and already
+   * tested there; a lobby screen sorting its own table would be a second
+   * answer to a question single player has settled.
+   */
+  private paintStandings(room: LobbyRoom, isSeries: boolean): void {
+    const table = room.standings
+    // Round 1 has no table yet, and a single race never will. Both are
+    // "nothing has happened", not "nothing to show".
+    const show = isSeries && table.length > 0 && room.round > 0
+    this.rStand.hidden = !show
+    if (!show) return
+
+    const len = room.series.length
+    const over = room.round >= len
+    this.rStandTitle.textContent = over ? 'FINAL STANDINGS' : 'STANDINGS'
+    this.rStandAfter.textContent = over ? `${len} rounds` : `after ${room.round} of ${len}`
+
+    const ranked = seriesRanking(table)
+    this.rStandRows.textContent = ''
+    for (const r of ranked) {
+      const row = table[r.entrant.id]
+      if (!row) continue
+      const node = el('div', 'sglbs__row', this.rStandRows)
+      node.dataset.place = String(r.place)
+      if (row.isLocal) node.classList.add('is-you')
+      // AN EMPTY SEAT IS MARKED. A driver with no playerId is either an AI car
+      // that has been on the grid all along or a person whose slot the AI
+      // took over; either way the row stays, because the rounds they raced
+      // happened. See types.ts on not deleting a driver mid-series.
+      if (row.playerId === null) node.classList.add('is-ai')
+      el('span', 'sglbs__place', node, ordinal(r.place))
+      const who = el('span', 'sglbs__who', node)
+      if (row.avatarId) avatarInto(el('span', 'sglbs__avatar', who), row.avatarId)
+      el('span', 'sglbs__name', who, row.name)
+      // ONE CELL PER ROUND, ZEROES INCLUDED, and a dash rather than a zero for
+      // a round that has not been raced yet. "0" and "not yet" are different
+      // facts and a table that printed the same glyph for both would be
+      // telling a driver who missed round 2 and a driver who has not reached
+      // round 4 the same thing.
+      const runs = el('span', 'sglbs__runs', node)
+      for (let n = 0; n < len; n++) {
+        const pos = row.finishes[n]
+        const cell = el('span', 'sglbs__run', runs, pos === undefined ? '·' : pos > 0 ? String(pos) : '—')
+        cell.dataset.pos = pos ? String(pos) : pos === 0 ? 'none' : 'future'
+        cell.title = pos === undefined
+          ? `Round ${n + 1} has not been raced`
+          : pos > 0 ? `Round ${n + 1}: ${ordinal(pos)}` : `Round ${n + 1}: no score`
+      }
+      el('span', 'sglbs__pts', node, String(r.points))
+    }
+
+    const me = ranked.find((r) => table[r.entrant.id]?.isLocal) ?? null
+    this.rStandYou.textContent = me
+      ? `You are ${ordinal(me.place)} on ${me.points} ${me.points === 1 ? 'point' : 'points'}.`
+      : 'You are not in this table yet.'
+  }
+
+  /** The running order, with the round that is next marked. */
+  private paintOrder(room: LobbyRoom, isSeries: boolean): void {
+    this.rOrder.hidden = !isSeries
+    if (!isSeries) return
+    this.rOrder.textContent = ''
+    el('div', 'sglb__k', this.rOrder, 'Running order')
+    const list = el('div', 'sglbs__orderList', this.rOrder)
+    for (let i = 0; i < room.series.trackIds.length; i++) {
+      const row = el('div', 'sglbs__orderRow', list)
+      row.dataset.round = String(i + 1)
+      // Three states and they are all worth distinguishing: raced, next, and
+      // still to come. A list where the only marked row is the current one
+      // makes a player count backwards to work out what they have missed.
+      row.dataset.state = i < room.round ? 'done' : i === room.round ? 'next' : 'todo'
+      el('span', 'sglbs__orderN', row, String(i + 1))
+      el('span', 'sglbs__orderName', row, trackName(room.series.trackIds[i]))
+      el('span', 'sglbs__orderWorld', row, copyFor(room.series.trackIds[i]).world)
+    }
   }
 
   /**
@@ -1523,6 +1931,14 @@ class LobbyScreensImpl implements LobbyScreens {
    * have. It gets an advisory line instead, in paintMembers.
    */
   private startBlock(room: LobbyRoom, me: LobbyMember | null, isHost: boolean): string {
+    // A SERIES THAT IS OVER IS OVER, and it is the first thing asked because
+    // every reason below it is about a race that is not going to happen.
+    // Said the same way to the host and to a guest: nobody is waiting for
+    // anybody, which is the one case where "what are we waiting for" has the
+    // answer "nothing".
+    if (room.round >= room.series.length && room.series.length > 1) {
+      return 'Every round has been raced. The standings are final.'
+    }
     if (!isHost) {
       const host = room.members.find((m) => m.isHost)
       const waiting = room.members.filter((m) => !m.ready || m.connecting).length
@@ -1549,7 +1965,14 @@ class LobbyScreensImpl implements LobbyScreens {
     const names = unready.slice(0, 3)
       .map((m) => (me && m.playerId === me.playerId ? 'you' : m.name)).join(', ')
     const more = unready.length > 3 ? ` and ${unready.length - 3} more` : ''
-    return `Waiting on ${names}${more}.`
+    // "TO READY UP", NAMED. The earlier wording was "Waiting on you,
+    // Ptarmigan." -- which names the people and never says what they have not
+    // done, so a host reading it has to already know that Ready is the only
+    // thing a lobby waits for. It also is not: the branch above waits for a
+    // CONNECTION, and the two are different problems with different answers.
+    // The guest's version of this line has always said "ready up"; this makes
+    // the host's agree.
+    return `Waiting for ${names}${more} to ready up.`
   }
 
   private paintMembers(room: LobbyRoom, isHost: boolean): void {
@@ -1663,9 +2086,16 @@ class LobbyScreensImpl implements LobbyScreens {
     const svc = this.service()
     const room = this.roomModel
     if (!svc || !room) return
-    const res = await svc.setTrack(trackId ?? room.trackId, laps ?? room.laps)
+    // The round COMING NEXT is the one `setTrack` edits, so the "leave it
+    // alone" value for either argument is that round's, not round 1's.
+    const at = Math.min(room.round, room.series.length - 1)
+    const current = room.series.trackIds[at] ?? ''
+    const res = await svc.setTrack(trackId ?? current, laps ?? room.series.laps)
     if (!res.ok) {
-      this.setMsg(this.rMsg, `Could not change the circuit (${res.error}).`, 'bad')
+      this.setMsg(this.rMsg,
+        res.error === 'notrack' && trackId && room.series.trackIds.includes(trackId)
+          ? 'That circuit is already a round of this series.'
+          : `Could not change the circuit (${res.error}).`, 'bad')
       return
     }
     this.paintRoom(res.value)

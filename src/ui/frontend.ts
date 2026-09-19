@@ -23,10 +23,20 @@
  * directory ticking.
  *
  * Unlike the HUD this is not on the frame budget, but every node is still
- * built once and reused so a rematch never leaks DOM. The one exception is the
- * garage's vehicle preview, which really does run a render loop and really does
- * hold a WebGL context of its own -- and therefore is built and torn down with
- * the screen rather than with the front end. See ui/garagePreview.ts.
+ * built once and reused so a rematch never leaks DOM. The exceptions are the
+ * two vehicle previews -- the garage's, below, and the profile's Vehicle page
+ * -- which really do run a render loop and really do hold a WebGL context of
+ * their own, and are therefore built and torn down with the thing being
+ * looked at rather than with the front end. Neither is ever alive at the same
+ * time as the other or as a race. See ui/garagePreview.ts.
+ *
+ * THE CAR IS CHOSEN IN TWO PLACES AND STORED IN ONE. The garage is a step on
+ * the way to a race; the profile's Vehicle and Pilot pages are somewhere you
+ * go on purpose. `chassisId` and `pilotId` below are the only storage either
+ * of them has, `selectChassis` / `selectPilot` are the only writers, and the
+ * profile reaches them through the `loadout` / `setLoadout` pair it is
+ * constructed with. ui/profile.ts's header argues the alternatives; this file
+ * is the one holding the field.
  *
  * Every control on every screen is a real <button>. That is the whole
  * accessibility strategy: pointer, touch, keyboard and gamepad all converge on
@@ -49,7 +59,8 @@ import {
   type CircuitState,
 } from '../game/circuit'
 import { createLobbyScreens, type LobbyScreenId, type LobbyScreens } from './lobby'
-import { createProfileScreen, type ProfileScreen } from './profile'
+import { createProfileScreen, type Loadout, type ProfileScreen } from './profile'
+import { lobbyService } from '../net'
 import type { PlayerProfile, RaceStartPacket } from '../net/types'
 
 export type QualityTier = 'low' | 'medium' | 'high'
@@ -704,6 +715,9 @@ class FrontEndImpl implements FrontEnd {
   // --- multiplayer --------------------------------------------------------
   private readonly lobby: LobbyScreens
   private readonly profile: ProfileScreen
+  /** True once ui/lobby.ts has been entered, and therefore once a lobby
+   *  service exists to publish a changed loadout to. See publishLoadout(). */
+  private multiplayerLive = false
   private readonly multiBtn: HTMLButtonElement
   private readonly multiLine: HTMLElement
 
@@ -1161,6 +1175,17 @@ class FrontEndImpl implements FrontEnd {
       // opened the profile from a lobby list and is returned to the title has
       // lost the lobby they were looking at.
       onBack: () => this.show(this.profileFrom),
+      // ONE SELECTION, TWO DOORS ONTO IT. The profile's Vehicle and Pilot
+      // pages are not a second place a chassis id is stored -- they read this
+      // field and write it back through the same two methods the garage's
+      // cards call. There is deliberately no setter on the profile screen for
+      // the front end to push into and no copy on the profile side to get out
+      // of step; see the header of ui/profile.ts for why the alternative --
+      // a profile "default" the garage could override -- is the bug rather
+      // than the feature.
+      loadout: () => ({ chassisId: this.chassisId, pilotId: this.pilotId }),
+      setLoadout: (next) => this.setLoadout(next),
+      quality: () => this.quality,
     })
     profileScr.appendChild(this.profile.root)
     this.profile.onProfile = (p) => {
@@ -1372,6 +1397,12 @@ class FrontEndImpl implements FrontEnd {
     // rows with, so it is loaded on the way into multiplayer rather than being
     // waited for. Idempotent: it only loads once.
     this.profile.prime()
+    // ui/lobby.ts builds the lobby service on its way into any of its three
+    // screens, so from here on there is one to talk to and publishLoadout()
+    // is allowed to reach for it. Latched rather than cleared on exit: the
+    // service outlives the screen, and so does the room the player is still
+    // a member of -- `exit()` says as much in its own comment.
+    this.multiplayerLive = true
     this.lobby.enter(which)
     return this.screen === screen
   }
@@ -1957,6 +1988,26 @@ class FrontEndImpl implements FrontEnd {
     }
   }
 
+  /**
+   * THE ONE WRITER, for both halves and for both screens.
+   *
+   * The garage's cards call `selectChassis` / `selectPilot` directly because
+   * each of them changes one half; the profile changes either half through
+   * here because it hands over a whole `Loadout`. Both end in the same two
+   * methods, which are the only things in the program that assign these
+   * fields, so there is exactly one copy of the answer and exactly one place
+   * that persists it.
+   *
+   * Guarded on equality so a repaint is not a write: the profile re-reads and
+   * re-sends the unchanged half on every press, and without this each one
+   * would touch localStorage twice and re-publish an unchanged loadout to a
+   * lobby room.
+   */
+  private setLoadout(next: Loadout): void {
+    if (next.chassisId !== this.chassisId) this.selectChassis(next.chassisId)
+    if (next.pilotId !== this.pilotId) this.selectPilot(next.pilotId)
+  }
+
   private selectChassis(id: string): void {
     this.chassisId = id
     writeStore(LS_CHASSIS, id)
@@ -1964,6 +2015,7 @@ class FrontEndImpl implements FrontEnd {
       this.chassisCards[i].classList.toggle('is-sel', CHASSIS[i].id === id)
     }
     this.refreshDetail()
+    this.publishLoadout()
   }
 
   private selectPilot(id: string): void {
@@ -1973,6 +2025,44 @@ class FrontEndImpl implements FrontEnd {
       this.pilotCards[i].classList.toggle('is-sel', PILOTS[i].id === id)
     }
     this.refreshDetail()
+    this.publishLoadout()
+  }
+
+  /**
+   * CHANGING YOUR CAR WHILE SITTING IN A LOBBY.
+   *
+   * ui/lobby.ts publishes the loadout ONCE, from `enterRoom`, which was
+   * exactly right while the garage was the only way to choose one: you passed
+   * through it on the way in and could not reach it again without leaving the
+   * room. The profile is reachable from the lobby browser by a button on the
+   * lobby's own head, so "I joined in the Solaire, then went and picked the
+   * Bulwark" is now an ordinary thing to do -- and without this the room would
+   * go on showing the Solaire to seven other people, and `RaceStartPacket`
+   * would put the Solaire on the grid.
+   *
+   * Fire-and-follow, per the contract's note on `setLoadout`: the return is
+   * void and the `onRoom` push that follows is the truth. lobby.ts is already
+   * subscribed to that push and repaints the member row from it, so this file
+   * does not touch the lobby screens at all.
+   *
+   * THE GUARD IS NOT AN OPTIMISATION. `lobbyService()` CREATES the service on
+   * first call, and creating one attaches to the mock world and starts its
+   * clock -- the cost net/index.ts is lazy precisely to avoid. A player who
+   * has never opened a multiplayer screen must not start a directory ticking
+   * by picking a car, so this only ever runs once ui/lobby.ts has been
+   * entered, which is the moment it builds the service itself. `current()`
+   * then answers whether there is actually a room to tell.
+   */
+  private publishLoadout(): void {
+    if (!this.multiplayerLive) return
+    try {
+      const svc = lobbyService()
+      if (!svc.current()) return
+      void svc.setLoadout(this.chassisId, this.pilotId)
+    } catch {
+      // A service that will not build is the lobby screen's problem to
+      // report, not a reason a chassis cannot be selected.
+    }
   }
 
   private selectQuality(q: QualityTier): void {

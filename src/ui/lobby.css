@@ -62,6 +62,18 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /*
+   * MIN-WIDTH: 0 ON THE COLUMN, not just on the row inside it.
+   *
+   * A flex item's automatic minimum size is its min-content, and that
+   * propagates up: `.sg-head` is a nowrap row of BACK + title + PROFILE, so
+   * its min-content became this column's, and this column's became the
+   * screen's. Measured at 412px after the menu type grew: the whole chain --
+   * .sglb, .sg-head, .sglb__headright and the button -- all reported a right
+   * edge of 444. Fixing the innermost box alone does nothing, because the
+   * floor is set three levels up.
+   */
+  min-width: 0;
   flex: 1 1 auto;
   gap: clamp(6px, 1.2vmin, 14px);
   font-family: var(--sg-ui);
@@ -73,6 +85,20 @@
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+  /*
+   * MIN-WIDTH: 0, AND IT IS LOAD-BEARING ON A PHONE.
+   *
+   * A flex item's automatic minimum size is its min-content, so a nowrap
+   * button label sets a floor this box cannot go below -- it does not shrink,
+   * it overflows. Measured after the menu type grew: the head ran to x = 444
+   * in a 412px viewport, pushing the PROFILE button off the right edge with
+   * nothing to scroll it back into view.
+   *
+   * The same automatic-minimum rule ate the garage's portrait layout in the
+   * same pass. It is worth recognising on sight: a grid or flex child that
+   * overflows rather than shrinking is almost always this.
+   */
+  min-width: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -1039,6 +1065,25 @@
    ========================================================================== */
 
 @media (max-width: 860px) and (orientation: portrait) {
+  /*
+   * THE HEAD WRAPS RATHER THAN OVERFLOWS.
+   *
+   * Letting the column shrink (see .sglb) only converts an overflow into a
+   * squeeze; the row still has to be told what to give up. BACK and PROFILE
+   * are fixed-size targets and must stay 44px, so the title is the one that
+   * yields -- it shrinks a step and, in the worst case, the row wraps to two
+   * lines. A title that ellipsises is better than a PROFILE button off the
+   * right edge of a phone with nothing to scroll it back.
+   */
+  .sglb .sg-head { flex-wrap: wrap; }
+  .sglb .sg-head__title {
+    font-size: var(--sg-fs-title);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sglb__headright { flex: 0 1 auto; min-width: 0; }
+
   .sglb__colhead {
     display: none;
   }

@@ -77,6 +77,14 @@ function packet(over: Partial<RaceStartPacket> = {}): RaceStartPacket {
     localPlayerId: LOCAL_ID,
     trackId: 'rustfall',
     laps: T.race.totalLaps,
+    // A SINGLE RACE, WHICH IS A SERIES OF ONE. The default packet says so
+    // explicitly rather than leaving the three fields off, because that is
+    // what the contract means by one code path: the one-off case is the
+    // series case with `length: 1`, and a fixture that skipped the fields
+    // would be testing a packet the wire cannot produce.
+    round: 0,
+    seriesLength: 1,
+    standings: [],
     seed: 0x5eed1234,
     grid: grid(),
     inputDelay: 4,
