@@ -17,12 +17,19 @@ import { CHASSIS, CHASSIS_BY_ID, getDerived, getLocomotion } from '../content/ch
 import { PILOTS } from '../content/pilots'
 import { TUNING as T } from '../content/tuning'
 import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types'
+// TYPES ONLY, DELIBERATELY. `net/index.ts` is lazy on purpose -- naming it
+// starts a mock directory ticking -- and the Game has no business reaching for
+// a service anyway: the front end owns the lobby and hands this file the one
+// packet that comes out of it. `import type` cannot emit a runtime import, so
+// that stays true however this file is later edited.
+import type { RaceStartPacket } from '../net/types'
 import { QUALITY_PRESETS, type QualityTier, type RenderQuality } from '../render/api'
 import { createVehicleVisual, disposeVehicleCache, type VehicleVisualEx } from '../render/vehicles'
 import { buildTrackVisual } from '../render/trackMesh'
 import { buildEnvironment } from '../render/environment'
 import { createEntityVisuals, type EntityVisualsWithGate } from '../render/entities'
 import { createVfx } from '../render/vfx'
+import { createNameplates, type NameplateRoster, type NameplateSystem } from '../render/nameplates'
 import { createPostFx, type PostFx } from '../render/postfx'
 import { createHud, type Hud, type PodiumLine } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
@@ -92,6 +99,145 @@ interface RenderRacer {
   prevUX: number; prevUY: number; prevUZ: number
 }
 
+// ---------------------------------------------------------------------------
+// THE MULTIPLAYER GRID
+//
+// A THIRD SOURCE OF TRUTH FOR THE FIELD, AND NOT A THIRD RACE PATH. The
+// argument is the one startRace() already makes for circuit mode, and it is
+// stronger here: the single-race generator derives the opponents from a pool
+// that excludes the player's car, so it answers differently for every reader of
+// the SAME broadcast -- eight clients would build eight different fields and
+// call it one race. The packet is therefore not a hint about the grid, it is
+// the grid, and this function's only job is to transcribe it.
+//
+// PURE, AND EXPORTED, for the same reason plateRoster is: everything that can
+// actually be wrong here -- which slot the reader is in, whose chassis goes
+// where, what an AI's skill is -- is arithmetic over a small object, and it
+// should be pinned by a test rather than by a screenshot of a race that happens
+// to look right. See tests/multiplayer.test.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * The pace a grid slot with no published skill drives at.
+ *
+ * `2 + (slot % 3)` is the expression game/main.ts uses for a single race,
+ * game/circuit.ts reproduces for a championship round and net/mock.ts publishes
+ * for an AI slot, so a car filling a multiplayer grid drives at exactly the
+ * pace it would anywhere else in the game.
+ *
+ * It is needed at all because of the milestone below: a HUMAN slot publishes
+ * `aiSkill: null` (a person's skill is their own business) and, with no
+ * transport, that car still has to be driven by something. Derived from the
+ * slot number rather than invented, so every client computes the same number
+ * from the same packet and the stand-in cannot itself be a source of divergence.
+ */
+export function standInSkill(slot: number): number {
+  return 2 + (slot % 3)
+}
+
+/**
+ * The start packet, transcribed into a `SimConfig` -- or null, meaning refuse.
+ *
+ * THE LOCAL PLAYER IS NOT NECESSARILY SLOT 0, which is the whole reason this
+ * function exists rather than a couple of lines inside startRace(). Single race
+ * and circuit mode both hard-code the player onto pole; in a lobby they are
+ * wherever they landed, so `localRacerIndex` is READ FROM THE PACKET by
+ * matching `localPlayerId` against the grid. Nothing else in this file may
+ * assume the answer is zero.
+ *
+ * WHY IT REFUSES RATHER THAN FALLING BACK. Every failure below is a packet that
+ * cannot describe a race this client is in, and the two available fallbacks are
+ * both worse than not starting: slot 0 would put the player in somebody else's
+ * car for a whole race, and -1 (the attract mode value) would start a race with
+ * no player in it at all. Both photograph perfectly. So a packet that does not
+ * place this reader on an eight-car grid does not start a race, and the caller
+ * says so.
+ *
+ * WHAT IT CHECKS, AND WHY EACH ONE IS A REAL SHAPE AND NOT PARANOIA
+ *
+ *   Eight slots exactly. `LOBBY_MAX_PLAYERS` is not a preference, it is the
+ *   grid: Race builds `racerCount` cars and the results table, the podium and
+ *   the points ladder are all written against eight. A short grid would run a
+ *   race whose last cars had a default chassis, no name plate and a skill
+ *   nobody chose.
+ *
+ *   `slot` is the index, and every index is used once. `slot` is documented as
+ *   the racer id in the sim, and three separate things downstream believe it --
+ *   nameplates.ts looks its car up with `racers[spec.slot]`, circuit scoring
+ *   matches `r.id`, and the config arrays below are positional. A duplicated
+ *   or out-of-range slot silently swaps two cars' identities.
+ *
+ *   Exactly one slot is the reader. Two would make `localRacerIndex`
+ *   order-dependent, which is the one thing a broadcast may never be.
+ *
+ * `trackId` is passed in rather than taken from the packet because the caller
+ * has already resolved it against the shipped roster -- an id with no track
+ * behind it falls back to Rustfall rather than throwing a lobby's selection
+ * into the sim, and the config must name the circuit that is actually loaded.
+ */
+export function multiplayerSimConfig(
+  packet: RaceStartPacket,
+  trackId: string,
+): SimConfig | null {
+  const grid = packet.grid
+  if (grid.length !== RACER_COUNT) return null
+
+  const chassisIds: string[] = new Array<string>(RACER_COUNT)
+  const pilotIds: string[] = new Array<string>(RACER_COUNT)
+  const aiSkill: number[] = new Array<number>(RACER_COUNT)
+  const filled: boolean[] = new Array<boolean>(RACER_COUNT).fill(false)
+  let localRacerIndex = -1
+
+  for (const s of grid) {
+    if (!Number.isInteger(s.slot) || s.slot < 0 || s.slot >= RACER_COUNT) return null
+    if (filled[s.slot]) return null
+    filled[s.slot] = true
+    chassisIds[s.slot] = s.chassisId
+    pilotIds[s.slot] = s.pilotId
+    // `playerId` is null on an AI slot and `localPlayerId` is a real id, so a
+    // null can never accidentally match -- the same guard plateRoster relies on.
+    if (s.playerId !== null && s.playerId === packet.localPlayerId) {
+      if (localRacerIndex >= 0) return null
+      localRacerIndex = s.slot
+    }
+    /**
+     * PUBLISHED WHERE THERE IS ONE, DERIVED IDENTICALLY WHERE THERE IS NOT.
+     *
+     * `SimConfig.aiSkill` feeds `stepAI` inside the deterministic sim, so it is
+     * an input to the physics in exactly the way the seed is -- which is why
+     * the packet carries it rather than letting each client invent one. A human
+     * slot publishes null, and this fills that hole from the slot number alone,
+     * so the array this function returns is IDENTICAL on every client that
+     * reads the packet. `localRacerIndex` is the only field that differs
+     * between readers, which is the only field that is allowed to.
+     *
+     * The local player's own entry is therefore a stand-in too, and it is never
+     * read: sim/race.ts calls stepAI and aiRocketStart only for a racer with
+     * `isAI`, and `isAI` is false for exactly this index.
+     */
+    aiSkill[s.slot] = s.aiSkill ?? standInSkill(s.slot)
+  }
+  if (localRacerIndex < 0) return null
+
+  return {
+    // `>>> 0` because `Rng` does it anyway and a seed that is negative or
+    // fractional in one client's copy and normalised in another's is the
+    // quietest desync available.
+    seed: packet.seed >>> 0,
+    // THE LOBBY'S LAP COUNT, NOT `T.race.totalLaps`. A lobby offers 1, 3, 5, 7
+    // or 10 and every client must run the number the host published. Clamped
+    // to something a race can actually be, deterministically, so a malformed
+    // packet is a short race rather than a sim that never finishes.
+    totalLaps: Math.max(1, Math.round(packet.laps)),
+    racerCount: RACER_COUNT,
+    trackId,
+    chassisIds,
+    pilotIds,
+    localRacerIndex,
+    aiSkill,
+  }
+}
+
 export class Game {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -110,6 +256,27 @@ export class Game {
   private entityVis: EntityVisualsWithGate | null = null
   private vfx: VfxSystem | null = null
   private post: PostFx | null = null
+  /**
+   * THE NAME PLATES, AND WHY THE ROSTER IS HELD HERE RATHER THAN IN THEM.
+   *
+   * The adaptive quality scaler tears the world down and builds it again
+   * mid-race (see buildWorld), which destroys the plate system along with
+   * everything else. The roster is a property of the RACE, not of the render
+   * world, so it lives up here and is re-installed on whatever buildWorld just
+   * made -- exactly as the post chain's intensity is. Without that, a single
+   * frame-rate dip on a phone would silently delete every name on screen for
+   * the rest of the race and nothing would ever put them back.
+   *
+   * Null outside multiplayer. A single race, a Grand Circuit round and the
+   * title screen's attract race all leave it null, so none of them pay for any
+   * part of this feature -- not the atlas, not the two passes, not the draw
+   * calls. See setNameplateRoster.
+   */
+  private plates: NameplateSystem | null = null
+  private nameplateRoster: NameplateRoster | null = null
+  /** Dense view of `renderRacers[i].view`, reused each frame so the plate
+   *  push allocates nothing. Same pattern, same reason, as `audioEvents`. */
+  private readonly plateViews: RacerState[] = []
 
   private hud: Hud
   private cheer: Cheer
@@ -172,6 +339,26 @@ export class Game {
    */
   private circuit: CircuitState | null = null
   private circuitActive = false
+  /**
+   * THE LOBBY RACE, or null for every other kind.
+   *
+   * Held for the same reason `circuit` is: it is the grid, the seed and the lap
+   * count of the race in progress, and startRace() is re-entered by Rematch and
+   * by the pause menu's Restart without any of the front end's setup screens
+   * running again. Kept ACROSS those, so a rematch of a lobby race is the same
+   * eight cars on the same circuit rather than a single race wearing the
+   * lobby's name plates -- which is the same reason setNameplateRoster is not
+   * cleared by the results screen.
+   *
+   * Cleared by the one thing that means "I am done with the lobby": pressing
+   * Start on the garage screen, which is the entry point for every single race
+   * and every circuit round. See the handler.
+   *
+   * The `circuit`/`circuitActive` pair has no equivalent here because there is
+   * nothing to save: a multiplayer race is not a series, it scores no round and
+   * it writes nothing to disk.
+   */
+  private multiplayer: RaceStartPacket | null = null
   private raf = 0
   private reduceMotion = false
   /**
@@ -343,6 +530,19 @@ export class Game {
 
     this.frontEnd.onStart = (sel) => {
       this.selection = { chassisId: sel.chassisId, pilotId: sel.pilotId }
+      // LEAVING THE LOBBY IS PRESSING START ON THE GARAGE, and it is the only
+      // thing that is. Everything else that re-enters startRace -- Rematch,
+      // the pause menu's Restart -- deliberately keeps the lobby race, so this
+      // is where a packet that has been raced stops being the grid.
+      //
+      // The roster goes with it. Without this line a single race started after
+      // a lobby race would run the player's own generated field and draw the
+      // lobby's name plates over it, which is a photograph of eight strangers
+      // in the wrong cars.
+      if (this.multiplayer) {
+        this.multiplayer = null
+        this.setNameplateRoster(null)
+      }
       // A FINISHED SERIES HAS NO NEXT ROUND. Reachable by walking back into the
       // garage from the final results and pressing Start: without this the race
       // would run on the frozen grid and be scored by nothing, which is a mode
@@ -406,6 +606,10 @@ export class Game {
     }
     this.frontEnd.onResume = () => this.resume()
     this.frontEnd.onQuit = () => this.toMenu()
+    // THE HOST PRESSED START. Fires on every client, the host included, from
+    // LobbyService.onStart -- see the note on FrontEnd.onMultiplayerStart for
+    // why this is the push and not the host's own return value.
+    this.frontEnd.onMultiplayerStart = (packet) => this.startMultiplayer(packet)
     this.input.onPause = () => {
       if (this.settings.isOpen) { this.settings.close(); return }
       if (this.phase === 'racing') this.pause()
@@ -550,8 +754,15 @@ export class Game {
    * falls back to Rustfall rather than throwing a menu selection into the sim.
    */
   private setTrack(id: string): void {
-    if (id === this.track.def.id) return
-    this.track = new Track(TRACKS_BY_ID[id] ?? RUSTFALL)
+    // RESOLVED FIRST, THEN COMPARED. The fallback has to happen before the
+    // early-out or an id with no track behind it never equals `track.def.id`
+    // and rebuilds Rustfall on top of Rustfall -- which costs a track bake and
+    // makes the HUD re-bake its minimap, because both are keyed off the Track
+    // INSTANCE. Harmless when the ids come from the shipped track list; a lobby
+    // packet is the first caller whose id this client may simply not have.
+    const def = TRACKS_BY_ID[id] ?? RUSTFALL
+    if (def.id === this.track.def.id) return
+    this.track = new Track(def)
   }
 
   /**
@@ -603,6 +814,12 @@ export class Game {
     // sparks land on the wall the car is riding rather than on the ground below
     this.vfx.gravity = this.track.hasGravity
     if (!this.vfx.group.parent) this.scene.add(this.vfx.group)
+    this.plates = createNameplates(this.quality)
+    this.scene.add(this.plates.group)
+    // The race's roster, back onto the world that was just rebuilt. See the
+    // field's own note: this is the line that stops an adaptive step-down from
+    // deleting every name in the race.
+    this.plates.setRoster(this.nameplateRoster)
     this.post = this.quality.postFx
       ? createPostFx(this.renderer, this.scene, this.chase.camera, this.quality)
       : null
@@ -644,7 +861,27 @@ export class Game {
     if (this.envVis) { this.scene.remove(this.envVis.group); this.envVis.dispose(); this.envVis = null }
     if (this.entityVis) { this.scene.remove(this.entityVis.group); this.entityVis.dispose(); this.entityVis = null }
     if (this.vfx) { this.scene.remove(this.vfx.group); this.vfx.dispose(); this.vfx = null }
+    if (this.plates) { this.scene.remove(this.plates.group); this.plates.dispose(); this.plates = null }
     if (this.post) { this.post.dispose(); this.post = null }
+  }
+
+  /**
+   * INSTALL (or clear) THE MULTIPLAYER ROSTER THE NAME PLATES DRAW.
+   *
+   * The only way into the feature, and it takes exactly what the transport
+   * publishes: `RaceStartPacket.grid` and `RaceStartPacket.localPlayerId`. The
+   * netcode calls this alongside the startRace it drives from the same packet;
+   * nothing else in the game does, which is why a single-player race is
+   * byte-for-byte the frame that shipped.
+   *
+   * Passing null clears the plates and releases the atlas. toMenu and the
+   * results screen do NOT call it: a rematch of the same lobby keeps the same
+   * grid, and re-baking an identical atlas between rounds would be work for
+   * nothing.
+   */
+  setNameplateRoster(roster: NameplateRoster | null): void {
+    this.nameplateRoster = roster
+    this.plates?.setRoster(roster)
   }
 
   // -------------------------------------------------------------------------
@@ -674,6 +911,26 @@ export class Game {
   // -------------------------------------------------------------------------
   private startAttract(): void {
     if (this.phase === 'attract') return
+    /**
+     * THE TITLE SCREEN IS THE END OF A LOBBY RACE, and this is the line where
+     * that matters rather than a tidiness.
+     *
+     * buildWorld() two lines down re-installs `nameplateRoster` on whatever it
+     * just made -- that is the fix that stops an adaptive step-down deleting
+     * every name mid-race -- so a roster still held from a finished lobby race
+     * would make the attract race BAKE THE ATLAS. The field's own note promises
+     * that the title screen pays for no part of this feature, and a stale
+     * roster is the one way that promise breaks.
+     *
+     * Nothing draws it either way (the plate pass is gated on the racing,
+     * ceremony and paused phases), so the bug would have been invisible and
+     * would have cost a texture upload on the first screen of the game, on the
+     * device least able to spare one.
+     */
+    if (this.multiplayer) {
+      this.multiplayer = null
+      this.setNameplateRoster(null)
+    }
     resetAI()
     this.setTrack(ATTRACT_TRACK)
     this.applyRenderScale()
@@ -747,7 +1004,106 @@ export class Game {
   }
 
   // -------------------------------------------------------------------------
+  /**
+   * A LOBBY RACE, FROM THE PACKET THE HOST BROADCAST.
+   *
+   * Everything this does is set up state that `startRace` already knows how to
+   * read, and then call it. There is deliberately no second race path: one
+   * function builds a world, a Race, a camera, a HUD and a scorer, and the only
+   * thing multiplayer changes is where the grid, the seed, the lap count and
+   * the local player come from. A parallel startMultiplayerRace() would be a
+   * second place for the ceremony, the settle and the results screen to drift.
+   *
+   * THE TRACK MAY NOT BE THE ONE THAT IS LOADED, and the existing answer to
+   * that is `setTrack` -- the same call circuit mode makes between rounds. It
+   * swaps the Track instance, and everything downstream is keyed off that
+   * instance: buildWorld() re-reads it a few lines into startRace, the HUD
+   * rebakes its minimap when the identity changes, and startRace copies
+   * `track.def.id` into SimConfig.trackId. There is no second path to invent.
+   *
+   * THE GRAND CIRCUIT IS LEFT, NOT DISTURBED. Exactly what walking into the
+   * track list does, and for the same reason: being in a series and racing
+   * something that is not one of its rounds are contradictory, and a lobby race
+   * must not be scored as a round. `saveCircuit` is not called from anywhere in
+   * this path, so the standings are untouched and Continue still works from the
+   * title screen.
+   *
+   * ==========================================================================
+   * WHAT IS NOT WIRED YET, SAID OUT LOUD SO NOBODY MISTAKES THIS FOR NETCODE
+   *
+   * THERE IS NO TRANSPORT. `RaceTransport` in net/types.ts is declared and not
+   * implemented, so the other humans' cars are driven by the AI this pass, at
+   * the stand-in pace `standInSkill` derives. The flow is real end to end --
+   * lobby, room, Start, the right eight cars on the right circuit from the
+   * right seed, with the player in their own slot -- and the only missing piece
+   * is the wire. It is the correct milestone for a front-end-first build and it
+   * is NOT a playable multiplayer race: every client is simulating its own
+   * copy of everybody else.
+   *
+   * `packet.inputDelay` IS THEREFORE UNUSED, on purpose. It is the lockstep
+   * tax -- the frames every client holds its own input for so the slowest peer
+   * can keep up -- and buffering the local player's input against peers who do
+   * not exist yet would be latency bought for nothing. It becomes load-bearing
+   * on the day `sendInput`/`onInput` do, and it is in the packet now so that
+   * day does not need a protocol change.
+   *
+   * Nor is `isAI` per-client stable, which is the deeper reason this cannot be
+   * finished here: sim/race.ts derives it from `localRacerIndex`, so a slot is
+   * AI on my machine and a person on theirs, and `aiRocketStart` draws from the
+   * shared race RNG. Real lockstep needs every client to step every car from
+   * transported inputs -- which is a change to how inputs arrive, not to this
+   * function, and is exactly what `RaceTransport` is shaped for.
+   */
+  private startMultiplayer(packet: RaceStartPacket): void {
+    // The track BEFORE the config, because the config has to name the circuit
+    // that is actually going to be loaded -- `setTrack` falls back to Rustfall
+    // for an id this build does not have, and every client resolves it the same
+    // way from the same field, so they agree.
+    this.setTrack(packet.trackId)
+    // A packet this client cannot place itself in does not start a race. The
+    // refusal lives inside startRace so that Rematch and Restart are refused by
+    // the same line; all this has to do is not have broken anything on the way
+    // there, and nothing above this point is destructive.
+    if (this.circuitActive) {
+      this.circuitActive = false
+      this.publishCircuit()
+    }
+    this.multiplayer = packet
+    // The name plates take exactly what the packet publishes. THE ONLY CALLER
+    // THAT PASSES A ROSTER: a single race, a circuit round and the attract race
+    // all leave it null and pay for none of the feature.
+    this.setNameplateRoster({ grid: packet.grid, localPlayerId: packet.localPlayerId })
+    this.startRace()
+  }
+
+  // -------------------------------------------------------------------------
   private startRace(): void {
+    /**
+     * THE PACKET, RESOLVED -- AND BEFORE ANYTHING IS TORN DOWN.
+     *
+     * This is the one branch of startRace that can refuse, so it is asked first,
+     * while the attract race is still running and the world is still standing.
+     * Resolving it after buildWorld() would mean a refusal left the game
+     * holding a freshly built circuit for a race that is not going to happen.
+     *
+     * A refusal cleans up after itself rather than reporting upwards, because
+     * three different callers reach this line -- the start packet, Rematch and
+     * the pause menu's Restart -- and the honest outcome is the same for all
+     * three: there is no lobby race any more, the plates come down, and the
+     * player is left on whatever screen they were already looking at.
+     */
+    const mp = this.multiplayer
+      ? multiplayerSimConfig(this.multiplayer, this.track.def.id)
+      : null
+    if (this.multiplayer && !mp) {
+      console.warn('multiplayer: start packet does not place this client on an '
+        + `eight-car grid (${this.multiplayer.grid.length} slots, `
+        + `localPlayerId ${JSON.stringify(this.multiplayer.localPlayerId)}); refusing`)
+      this.multiplayer = null
+      this.setNameplateRoster(null)
+      return
+    }
+
     // FIRST, AND NOT LATER. startRace() calls frontEnd.hide() further down,
     // which fires onScreen(null), which stops the attract race -- and at that
     // point `phase` is still 'attract', so stopAttract() would happily null the
@@ -764,7 +1120,20 @@ export class Game {
     const pilotIds: string[] = []
     const aiSkill: number[] = []
     /**
-     * THE FIELD, AND THE ONE THING CIRCUIT MODE COULD NOT REUSE.
+     * THE FIELD, FROM ONE OF THREE PLACES.
+     *
+     * A LOBBY PACKET FIRST, because it is the only one of the three that is not
+     * this client's own opinion. It was resolved at the top of this function --
+     * grid, seed, lap count and, crucially, WHICH SLOT THE PLAYER IS IN -- and
+     * nothing below may override any of it, least of all with the garage
+     * selection: the packet already carries the car this player chose in the
+     * room, and rewriting slot 0 from `this.selection` the way circuit mode
+     * does would put the local player's car on the host's grid position and
+     * leave the local player driving somebody else's.
+     *
+     * Then the frozen circuit grid, then the single-race generator.
+     *
+     * THE ONE THING CIRCUIT MODE COULD NOT REUSE.
      *
      * The single-race generator below derives the opponents' chassis from a
      * pool that EXCLUDES the player's car, so it answers differently for every
@@ -782,8 +1151,14 @@ export class Game {
      * save, aiSkill included, so even a later change to the skill formula
      * cannot re-tune a series someone is halfway through.
      */
-    const grid = this.circuitActive && this.circuit ? this.circuit.grid : null
-    if (grid && grid.length === RACER_COUNT) {
+    // A lobby race builds nothing here: `multiplayerSimConfig` has already
+    // transcribed the packet, positionally and by slot, and it is used verbatim
+    // below. Re-deriving any of it on this side would be a second place for the
+    // grid to be decided and a second place for it to be decided differently.
+    const grid = !mp && this.circuitActive && this.circuit ? this.circuit.grid : null
+    if (mp) {
+      /* nothing to do: see `config` below */
+    } else if (grid && grid.length === RACER_COUNT) {
       for (let i = 0; i < RACER_COUNT; i++) {
         if (i === 0) {
           chassisIds.push(this.selection.chassisId)
@@ -806,7 +1181,24 @@ export class Game {
       }
     }
 
-    const config: SimConfig = {
+    /**
+     * THE PACKET IS THE CONFIG, or the config is built from this client's own
+     * choices. Not a blend of the two: `mp` already carries the seed every
+     * client must use, the lap count the host published and the room screen
+     * showed everybody, and the slot this reader is in. Picking those fields
+     * out one at a time here would be a second transcription to keep in step
+     * with the first.
+     *
+     * `localRacerIndex` is zero on both of the other two paths because a single
+     * race and a circuit round put the player on pole by construction. In a
+     * lobby it is wherever they landed -- and `localId` is assigned FROM THE
+     * CONFIG a few lines down rather than written as a second literal, so the
+     * two can never disagree. Everything downstream of this file resolves the
+     * local racer by `RacerState.id` (the HUD, the results table, the VFX) or
+     * by object identity (the minimap, the callouts), and `id` is the grid
+     * index, so all of it follows this one number.
+     */
+    const config: SimConfig = mp ?? {
       seed: (Math.random() * 0xffffffff) >>> 0,
       totalLaps: T.race.totalLaps,
       racerCount: RACER_COUNT,
@@ -817,7 +1209,7 @@ export class Game {
     }
 
     this.race = new Race(this.track, config)
-    this.localId = 0
+    this.localId = config.localRacerIndex
     this.spawnRacerVisuals()
 
     const local = this.race.state.racers[this.localId]
@@ -1273,7 +1665,44 @@ export class Game {
     const trackId = this.track.def.id
     const local = race.state.racers[this.localId]
     const score = this.lastScore
+    /**
+     * WAS THIS RUN OVER THE SAME DISTANCE AS EVERY OTHER ROW ON THE BOARD?
+     *
+     * A single race and a circuit round both run `T.race.totalLaps`. A LOBBY
+     * DOES NOT: the create screen offers 1, 3, 5, 7 or 10 laps, and the host's
+     * choice is what every client runs. So a race time, a score and a combo
+     * from a ten-lap lobby race are roughly three times a three-lap one's, and
+     * a one-lap lobby race produces a "fastest race" that no honest run can
+     * ever beat.
+     *
+     * The board, the records and the world table are all per-TRACK bests, and
+     * none of them has a distance column to sort it out afterwards -- so a run
+     * over a different distance is not a better result, it is an incomparable
+     * one, and filing it would quietly ruin three tables that took real races
+     * to fill. It is read-only instead: the player still sees the boards, and
+     * the "you qualified, name your run" row never appears, because there is
+     * nothing to name it against.
+     *
+     * NOT gated on `this.multiplayer`. The question is the distance, not the
+     * mode: a three-lap lobby race IS directly comparable and should count,
+     * which is also what keeps the common case -- a lobby that left the lap
+     * count on the track's authored 3 -- feeling like a real race.
+     *
+     * BEST LAP IS THE CASUALTY, and knowingly. It is the one figure here that
+     * is distance-independent, so a blistering lap inside a ten-lap lobby race
+     * is genuinely record-worthy and is being dropped with the rest. Splitting
+     * the submission in two would mean a records page whose lap row and race
+     * row came from different runs, which is a worse lie than a missing row.
+     */
+    const comparable = race.config.totalLaps === T.race.totalLaps
     try {
+      if (!comparable) {
+        this.frontEnd.setRecords(await this.records.get(trackId), [])
+        this.frontEnd.setBoard(await this.board.top(trackId, BOARD_SIZE), 0, false)
+        this.frontEnd.setGlobal({ status: 'loading', rows: [], rank: 0 })
+        void this.global.top(trackId).then((b) => this.frontEnd.setGlobal(b))
+        return
+      }
       // RECORDS FIRST, AND UNCONDITIONALLY. Unlike the board, a record is taken
       // from every race whether or not the player names anything -- a blistering
       // lap inside a scrappy run is exactly the thing worth remembering, and it
@@ -1683,6 +2112,44 @@ export class Game {
       // property write and there is then no path by which the two can differ.
       if (this.vfx) this.vfx.reduceMotion = this.reduceMotion
       this.vfx?.update(dt, st, this.chase.camera.position, this.localId)
+      /**
+       * THE NAME PLATES.
+       *
+       * AFTER the camera has been placed, and that is not a preference: a
+       * plate is positioned entirely in screen space off a projection through
+       * `chase.camera`, so running this before the rig had moved would put
+       * every name one frame behind its car -- at 60 m/s, most of a car
+       * length, which is precisely the error that makes a label look like it
+       * belongs to the wrong vehicle.
+       *
+       * Handed the INTERPOLATED views rather than `st.racers`, for the same
+       * reason the vehicle visuals get them: the sim steps at a fixed 120 Hz
+       * and the display does not, so the cars on screen are between sim
+       * frames and a plate anchored to the raw state would swim against the
+       * car it is nailed to on any display that is not exactly in step.
+       *
+       * The viewport is passed in CSS pixels. Device pixel ratio and the
+       * adaptive render scale both cancel inside the shader, which is why
+       * neither has to be plumbed through here -- see nameplates.ts.
+       *
+       * Plates are drawn while the player is DRIVING and during the finish
+       * ceremony (the field is still on the road and still worth identifying)
+       * and never on the title screen's attract race, which has no roster and
+       * no local player at all.
+       */
+      if (this.plates) {
+        this.plates.reduceMotion = this.reduceMotion
+        this.plateViews.length = this.renderRacers.length
+        for (let i = 0; i < this.renderRacers.length; i++) {
+          this.plateViews[i] = this.renderRacers[i].view
+        }
+        this.plates.update(
+          dt, this.plateViews, this.chase.camera,
+          this.sizedW > 0 ? this.sizedW : this.container.clientWidth,
+          this.sizedH > 0 ? this.sizedH : this.container.clientHeight,
+          this.phase === 'racing' || this.phase === 'ceremony' || this.phase === 'paused',
+        )
+      }
       this.trackVis?.update(dt, st.time)
       // THE CROSSWIND, HANDED OVER RATHER THAN DERIVED.
       //

@@ -1,0 +1,1227 @@
+/* ==========================================================================
+   SpaceGen Racing — Multiplayer: browser, create, room
+
+   Companion sheet to styles.css on the same terms settings.css took: every
+   colour, radius, shadow and font here is a --sg- token defined there. No new
+   palette, no @import, no external asset.
+
+   Prefix: .sglb- (browser + create + shared) and .sglbr- (room), so nothing
+   here can collide with .sg-fe / .sg-hud / .sgset / .sgpf.
+
+   THE ONE LAYOUT RULE THIS FILE EXISTS TO ENFORCE: a directory row's HEIGHT
+   NEVER CHANGES. It is set explicitly, every cell is one line of text in a
+   fixed grid column, the ping column is sized in `em` with tabular figures so
+   "—" and "142 ms" occupy the same box, and the pill that announces held-back
+   changes is positioned OUT of the flow. A row that grows by a line when its
+   status changes shifts every row below it, which is the exact bug lobby.ts's
+   pin is there to prevent, arriving from the stylesheet instead.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   WHICH SCREEN IS UP.
+
+   styles.css owns the same switch for the five original screens. These three
+   live here rather than being added to that list for the reason settings.css
+   exists: a screen owns its own stylesheet, and a feature that has to edit the
+   shared sheet to appear at all is a feature that cannot be removed cleanly.
+   -------------------------------------------------------------------------- */
+
+.sg-fe[data-screen='lobby'] .sg-screen--lobby,
+.sg-fe[data-screen='lobbyNew'] .sg-screen--lobbyNew,
+.sg-fe[data-screen='room'] .sg-screen--room {
+  display: flex;
+}
+
+/* --------------------------------------------------------------------------
+   THE TITLE SCREEN'S MULTIPLAYER BLOCK.
+
+   Same shape as `.sg-title__circuit` in styles.css, deliberately: PLAY, then
+   two modes that look like each other. The violet is the only new thing — the
+   Grand Circuit owns gold and a second gold button beside it would read as one
+   control that had been cut in half.
+   -------------------------------------------------------------------------- */
+
+.sg-title__multi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.sg-btn--violet {
+  background: linear-gradient(180deg, #e4c6ff 0%, var(--sg-violet) 52%, #6d19b0 100%);
+  box-shadow: 0 9px 0 #3d0b66, 0 22px 44px rgba(0, 0, 0, 0.55);
+  color: #0d0418;
+}
+
+.sg-btn--violet:active {
+  box-shadow: 0 3px 0 #3d0b66, 0 12px 22px rgba(0, 0, 0, 0.5);
+}
+
+.sglb {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: clamp(6px, 1.2vmin, 14px);
+  font-family: var(--sg-ui);
+}
+
+.sglb__headright {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* --------------------------------------------------------------------------
+   Filter bar
+   -------------------------------------------------------------------------- */
+
+.sglb__bar {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.sglb__search,
+.sglb__select,
+.sglb__in,
+.sglb__code {
+  font-family: var(--sg-ui);
+  font-size: clamp(12px, 1.6vmin, 15px);
+  color: var(--sg-ink);
+  background: rgba(5, 9, 18, 0.9);
+  border: 2px solid var(--sg-line);
+  border-radius: var(--sg-r-sm);
+  padding: 0.45em 0.7em;
+  min-height: 40px;
+  min-width: 0;
+}
+
+/* The create form's own text field. Capped for the same reason as the select
+   above, and `flex: none` for the same column-axis reason. */
+.sglb__form .sglb__in {
+  flex: none;
+  width: 100%;
+  max-width: 32rem;
+}
+
+.sglb__search {
+  flex: 1 1 14rem;
+  /* Capped: past about this width a search field stops reading as a control
+     and starts reading as the page's headline. */
+  max-width: 30rem;
+}
+
+.sglb__select {
+  flex: 0 1 15rem;
+  /* The native control paints its own arrow; leaving appearance alone is the
+     only way it stays operable with a screen reader on every platform. */
+  cursor: pointer;
+}
+
+/*
+ * FULL-WIDTH-ISH, AND `flex: none`.
+ *
+ * The create form is a flex COLUMN, so a child with `flex: 1 1 auto` grows
+ * along the column -- which made the region dropdown a hundred and fifty pixels
+ * tall. In a column, "fill the width" is `width`, and `flex` is about height.
+ */
+.sglb__select--wide {
+  flex: none;
+  width: 100%;
+  max-width: 32rem;
+}
+
+.sglb__search:focus,
+.sglb__select:focus,
+.sglb__in:focus,
+.sglb__code:focus {
+  outline: none;
+  border-color: var(--sg-line-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 255, 0.2);
+}
+
+.sglb__toggle {
+  flex: none;
+  font-family: var(--sg-ui);
+  font-size: clamp(11px, 1.45vmin, 13px);
+  letter-spacing: 0.06em;
+  color: var(--sg-dim);
+  background: rgba(16, 26, 46, 0.8);
+  border: 2px solid var(--sg-line);
+  border-radius: 999px;
+  padding: 0.4em 1em;
+  min-height: 40px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sglb__toggle.is-on {
+  color: #06101c;
+  background: var(--sg-cyan);
+  border-color: var(--sg-cyan);
+}
+
+.sglb__toggle:focus-visible,
+.sglb__segBtn:focus-visible,
+.sglb__track:focus-visible,
+.sglb__row:focus-visible,
+.sglbr__trackBtn:focus-visible,
+.sglbr__kick:focus-visible,
+.sglbr__copy:focus-visible,
+.sglb__pill:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Status + notice lines
+   -------------------------------------------------------------------------- */
+
+/*
+ * THE STATUS ROW HAS A FIXED FLOOR.
+ *
+ * The pill lives in it and comes and goes, so the row is sized for the pill
+ * whether or not the pill is there. That is what lets the pill appear without
+ * pushing the list down -- the layout shift the pin exists to prevent must not
+ * be reintroduced by the control that announces it.
+ */
+.sglb__statusrow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.sglb__status,
+.sglb__notice {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: clamp(10px, 1.3vmin, 12px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  min-height: 1.3em;
+}
+
+.sglb__status[data-kind='bad'] { color: var(--sg-orange); }
+.sglb__status[data-kind='wait'] { color: var(--sg-dim); }
+
+.sglb__notice {
+  flex: none;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: clamp(11px, 1.45vmin, 13px);
+  color: var(--sg-gold);
+  border-left: 3px solid var(--sg-gold);
+  padding-left: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   The list
+   -------------------------------------------------------------------------- */
+
+.sglb__wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--sg-r-md);
+  border: 2px solid var(--sg-line);
+  background: rgba(7, 11, 22, 0.72);
+  overflow: hidden;
+}
+
+/*
+ * THE COLUMN TEMPLATE, WRITTEN ONCE FOR BOTH.
+ *
+ * The header and every row are the same declaration, so a column cannot be
+ * widened for one and not the other -- which is the failure mode of a table
+ * built out of flexbox, and it shows up as headers sitting one column left of
+ * the data they name.
+ */
+.sglb__colhead,
+.sglb__row {
+  display: grid;
+  /*
+   * THE FIXED COLUMNS ARE IN `rem`, NOT `em`, AND THAT IS A BUG FIX.
+   *
+   * `em` resolves against the element's OWN font-size, and the header is set
+   * four points smaller than a row -- so the same `4.5em` was 40px in the
+   * header and 63px in the rows, every fixed column sat at a different width in
+   * the two, and "PLAYERS" printed straight through "ACCESS". A unit that does
+   * not depend on the local font-size is the only way a header can be written
+   * in different type from the data it labels.
+   */
+  grid-template-columns:
+    minmax(0, 2.1fr) minmax(0, 1.25fr) 6.6rem 4.8rem 4rem 4.8rem minmax(0, 1.5fr) 4.8rem;
+  align-items: center;
+  gap: clamp(4px, 0.9vmin, 12px);
+  padding: 0 clamp(8px, 1.4vmin, 16px);
+  text-align: left;
+}
+
+/* The header labels clip like the data does; an overflowing label is what put
+   two column names on top of each other in the first place. */
+.sglb__colhead > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Numbers align on their right edge so "54 ms" and "216 ms" line up, and the
+   labels above them follow. */
+.sglb__colhead .sglb__col--ping,
+.sglb__colhead .sglb__col--players,
+.sglb__row .sglb__col--ping,
+.sglb__row .sglb__col--players {
+  text-align: right;
+}
+
+.sglb__colhead {
+  flex: none;
+  height: 30px;
+  font-size: clamp(9px, 1.1vmin, 11px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  border-bottom: 2px solid var(--sg-line);
+  background: rgba(9, 15, 30, 0.8);
+}
+
+.sglb__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+  /* A scroll that does not chain to the page behind it: a phone flicking the
+     lobby list should not also drag the screen. */
+  overscroll-behavior: contain;
+}
+
+.sglb__row {
+  width: 100%;
+  /* FIXED, and this is the row-height rule made literal. */
+  height: 44px;
+  border: 0;
+  border-bottom: 1px solid rgba(122, 190, 255, 0.12);
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--sg-ink);
+  font-family: var(--sg-ui);
+  font-size: clamp(11px, 1.5vmin, 14px);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 90ms ease;
+}
+
+.sglb__row:hover:not(:disabled) {
+  background: rgba(34, 211, 255, 0.09);
+}
+
+.sglb__row.is-sel {
+  background: rgba(34, 211, 255, 0.16);
+  border-left-color: var(--sg-cyan);
+}
+
+/* Your own lobby, seen from the directory. A word would be better and there is
+   no column for one, so it is a rail plus the host name already reading as
+   yours -- and the aria-label spells it out. */
+.sglb__row.is-mine {
+  border-left-color: var(--sg-gold);
+}
+
+.sglb__row:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.sglb__row.is-gone {
+  opacity: 0.4;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 59, 94, 0.6);
+}
+
+.sglb__cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sglb__col--name {
+  font-weight: 600;
+  color: var(--sg-ink);
+}
+
+.sglb__col--host,
+.sglb__col--region,
+.sglb__col--track {
+  color: var(--sg-dim);
+}
+
+/*
+ * Tabular numerals and a fixed width. "—" and "142 ms" have to occupy the same
+ * box or a ping resolving three seconds after its row appeared would reflow the
+ * columns beside it, which is the row-height rule's horizontal cousin.
+ */
+.sglb__col--ping,
+.sglb__col--players {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-dim);
+}
+
+.sglb__col--ping[data-band='good'] { color: var(--sg-green); }
+.sglb__col--ping[data-band='ok'] { color: var(--sg-gold); }
+.sglb__col--ping[data-band='poor'] { color: var(--sg-orange); }
+.sglb__col--ping[data-band='unknown'] { color: var(--sg-mute); }
+
+.sglb__col--access[data-access='private'] { color: var(--sg-violet); }
+.sglb__col--access[data-access='public'] { color: var(--sg-mute); }
+
+.sglb__col--status {
+  font-size: clamp(9px, 1.2vmin, 11px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sglb__row[data-status='open'] .sglb__col--status { color: var(--sg-green); }
+.sglb__row[data-status='full'] .sglb__col--status { color: var(--sg-gold); }
+.sglb__row[data-status='racing'] .sglb__col--status { color: var(--sg-cyan); }
+.sglb__row[data-status='closed'] .sglb__col--status { color: var(--sg-red); }
+
+/* --------------------------------------------------------------------------
+   The three things a list can be instead of a list
+   -------------------------------------------------------------------------- */
+
+.sglb__state {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: clamp(14px, 3vmin, 36px);
+  text-align: center;
+  font-size: clamp(12px, 1.6vmin, 15px);
+  line-height: 1.45;
+  color: var(--sg-dim);
+}
+
+.sglb__state--loading {
+  flex-direction: row;
+  color: var(--sg-dim);
+}
+
+.sglb__state--error {
+  color: var(--sg-orange);
+}
+
+.sglb__errText {
+  max-width: 34rem;
+  font-size: clamp(13px, 1.9vmin, 17px);
+  color: var(--sg-orange);
+}
+
+/* The developer's half of the message: true, useful, and not the headline. */
+.sglb__errDetail {
+  max-width: 34rem;
+  font-size: clamp(10px, 1.3vmin, 12px);
+  line-height: 1.45;
+  color: var(--sg-mute);
+}
+
+.sglb__errDetail:empty { display: none; }
+
+/* A control that has just been told the screen cannot work should not look
+   like it is waiting for input. */
+.sglb__bar :disabled,
+.sglb__foot .sg-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sglb__spin {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid rgba(122, 190, 255, 0.25);
+  border-top-color: var(--sg-cyan);
+  animation: sglbSpin 760ms linear infinite;
+}
+
+@keyframes sglbSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------------
+   THE PILL — beside the status line, never over the list. See lobby.ts.
+   -------------------------------------------------------------------------- */
+
+.sglb__pill {
+  flex: none;
+  height: 26px;
+  font-family: var(--sg-ui);
+  font-size: clamp(10px, 1.35vmin, 12px);
+  letter-spacing: 0.06em;
+  color: #06101c;
+  background: var(--sg-gold);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.45em 1.1em;
+  box-shadow: 0 2px 0 #7a5600;
+  cursor: pointer;
+  touch-action: manipulation;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Foot — the join bar. ALWAYS PRESENT, with a resting sentence, so choosing a
+   row cannot change the height of the list above it.
+   -------------------------------------------------------------------------- */
+
+.sglb__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 48px;
+}
+
+.sglb__footText,
+.sglb__msg {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: clamp(11px, 1.45vmin, 13px);
+  line-height: 1.35;
+  color: var(--sg-dim);
+}
+
+.sglb__footText[data-kind='bad'],
+.sglb__msg[data-kind='bad'] { color: var(--sg-red); }
+.sglb__footText[data-kind='chosen'] { color: var(--sg-ink); }
+.sglb__msg[data-kind='ok'] { color: var(--sg-green); }
+
+.sglb__codeWrap {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.sglb__code {
+  width: 6.5em;
+  font-family: var(--sg-num);
+  font-size: clamp(14px, 2vmin, 18px);
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------------------------------
+   Create
+
+   Controls are capped at a readable measure rather than stretched across a
+   1440px screen: a text field the width of the window reads as a banner, and a
+   row of eight player-count buttons each 170px wide reads as eight decisions
+   instead of one.
+   -------------------------------------------------------------------------- */
+
+.sglb__form {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: clamp(10px, 1.8vmin, 22px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sglb__k {
+  font-size: clamp(9px, 1.15vmin, 11px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  margin-top: clamp(4px, 1vmin, 12px);
+}
+
+.sglb__hint {
+  font-size: clamp(10px, 1.25vmin, 12px);
+  line-height: 1.4;
+  color: var(--sg-mute);
+  max-width: 46rem;
+}
+
+.sglb__seg {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: none;
+}
+
+.sglb__seg--wide {
+  max-width: 34rem;
+}
+
+.sglb__seg--wide .sglb__segBtn {
+  flex: 1 1 2.6em;
+}
+
+.sglb__segBtn {
+  font-family: var(--sg-num);
+  font-size: clamp(12px, 1.6vmin, 15px);
+  color: var(--sg-dim);
+  background: rgba(16, 26, 46, 0.8);
+  border: 2px solid var(--sg-line);
+  border-radius: var(--sg-r-sm);
+  /* 40px square-ish: the smallest target that survives a thumb on a phone. */
+  min-width: 42px;
+  min-height: 40px;
+  padding: 0.3em 0.8em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sglb__segBtn.is-on {
+  color: #06101c;
+  background: var(--sg-cyan);
+  border-color: var(--sg-cyan);
+}
+
+.sglb__trackgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.sglb__track {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 0.5em 0.7em;
+  min-height: 46px;
+  border-radius: var(--sg-r-sm);
+  border: 2px solid var(--sg-line);
+  background: rgba(16, 26, 46, 0.8);
+  color: var(--sg-ink);
+  font-family: var(--sg-ui);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sglb__track.is-on {
+  border-color: var(--sg-cyan);
+  background: rgba(34, 211, 255, 0.14);
+}
+
+.sglb__trackName {
+  font-size: clamp(11px, 1.45vmin, 14px);
+  font-weight: 600;
+}
+
+.sglb__trackLaps {
+  font-size: clamp(9px, 1.15vmin, 11px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+/* --------------------------------------------------------------------------
+   Room
+   -------------------------------------------------------------------------- */
+
+.sglbr__top {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sglbr__name {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(16px, 2.8vmin, 30px);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sg-ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sglbr__chips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.sglb__chip {
+  font-size: clamp(9px, 1.15vmin, 11px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sg-dim);
+  border: 2px solid var(--sg-line);
+  border-radius: 999px;
+  padding: 0.2em 0.7em;
+}
+
+.sglb__chip[data-access='private'] {
+  color: var(--sg-violet);
+  border-color: rgba(180, 77, 255, 0.55);
+}
+
+.sglbr__codewrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid rgba(255, 210, 63, 0.55);
+  border-radius: 999px;
+  padding: 0.14em 0.3em 0.14em 0.7em;
+  background: rgba(255, 210, 63, 0.1);
+}
+
+.sglbr__codeK {
+  font-size: clamp(8px, 1.05vmin, 10px);
+  letter-spacing: 0.18em;
+  color: var(--sg-mute);
+}
+
+.sglbr__code {
+  font-family: var(--sg-num);
+  font-size: clamp(13px, 1.9vmin, 18px);
+  letter-spacing: 0.26em;
+  color: var(--sg-gold);
+}
+
+.sglbr__copy {
+  font-family: var(--sg-ui);
+  font-size: clamp(9px, 1.2vmin, 11px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #06101c;
+  background: var(--sg-gold);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.3em 0.75em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sglbr__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 20rem);
+  gap: clamp(8px, 1.6vmin, 18px);
+}
+
+/*
+ * THE PANEL HEADS DO NOT SCROLL AWAY.
+ *
+ * `.sglbr__people` scrolled as one box in the first cut, which meant that on a
+ * 412px-tall phone the moment the member list scrolled to show the player's own
+ * row -- which it does deliberately, see scrollMembersToMe -- "ON THE GRID" and
+ * the 7/8 count went off the top with it. The panel is a column with a fixed
+ * head and a scrolling body instead, so the count is always readable.
+ */
+.sglbr__people,
+.sglbr__side {
+  min-height: 0;
+  padding: clamp(8px, 1.5vmin, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sglbr__people {
+  overflow: hidden;
+}
+
+.sglbr__side {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sglbr__panelhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sglbr__panelTitle {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(12px, 1.8vmin, 18px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sg-cyan);
+}
+
+.sglbr__count {
+  font-family: var(--sg-num);
+  font-size: clamp(12px, 1.7vmin, 16px);
+  color: var(--sg-dim);
+}
+
+.sglbr__members {
+  /* positioned, so a member row's offsetTop is measured against THIS box --
+     which is what scrollMembersToMe does the arithmetic in. */
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sglbr__member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.15fr) 5.2rem 6rem auto;
+  align-items: center;
+  gap: clamp(5px, 1vmin, 12px);
+  min-height: 46px;
+  padding: 4px clamp(5px, 1vmin, 10px);
+  border-radius: var(--sg-r-sm);
+  border: 2px solid transparent;
+  border-left: 3px solid transparent;
+  background: rgba(13, 21, 38, 0.6);
+}
+
+.sglbr__member.is-me {
+  background: rgba(34, 211, 255, 0.1);
+  border-left-color: var(--sg-cyan);
+}
+
+.sglb__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: block;
+  flex: none;
+  border: 2px solid var(--accent, var(--sg-line));
+  background: var(--sg-void);
+}
+
+.sglb__avatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.sglbr__mname {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.sglbr__who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(12px, 1.6vmin, 15px);
+  color: var(--sg-ink);
+}
+
+.sglbr__tag {
+  flex: none;
+  font-size: clamp(8px, 1.05vmin, 10px);
+  letter-spacing: 0.14em;
+  border-radius: 999px;
+  padding: 0.12em 0.5em;
+  border: 1px solid currentColor;
+}
+
+.sglbr__tag--host { color: var(--sg-gold); }
+
+.sglbr__mcar {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(10px, 1.35vmin, 12px);
+  color: var(--sg-dim);
+}
+
+.sglbr__mping {
+  font-family: var(--sg-num);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(10px, 1.35vmin, 13px);
+  color: var(--sg-dim);
+}
+
+.sglbr__mping[data-band='good'] { color: var(--sg-green); }
+.sglbr__mping[data-band='ok'] { color: var(--sg-gold); }
+.sglbr__mping[data-band='poor'] { color: var(--sg-orange); }
+.sglbr__mping[data-band='unknown'] { color: var(--sg-mute); }
+
+/*
+ * READY IS A WORD, not a green dot.
+ *
+ * The results screen made this argument for the "YOU" chip and it holds here:
+ * a dot survives neither greyscale, nor colour blindness, nor a photograph of a
+ * phone in daylight, and it is not readable by a screen reader at all. The
+ * colour is the fast channel; the word is the one that is always right.
+ */
+.sglbr__mstate {
+  font-size: clamp(9px, 1.2vmin, 11px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sglbr__mstate[data-state='ready'] { color: var(--sg-green); }
+.sglbr__mstate[data-state='unready'] { color: var(--sg-mute); }
+.sglbr__mstate[data-state='connecting'] { color: var(--sg-orange); }
+
+.sglbr__kick {
+  font-family: var(--sg-ui);
+  font-size: clamp(9px, 1.2vmin, 11px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sg-red);
+  background: transparent;
+  border: 2px solid rgba(255, 59, 94, 0.45);
+  border-radius: 999px;
+  padding: 0.3em 0.7em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sglbr__kick:hover {
+  background: rgba(255, 59, 94, 0.16);
+}
+
+.sglbr__alone {
+  font-size: clamp(10px, 1.35vmin, 12px);
+  line-height: 1.4;
+  color: var(--sg-mute);
+  border-top: 1px solid rgba(122, 190, 255, 0.14);
+  padding-top: 6px;
+  margin-top: auto;
+}
+
+.sglbr__trackName {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(14px, 2.2vmin, 24px);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sg-ink);
+}
+
+.sglbr__trackWorld {
+  font-size: clamp(10px, 1.3vmin, 12px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+.sglbr__trackHook {
+  font-size: clamp(11px, 1.5vmin, 14px);
+  line-height: 1.3;
+  color: var(--sg-cyan);
+}
+
+.sglbr__trackNote {
+  font-size: clamp(10px, 1.3vmin, 12px);
+  line-height: 1.45;
+  color: var(--sg-dim);
+  border-top: 1px solid rgba(122, 190, 255, 0.14);
+  padding-top: 6px;
+}
+
+/* On a landscape phone the briefing is the only thing with a right to be cut:
+   six lines still say what the circuit is, and the host controls underneath it
+   are what the screen is for. */
+@media (max-height: 560px) {
+  .sglbr__trackNote {
+    display: -webkit-box;
+    -webkit-line-clamp: 6;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+.sglbr__tracklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 4px;
+}
+
+.sglbr__trackBtn {
+  font-family: var(--sg-ui);
+  font-size: clamp(10px, 1.3vmin, 12px);
+  color: var(--sg-dim);
+  background: rgba(16, 26, 46, 0.8);
+  border: 2px solid var(--sg-line);
+  border-radius: var(--sg-r-sm);
+  min-height: 36px;
+  padding: 0.3em 0.4em;
+  cursor: pointer;
+  touch-action: manipulation;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sglbr__trackBtn.is-on {
+  color: #06101c;
+  background: var(--sg-cyan);
+  border-color: var(--sg-cyan);
+}
+
+/*
+ * WHY START IS UNAVAILABLE, BESIDE THE BUTTON THAT IS UNAVAILABLE.
+ *
+ * The sentence is `aria-describedby` the button, so a screen reader reads the
+ * reason along with the disabled state rather than announcing a dead control.
+ */
+.sglbr__why {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: clamp(10px, 1.4vmin, 13px);
+  line-height: 1.35;
+  color: var(--sg-orange);
+  text-align: right;
+}
+
+.sglbr__why[data-blocked='no'] {
+  color: var(--sg-green);
+}
+
+.sglb__foot .sg-btn[disabled] {
+  filter: saturate(0.25) brightness(0.72);
+  cursor: not-allowed;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  transform: none;
+}
+
+/* ==========================================================================
+   PHONES
+
+   412x915 portrait is the case a lobby table gets wrong, so it is the one the
+   layout is designed around rather than patched for: the eight-column grid
+   becomes a two-line card, the column header goes away (it labels columns that
+   no longer exist), and every control keeps a 40px+ target.
+
+   915x412 landscape keeps the columns -- there is width for them -- and gives
+   back vertical space instead.
+   ========================================================================== */
+
+@media (max-width: 860px) and (orientation: portrait) {
+  .sglb__colhead {
+    display: none;
+  }
+
+  /*
+   * The row becomes a 2x3 card. It is STILL a fixed height: 58px here instead
+   * of 44, and still identical for every state, because the whole pin argument
+   * depends on a row's box never changing.
+   */
+  .sglb__row {
+    height: 58px;
+    grid-template-columns: minmax(0, 1fr) 5.2em 4.4em 5.2em;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "name name   players status"
+      "host region ping    access";
+    align-content: center;
+    gap: 1px clamp(4px, 1.4vw, 10px);
+    padding: 0 12px;
+  }
+
+  .sglb__col--name { grid-area: name; font-size: 14px; }
+  .sglb__col--host { grid-area: host; font-size: 11px; }
+  .sglb__col--region { grid-area: region; font-size: 11px; }
+  .sglb__col--ping { grid-area: ping; font-size: 11px; text-align: right; }
+  .sglb__col--players { grid-area: players; font-size: 12px; text-align: right; }
+  .sglb__col--access { grid-area: access; font-size: 10px; text-align: right; }
+  .sglb__col--status { grid-area: status; font-size: 10px; text-align: right; }
+
+  /* THE CIRCUIT IS THE ONE COLUMN THAT GOES.
+     Six facts fit on a phone card and eight do not, and the circuit is the one
+     the player re-reads in the room anyway -- where it is the largest thing on
+     the screen. The row's aria-label still carries it, so nothing is lost to a
+     screen reader, and the join bar names it before you commit. */
+  .sglb__col--track { display: none; }
+
+  .sglb__bar {
+    gap: 6px;
+  }
+
+  .sglb__search { flex: 1 1 100%; }
+  .sglb__select { flex: 1 1 8rem; }
+
+  .sglbr__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
+  }
+
+  /*
+   * THE MEMBER ROW GOES TO TWO LINES AT 412px.
+   *
+   * On one line the name column was whatever survived after a fixed ping
+   * column, a fixed state column, a Kick button and -- on your own row -- the
+   * HOST and YOU chips, which is about forty pixels: "Racer 6692" arrived as
+   * "Racer ...". The name is the whole point of the row, so it gets the width
+   * and the two numbers drop underneath it. The car goes for the same reason it
+   * goes from the directory row: the loadout is a detail and the ready state is
+   * the thing everybody is waiting on.
+   */
+  .sglbr__member {
+    grid-template-columns: auto minmax(0, 1fr) 5.2rem auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "avatar name name  kick"
+      "avatar ping state kick";
+    align-content: center;
+    row-gap: 1px;
+    min-height: 52px;
+  }
+
+  .sglb__avatar { grid-area: avatar; }
+  .sglbr__mname { grid-area: name; }
+  .sglbr__mping { grid-area: ping; }
+  .sglbr__mstate { grid-area: state; text-align: right; }
+  .sglbr__kick { grid-area: kick; }
+
+  .sglbr__mcar { display: none; }
+
+  /* The join bar's sentence gets its own line, so the two buttons can sit on
+     one and stop looking like two unrelated controls that happened to wrap. */
+  .sglb__footText,
+  .sglb__msg {
+    flex: 1 1 100%;
+  }
+
+  .sglb__foot {
+    justify-content: flex-end;
+  }
+
+  .sglbr__foot {
+    flex-wrap: wrap;
+  }
+
+  .sglbr__why {
+    flex: 1 1 100%;
+    text-align: left;
+    order: -1;
+  }
+
+  /* Ready and Start share the row evenly. At this width neither fits beside the
+     other at the desk size, and shrinking them is better than stacking them:
+     stacked, the disabled one reads as the primary because it is on the bottom
+     where a thumb sits. */
+  .sglbr__ready,
+  .sglbr__start {
+    flex: 1 1 0;
+    font-size: clamp(14px, 4.2vw, 20px);
+    padding: 0.5em 0.6em;
+  }
+
+  /*
+   * THE CIRCUIT'S PROSE GOES. Six lines of briefing is the right amount on a
+   * 1440px desk where it fills a column that is otherwise host-only controls,
+   * and the wrong amount on a phone where it pushes the thing the player came
+   * for -- who is here and are they ready -- off the top. The name, the world,
+   * the laps, the difficulty and the one-line hook stay.
+   */
+  .sglbr__trackNote {
+    display: none;
+  }
+}
+
+/* Landscape phone: the columns survive, the vertical padding does not. */
+@media (max-height: 520px) {
+  .sglb {
+    gap: 5px;
+  }
+
+  .sglb__row {
+    height: 38px;
+  }
+
+  .sglb__colhead {
+    height: 24px;
+  }
+
+  .sglb__hint {
+    display: none;
+  }
+
+  .sglb__foot,
+  .sglbr__foot {
+    min-height: 42px;
+  }
+
+  .sglbr__member {
+    min-height: 38px;
+  }
+
+  .sglb__avatar {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/*
+ * A SMALL phone in landscape is narrow in the way that matters for the room:
+ * two panels side by side at 915px is comfortable, at 667 it is not.
+ *
+ * They STACK rather than one of them going away. The side panel is where the
+ * host changes the circuit, and a host who cannot reach that control on the
+ * device they are holding does not have a lobby, they have a spectator seat.
+ */
+@media (max-width: 720px) and (orientation: landscape) {
+  .sglbr__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: min-content;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sglbr__people,
+  .sglbr__side {
+    overflow: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sglb__spin {
+    animation-duration: 2.4s;
+  }
+
+  .sglb__row {
+    transition: none;
+  }
+}

@@ -1,0 +1,526 @@
+/* ==========================================================================
+   SpaceGen Racing — Profile + avatar picker
+
+   Companion sheet to styles.css, on the same terms settings.css took: every
+   colour, radius, shadow and font here is a --sg- token defined there. No new
+   palette, no @import, no external asset.
+
+   Prefix: .sgpf- so it cannot collide with .sg-fe / .sg-hud / .sgset / .sglb.
+   ========================================================================== */
+
+/* Which screen is up. See the note on the same rule in lobby.css. */
+.sg-fe[data-screen='profile'] .sg-screen--profile {
+  display: flex;
+}
+
+.sgpf {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: clamp(8px, 1.6vmin, 18px);
+  font-family: var(--sg-ui);
+}
+
+/* --------------------------------------------------------------------------
+   Body — two columns on a desk, one on a phone. The scroll lives INSIDE each
+   panel rather than on the screen, so the head never leaves.
+   -------------------------------------------------------------------------- */
+
+.sgpf__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 24rem) minmax(0, 1fr);
+  gap: clamp(8px, 1.6vmin, 20px);
+}
+
+.sgpf__me,
+.sgpf__pick {
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: clamp(10px, 1.8vmin, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.1vmin, 12px);
+}
+
+/* --------------------------------------------------------------------------
+   Identity
+   -------------------------------------------------------------------------- */
+
+.sgpf__face {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1.8vmin, 18px);
+}
+
+.sgpf__portrait {
+  flex: none;
+  width: clamp(64px, 12vmin, 104px);
+  height: clamp(64px, 12vmin, 104px);
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--sg-panel-solid);
+  border: 3px solid var(--accent, var(--sg-line));
+  box-shadow: 0 0 0 3px rgba(5, 7, 15, 0.9), 0 0 22px rgba(34, 211, 255, 0.18);
+}
+
+.sgpf__art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.sgpf__facetext {
+  min-width: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+}
+
+.sgpf__wearingK {
+  font-size: clamp(9px, 1.15vmin, 11px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+.sgpf__wearing {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(15px, 2.4vmin, 26px);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sg-ink);
+  line-height: 1.1;
+}
+
+.sgpf__k {
+  font-size: clamp(9px, 1.15vmin, 11px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+  margin-top: clamp(2px, 0.8vmin, 8px);
+}
+
+.sgpf__namerow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.sgpf__in {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--sg-num);
+  font-size: clamp(13px, 1.9vmin, 17px);
+  letter-spacing: 0.04em;
+  color: var(--sg-ink);
+  background: rgba(5, 9, 18, 0.9);
+  border: 2px solid var(--sg-line);
+  border-radius: var(--sg-r-sm);
+  padding: 0.5em 0.7em;
+  /* 44px is the smallest target that survives a thumb; the clamp above can go
+     under it on a short viewport, so the floor is stated separately. */
+  min-height: 42px;
+}
+
+.sgpf__in:focus {
+  outline: none;
+  border-color: var(--sg-line-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 255, 0.2);
+}
+
+.sgpf__in:disabled {
+  color: var(--sg-mute);
+  border-color: rgba(122, 190, 255, 0.14);
+}
+
+/* A Claim button that cannot claim should not look like it is about to. */
+.sgpf__namerow .sg-btn[disabled] {
+  filter: saturate(0.2) brightness(0.7);
+  cursor: not-allowed;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45);
+  transform: none;
+}
+
+/* --------------------------------------------------------------------------
+   Messages. One element, three moods, and the mood is a data attribute so the
+   text is the only thing that changes -- the row never grows or shrinks under
+   a click, which is what makes the picker safe to press twice.
+   -------------------------------------------------------------------------- */
+
+.sgpf__msg {
+  font-size: clamp(11px, 1.4vmin, 13px);
+  line-height: 1.35;
+  min-height: 1.35em;
+  color: var(--sg-dim);
+}
+
+.sgpf__msg[data-kind='ok'] { color: var(--sg-green); }
+.sgpf__msg[data-kind='bad'] { color: var(--sg-red); }
+.sgpf__msg[data-kind='wait'] { color: var(--sg-dim); }
+
+.sgpf__msg--pick {
+  padding-bottom: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   The two banners. Different colours AND different words AND different
+   headings, because they are different facts -- see profile.ts's header.
+   -------------------------------------------------------------------------- */
+
+.sgpf__flag {
+  font-size: clamp(11px, 1.4vmin, 13px);
+  line-height: 1.4;
+  border-radius: var(--sg-r-sm);
+  border: 2px solid var(--sg-line);
+  padding: 0.6em 0.75em;
+  color: var(--sg-dim);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+}
+
+.sgpf__flag b {
+  color: var(--sg-ink);
+  letter-spacing: 0.04em;
+}
+
+.sgpf__flag--offline {
+  border-color: rgba(255, 139, 47, 0.55);
+  background: rgba(255, 139, 47, 0.1);
+}
+
+.sgpf__flag--offline b { color: var(--sg-orange); }
+
+.sgpf__flag--ephemeral {
+  border-color: rgba(180, 77, 255, 0.5);
+  background: rgba(180, 77, 255, 0.1);
+}
+
+.sgpf__flag--ephemeral b { color: var(--sg-violet); }
+
+/* --------------------------------------------------------------------------
+   Wallet
+   -------------------------------------------------------------------------- */
+
+.sgpf__wallet {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: clamp(2px, 0.8vmin, 8px);
+}
+
+.sgpf__stat {
+  border-radius: var(--sg-r-sm);
+  border: 2px solid var(--sg-line);
+  background: rgba(8, 13, 26, 0.7);
+  padding: 0.45em 0.3em;
+  text-align: center;
+  min-width: 0;
+}
+
+.sgpf__statK {
+  font-size: clamp(8px, 1.05vmin, 10px);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+.sgpf__statV {
+  font-family: var(--sg-num);
+  font-size: clamp(13px, 1.9vmin, 19px);
+  color: var(--sg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sgpf__stat--credits {
+  border-color: rgba(255, 210, 63, 0.5);
+}
+
+.sgpf__stat--credits .sgpf__statV {
+  color: var(--sg-gold);
+}
+
+.sgpf__note {
+  font-size: clamp(10px, 1.25vmin, 12px);
+  line-height: 1.4;
+  color: var(--sg-mute);
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Picker
+   -------------------------------------------------------------------------- */
+
+.sgpf__pickhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sgpf__pickTitle {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: clamp(13px, 2vmin, 22px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sg-cyan);
+}
+
+.sgpf__pickCount {
+  font-size: clamp(10px, 1.3vmin, 12px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sg-mute);
+}
+
+/*
+ * auto-fill rather than a fixed count: the grid is the same code at 1440 and at
+ * 412, and the tile keeps a legible size at both instead of being squeezed into
+ * six columns on a phone.
+ */
+.sgpf__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: clamp(6px, 1vmin, 12px);
+  align-content: start;
+}
+
+.sgpf__tile {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  justify-items: center;
+  gap: 3px;
+  padding: 10px 6px 8px;
+  border-radius: var(--sg-r-md);
+  border: 2px solid var(--sg-line);
+  background: rgba(8, 13, 26, 0.72);
+  color: var(--sg-ink);
+  cursor: pointer;
+  font-family: var(--sg-ui);
+  text-align: center;
+  touch-action: manipulation;
+  transition: border-color 110ms ease, background 110ms ease, transform 110ms ease;
+}
+
+.sgpf__tile:hover {
+  border-color: var(--sg-line-hot);
+  background: rgba(18, 30, 54, 0.85);
+}
+
+.sgpf__tile:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+}
+
+.sgpf__tileArt {
+  width: clamp(44px, 6vmin, 62px);
+  height: clamp(44px, 6vmin, 62px);
+  border-radius: 50%;
+  overflow: hidden;
+  display: block;
+  border: 2px solid var(--accent, var(--sg-line));
+  background: var(--sg-void);
+}
+
+.sgpf__tileName {
+  font-size: clamp(10px, 1.2vmin, 12px);
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  color: var(--sg-ink);
+}
+
+.sgpf__tileTag {
+  font-family: var(--sg-num);
+  font-size: clamp(9px, 1.1vmin, 11px);
+  letter-spacing: 0.1em;
+  color: var(--sg-mute);
+}
+
+.sgpf__tileReq {
+  font-size: clamp(9px, 1.1vmin, 11px);
+  line-height: 1.25;
+  color: var(--sg-mute);
+  /* Two lines, then ellipsis. A requirement that pushes one tile taller than
+     its neighbours makes the whole grid ragged, and the full sentence is put
+     on the message line when the tile is pressed anyway. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.5em;
+}
+
+.sgpf__tileBar {
+  width: 78%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(122, 190, 255, 0.16);
+  overflow: hidden;
+}
+
+.sgpf__tileFill {
+  display: block;
+  height: 100%;
+  width: calc(var(--v, 0) * 100%);
+  background: var(--accent, var(--sg-cyan));
+  border-radius: 999px;
+}
+
+/* --- the three states --------------------------------------------------- */
+
+.sgpf__tile[data-status='owned'] {
+  border-color: rgba(47, 227, 107, 0.4);
+}
+
+.sgpf__tile[data-status='owned'] .sgpf__tileTag {
+  color: var(--sg-green);
+}
+
+.sgpf__tile[data-status='buyable'] {
+  border-color: rgba(255, 210, 63, 0.55);
+}
+
+.sgpf__tile[data-status='buyable'] .sgpf__tileTag {
+  color: var(--sg-gold);
+}
+
+/*
+ * LOCKED IS DIMMED, NOT HIDDEN AND NOT DISABLED.
+ *
+ * Hidden costs the shop its reason to exist (avatars.ts argues this at length).
+ * `disabled` would be worse than hidden: the front end's pad and arrow-key
+ * navigation only walks enabled buttons, so a disabled tile is one a keyboard
+ * or controller player cannot reach to READ -- and reading the requirement is
+ * the whole point of the tile being there.
+ */
+.sgpf__tile[data-status='locked'] {
+  opacity: 0.62;
+  border-color: rgba(122, 190, 255, 0.18);
+}
+
+.sgpf__tile[data-status='locked'] .sgpf__tileArt {
+  filter: grayscale(0.85);
+}
+
+.sgpf__tile.is-worn {
+  border-color: var(--sg-cyan);
+  background: rgba(34, 211, 255, 0.12);
+}
+
+.sgpf__tile.is-armed {
+  border-color: var(--sg-gold);
+  background: rgba(255, 210, 63, 0.16);
+  transform: translateY(-2px);
+}
+
+.sgpf__tile.is-armed .sgpf__tileTag {
+  color: var(--sg-gold);
+}
+
+/*
+ * The worn marker is a TICK as well as a ring, for the same reason the results
+ * row carries the word "YOU": a marker that is only a colour is a marker a
+ * colourblind player does not have.
+ */
+.sgpf__tick {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: none;
+  background: var(--sg-cyan);
+}
+
+.sgpf__tick::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  width: 5px;
+  height: 8px;
+  border: solid #06101c;
+  border-width: 0 2px 2px 0;
+  transform: rotate(42deg);
+}
+
+.sgpf__tile.is-worn .sgpf__tick {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   PHONES.
+
+   Portrait: one column, the identity card first, and the picker grid keeps its
+   auto-fill so it lands on three columns at 412px rather than being told to.
+
+   Landscape: the two columns come back -- a 915x412 phone has the width for
+   them and not the height for a stack -- and everything vertical gets tighter.
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 900px) and (orientation: portrait) {
+  .sgpf__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    /* The identity card sizes to its contents and the PICKER is the thing that
+       scrolls: on a phone the wallet and the name field are what the player
+       came for first, and a card that scrolls them off the top is a card they
+       have to hunt for. */
+    overflow: auto;
+  }
+
+  .sgpf__me {
+    overflow: visible;
+  }
+
+  .sgpf__wallet {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sgpf__grid {
+    grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+  }
+}
+
+@media (max-height: 520px) {
+  .sgpf {
+    gap: 6px;
+  }
+
+  .sgpf__portrait {
+    width: 56px;
+    height: 56px;
+  }
+
+  .sgpf__note {
+    display: none;
+  }
+
+  .sgpf__tileReq {
+    -webkit-line-clamp: 1;
+    min-height: 1.25em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sgpf__tile,
+  .sgpf__tile.is-armed {
+    transition: none;
+    transform: none;
+  }
+}

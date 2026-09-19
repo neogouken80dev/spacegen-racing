@@ -21,6 +21,7 @@
  * stats.
  */
 import type { ScoreStore } from './api'
+import { bankRun } from './wallet'
 
 /** The four things worth remembering per circuit. */
 export type RecordId = 'fastestLap' | 'fastestRace' | 'highestScore' | 'bestCombo'
@@ -192,6 +193,24 @@ class LocalRecordStore implements RecordStore {
   }
 
   async submit(run: RunRecord): Promise<RecordId[]> {
+    // CREDITS ARE BANKED HERE, AND NOWHERE ELSE, BECAUSE THIS IS THE ONE CALL
+    // EVERY FINISHED RACE ALREADY MAKES.
+    //
+    // `main.ts` submits a run to the records store unconditionally -- win,
+    // lose or DNF, named or not -- which is exactly the event a payout wants,
+    // and `RunRecord` already carries the three fields it needs (track, score,
+    // and a race time that is zero for a DNF). Putting the bank anywhere else
+    // means a second call site in `main.ts` that can be forgotten, or a
+    // currency that only pays out when the player happens to name a run.
+    //
+    // It is a call and not an await: a wallet that cannot save is not a reason
+    // for a record not to be filed, and nothing here reads the result.
+    //
+    // WHEN THIS STORE GOES SERVER-SIDE, THIS LINE COMES WITH IT -- or, better,
+    // the server recomputes the payout from the same run and `Wallet.adopt()`
+    // takes the answer. `wallet.ts` is written for that day; this line is the
+    // one that has to move on it.
+    bankRun(run)
     const prev = await this.get(run.trackId)
     const { next, broken } = applyRun(prev, run)
     if (broken.length === 0) return []

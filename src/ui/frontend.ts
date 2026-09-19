@@ -1,10 +1,26 @@
 /**
  * SpaceGen Racing — front end.
  *
- * Five screens: title, track, garage, results, paused. Nothing stands between
- * load and the first race: the title screen is a logo and one huge PLAY button,
- * and the two setup screens run in the order a player thinks in — pick the
- * planet, then pick the car to take to it.
+ * Nine screens: title, track, garage, results, paused, and the four
+ * multiplayer ones — the lobby browser, hosting a lobby, the room, and the
+ * player profile. Nothing stands between load and the first race: the title
+ * screen is a logo and one huge PLAY button, and the two setup screens run in
+ * the order a player thinks in — pick the planet, then pick the car to take to
+ * it.
+ *
+ * THE FOUR MULTIPLAYER SCREENS LIVE IN ui/lobby.ts AND ui/profile.ts, and this
+ * file owns only the containers they are dropped into and the rules for moving
+ * between them. That is the same split the settings overlay took: a screen with
+ * its own state machine and its own stylesheet does not belong inside the file
+ * that switches screens, or that file becomes the place every feature lands.
+ *
+ * NOTHING MULTIPLAYER STARTS AT BOOT. `net/index.ts` is explicit that creating
+ * a service attaches to the mock world and starts its clock, and that "nothing
+ * should begin because a module was named". So the lobby screens build their
+ * DOM in the constructor and reach for a service only when one of them is
+ * actually shown, and the profile loads on its first entry rather than on the
+ * title screen — a player who never presses Multiplayer never starts a
+ * directory ticking.
  *
  * Unlike the HUD this is not on the frame budget, but every node is still
  * built once and reused so a rematch never leaks DOM. The one exception is the
@@ -32,9 +48,21 @@ import {
   CIRCUIT_ROUNDS, isComplete, pointsFor, roundsDone, standings, trackIdForRound,
   type CircuitState,
 } from '../game/circuit'
+import { createLobbyScreens, type LobbyScreenId, type LobbyScreens } from './lobby'
+import { createProfileScreen, type ProfileScreen } from './profile'
+import type { PlayerProfile, RaceStartPacket } from '../net/types'
 
 export type QualityTier = 'low' | 'medium' | 'high'
-export type ScreenId = 'title' | 'track' | 'garage' | 'results' | 'paused'
+/**
+ * Every screen this front end can be showing.
+ *
+ * The four multiplayer ids are spelled as they are because `show()` is what the
+ * host calls and a host reading `show('lobbyNew')` should not have to guess
+ * whether that is the browser or the create form.
+ */
+export type ScreenId =
+  | 'title' | 'track' | 'garage' | 'results' | 'paused'
+  | 'lobby' | 'lobbyNew' | 'room' | 'profile'
 
 export interface StartSelection {
   trackId: string
@@ -116,6 +144,30 @@ export interface FrontEnd {
   setCircuit(status: CircuitStatus | null): void
   /** The player named a qualifying run. */
   onSaveScore: (name: string) => void
+  /**
+   * A multiplayer race is starting.
+   *
+   * Fires for EVERY client, the host included, from `LobbyService.onStart` --
+   * which is why the host's own press of Start does not also fire it. The
+   * contract says the host receives the packet through both the return value
+   * and the push and asks the reader to be idempotent; the simplest way to be
+   * idempotent is to listen to one of them, and the push is the one every
+   * client shares.
+   *
+   * The packet carries the seed, the ordered grid, `localPlayerId` and the
+   * lockstep input delay -- everything `Race` needs and nothing it does not.
+   * See `RaceStartPacket` in net/types.ts.
+   */
+  onMultiplayerStart: (packet: RaceStartPacket) => void
+  /**
+   * The player's account, whenever it changes.
+   *
+   * Wired so the host can put a claimed name and a chosen avatar on the local
+   * car's nameplate without reaching into `net/` itself. Fires on the first
+   * load and on every change after it -- and NEVER before the player has opened
+   * a multiplayer screen, because nothing loads an account until they do.
+   */
+  onProfileChange: (profile: PlayerProfile) => void
   dispose(): void
 }
 
@@ -161,6 +213,18 @@ const LOCO_NOTE: Record<string, string> = {
 
 const QUALITIES: QualityTier[] = ['low', 'medium', 'high']
 const MAX_ROWS = 8
+
+/**
+ * The screens whose arrow keys walk the controls rather than doing nothing.
+ *
+ * All of them are screens whose main content is a LIST of buttons -- the track
+ * and chassis cards, the lobby rows, the twenty-four portraits. The results and
+ * pause screens are deliberately out: their arrow keys belong to the tab strip
+ * and to nothing, respectively.
+ */
+const ARROW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
+  'track', 'garage', 'lobby', 'lobbyNew', 'room', 'profile',
+])
 
 const LS_CHASSIS = 'sg.chassis'
 const LS_PILOT = 'sg.pilot'
@@ -538,6 +602,8 @@ class FrontEndImpl implements FrontEnd {
   onScreen: (screen: ScreenId | null) => void = () => {}
   onCircuitNew: () => void = () => {}
   onCircuitResume: () => void = () => {}
+  onMultiplayerStart: (packet: RaceStartPacket) => void = () => {}
+  onProfileChange: (profile: PlayerProfile) => void = () => {}
 
   private screen: ScreenId = 'title'
 
@@ -635,6 +701,12 @@ class FrontEndImpl implements FrontEnd {
   /** "Discard standings?" state on the New-circuit button. */
   private discardArmed = 0
 
+  // --- multiplayer --------------------------------------------------------
+  private readonly lobby: LobbyScreens
+  private readonly profile: ProfileScreen
+  private readonly multiBtn: HTMLButtonElement
+  private readonly multiLine: HTMLElement
+
   private readonly playBtn: HTMLButtonElement
   private readonly toGarageBtn: HTMLButtonElement
   private readonly startBtn: HTMLButtonElement
@@ -642,6 +714,9 @@ class FrontEndImpl implements FrontEnd {
   private readonly resumeBtn: HTMLButtonElement
 
   private readonly screens: Record<ScreenId, HTMLElement>
+
+  /** Where the profile screen's Back button goes. See its `onBack`. */
+  private profileFrom: ScreenId = 'title'
 
   private readonly onKey: (e: KeyboardEvent) => void
 
@@ -696,6 +771,23 @@ class FrontEndImpl implements FrontEnd {
     this.circuitLine = el('div', 'sg-title__cline', cirBlock, '')
     this.circuitNewBtn = button('sg-btn sg-btn--ghost sg-btn--small', cirBlock, 'New circuit')
     this.circuitNewBtn.hidden = true
+    // MULTIPLAYER IS A THIRD MODE AND IT GETS THE SAME SHAPE AS THE SECOND.
+    //
+    // One wide button, one state line under it, one quiet ghost button beside
+    // it -- exactly the block the Grand Circuit already occupies. Copying the
+    // shape rather than inventing one is what stops this reading as bolted on:
+    // the title screen now has PLAY, and below it two modes that look like each
+    // other and not like PLAY.
+    //
+    // The state line is deliberately STATIC until a profile exists. Reading the
+    // player's name here would mean loading an account on the title screen, and
+    // an account load is what starts the mock world's clock -- for every player,
+    // including the ones who only ever press PLAY. See the file header.
+    const mpBlock = el('div', 'sg-title__multi', title)
+    this.multiBtn = button('sg-btn sg-btn--violet sg-btn--wide', mpBlock, 'Multiplayer')
+    this.multiLine = el('div', 'sg-title__cline', mpBlock,
+      'Up to 8 players · you host, everyone connects to you')
+    const titleProfileBtn = button('sg-btn sg-btn--ghost sg-btn--small', mpBlock, 'Profile')
     el('div', 'sg-hint', title, 'Enter or Space to launch')
 
     // =====================================================================
@@ -1032,14 +1124,64 @@ class FrontEndImpl implements FrontEnd {
     const pauseTrack = button('sg-btn sg-btn--ghost', stack, 'Change Track')
     const quitBtn = button('sg-btn sg-btn--ghost', stack, 'Back to Garage')
 
+    // =====================================================================
+    // MULTIPLAYER — four containers, two modules
+    //
+    // The screens are built here and filled by ui/lobby.ts and ui/profile.ts.
+    // This file gives them a `.sg-screen` to live in (so the existing
+    // data-screen switch, the safe-area padding and the arrow-key focus walk
+    // all apply to them unchanged) and nothing else.
+    // =====================================================================
+    const lobbyScr = el('div', 'sg-screen sg-screen--lobby', root)
+    const lobbyNewScr = el('div', 'sg-screen sg-screen--lobbyNew', root)
+    const roomScr = el('div', 'sg-screen sg-screen--room', root)
+    const profileScr = el('div', 'sg-screen sg-screen--profile', root)
+
+    this.lobby = createLobbyScreens({
+      onBack: () => this.show('title'),
+      onProfile: () => this.show('profile'),
+      goto: (which: LobbyScreenId) => {
+        this.show(which === 'browser' ? 'lobby' : which === 'create' ? 'lobbyNew' : 'room')
+      },
+      onStart: (packet) => this.onMultiplayerStart(packet),
+      // The garage's choice travels into the lobby rather than being asked for
+      // a second time. A player who picked a car three screens ago has already
+      // answered this question.
+      loadout: () => ({ chassisId: this.chassisId, pilotId: this.pilotId }),
+      playerName: () => this.profile.profile?.name ?? 'Racer',
+      playerId: () => this.profile.profile?.id ?? '',
+    })
+    lobbyScr.appendChild(this.lobby.browser)
+    lobbyNewScr.appendChild(this.lobby.create)
+    roomScr.appendChild(this.lobby.room)
+
+    this.profile = createProfileScreen({
+      // BACK GOES WHERE YOU CAME FROM, and the two ways in are the title screen
+      // and the lobby browser. Remembered rather than guessed: a player who
+      // opened the profile from a lobby list and is returned to the title has
+      // lost the lobby they were looking at.
+      onBack: () => this.show(this.profileFrom),
+    })
+    profileScr.appendChild(this.profile.root)
+    this.profile.onProfile = (p) => {
+      // The title screen's multiplayer line picks up the claimed name the
+      // moment there is one -- which is after the first visit, not at boot.
+      this.multiLine.textContent =
+        `Playing as ${p.name} · up to 8 players · you host, everyone connects to you`
+      this.onProfileChange(p)
+    }
+
     this.screens = {
       title, track: trackScr, garage, results, paused,
+      lobby: lobbyScr, lobbyNew: lobbyNewScr, room: roomScr, profile: profileScr,
     }
 
     // =====================================================================
     // Wiring
     // =====================================================================
     this.playBtn.addEventListener('click', () => this.show('track'))
+    this.multiBtn.addEventListener('click', () => this.show('lobby'))
+    titleProfileBtn.addEventListener('click', () => this.show('profile'))
     tBack.addEventListener('click', () => this.show('title'))
     this.toGarageBtn.addEventListener('click', () => this.show('garage'))
     // Back out of the garage to the track list, not to the title: the two setup
@@ -1120,18 +1262,23 @@ class FrontEndImpl implements FrontEnd {
     this.onKey = (e: KeyboardEvent) => {
       if (this.root.classList.contains('is-hidden')) return
       if (e.key === 'Escape') {
-        if (this.screen === 'garage') {
+        const back = this.escapeTarget()
+        if (back) {
           e.preventDefault()
-          this.show('track')
-        } else if (this.screen === 'track') {
-          e.preventDefault()
-          this.show('title')
+          this.show(back)
         }
         return
       }
+      // A caret beats a menu. Arrows inside a text field move the caret and
+      // inside a <select> change the value, and the focus walk below would do
+      // BOTH -- which is how a region dropdown ends up changing region and
+      // jumping the focus out of itself on one keypress.
+      const from = e.target
+      if (from instanceof HTMLInputElement || from instanceof HTMLSelectElement
+        || from instanceof HTMLTextAreaElement) return
       // Arrow keys walk the list a keyboard player is standing in. Tab still
       // does what Tab has always done; this is the shortcut, not the mechanism.
-      if (this.screen !== 'track' && this.screen !== 'garage') return
+      if (!ARROW_SCREENS.has(this.screen)) return
       const dir = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1
         : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0
       if (dir === 0) return
@@ -1174,20 +1321,59 @@ class FrontEndImpl implements FrontEnd {
     // down, so no second context is ever alive while the game is rendering.
     if (screen === 'garage') this.preview.show()
     else this.preview.hide()
+    // Only two screens reach the profile, and Back has to walk the way in.
+    if (screen === 'title' || screen === 'lobby') this.profileFrom = screen
+    // The multiplayer screens own a poll and a request, so they are told before
+    // the host is -- and they are allowed to redirect: entering the room with
+    // no room sends us straight back to the browser, and when that happens the
+    // nested show() has already done everything below and this one must not do
+    // it again for a screen that is no longer up.
+    if (!this.syncMultiplayer(screen)) return
     this.onScreen(screen)
     // Focus the primary action so Enter / Space always does the obvious thing.
+    // The multiplayer screens do not have one: a lobby browser's primary action
+    // is "choose a row", which is not a button until a row is chosen, so they
+    // take the first control on the screen and let the arrows walk from there.
     const target =
       screen === 'title' ? this.playBtn
         : screen === 'track' ? this.toGarageBtn
           : screen === 'garage' ? this.startBtn
             : screen === 'results' ? this.rematchBtn
-              : this.resumeBtn
-    try {
-      target.focus({ preventScroll: true })
-    } catch {
-      target.focus()
+              : screen === 'paused' ? this.resumeBtn
+                : this.focusables()[0] ?? null
+    if (target) {
+      try {
+        target.focus({ preventScroll: true })
+      } catch {
+        target.focus()
+      }
     }
     this.padStart()
+  }
+
+  /**
+   * Start and stop the two multiplayer modules for this screen.
+   *
+   * @returns false when entering the screen redirected us somewhere else, so
+   *          the caller knows its own show() has been superseded.
+   */
+  private syncMultiplayer(screen: ScreenId): boolean {
+    if (screen === 'profile') this.profile.enter()
+    else this.profile.exit()
+    const which: LobbyScreenId | null =
+      screen === 'lobby' ? 'browser'
+        : screen === 'lobbyNew' ? 'create'
+          : screen === 'room' ? 'room' : null
+    if (!which) {
+      this.lobby.exit()
+      return true
+    }
+    // The profile is what gives the lobby a name and an id to mark your own
+    // rows with, so it is loaded on the way into multiplayer rather than being
+    // waited for. Idempotent: it only loads once.
+    this.profile.prime()
+    this.lobby.enter(which)
+    return this.screen === screen
   }
 
   hide(): void {
@@ -1693,6 +1879,8 @@ class FrontEndImpl implements FrontEnd {
     if (this.discardArmed) { window.clearTimeout(this.discardArmed); this.discardArmed = 0 }
     if (this.rowsInTimer) { window.clearTimeout(this.rowsInTimer); this.rowsInTimer = 0 }
     this.preview.dispose()
+    this.lobby.dispose()
+    this.profile.dispose()
     this.padStop()
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root)
   }
@@ -2046,9 +2234,30 @@ class FrontEndImpl implements FrontEnd {
 
   /** B is Escape: the same one step back the keyboard takes. */
   private padBack(): void {
-    if (this.screen === 'garage') this.show('track')
-    else if (this.screen === 'track') this.show('title')
-    else if (this.screen === 'paused') this.onResume()
+    if (this.screen === 'paused') { this.onResume(); return }
+    const back = this.escapeTarget()
+    if (back) this.show(back)
+  }
+
+  /**
+   * One step back from wherever we are, or null for nowhere to go.
+   *
+   * THE ROOM STEPS BACK TO THE BROWSER WITHOUT LEAVING THE LOBBY. Backing out
+   * of a screen and leaving a lobby are different intentions, and conflating
+   * them means a mis-pressed Escape throws away a room the player was waiting
+   * in. Leaving has its own button, on the room's own head, and it is the only
+   * thing in the front end that calls `LobbyService.leave`.
+   */
+  private escapeTarget(): ScreenId | null {
+    switch (this.screen) {
+      case 'garage': return 'track'
+      case 'track': return 'title'
+      case 'lobby': return 'title'
+      case 'lobbyNew': return 'lobby'
+      case 'room': return 'lobby'
+      case 'profile': return this.profileFrom
+      default: return null
+    }
   }
 
   private fillControlHint(host: HTMLElement): void {
