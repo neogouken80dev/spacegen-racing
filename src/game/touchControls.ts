@@ -43,6 +43,8 @@ export interface TouchControls {
   /** Show the Lift pad (flight chassis only). */
   setLiftEnabled(on: boolean): void
   setTiltInvert(on: boolean): void
+  /** The player's steering preferences. Clamped to the two ranges below. */
+  setStickTune(tune: StickTune): void
   /** Capture the current holding angle as neutral. */
   calibrateTilt(): void
   /**
@@ -159,17 +161,108 @@ export function axisCurve(raw: number, deadzone: number): number {
  * (see CSS) so full lock and the rim are the same place and cannot drift
  * apart again.
  */
-export const STICK_RADIUS = 38
+export const STICK_RADIUS = 29
 /**
- * 0.08 of 38px is 3.0px, which is what 0.06 of 50px was. The rest shoulder is
- * deliberately unchanged IN ABSOLUTE TERMS: a thumb's jitter while it sits on
- * the glass is a distance, not a fraction, so shortening the travel without
- * moving this would have made a resting thumb steer the car.
+ * THE DOMAIN THE RESPONSE CURVE IS AUTHORED AGAINST, AND IT IS NOT THE RIM.
+ *
+ * `stickCurve` was fitted against a 38px travel, and every number in its own
+ * comment -- the 2.0x at 5px, the 1.5x at 25px, the measured table -- is a
+ * statement about THAT domain. Moving the rim to 29 does not move the curve:
+ * 29px is simply the place on the 38px curve where the lock reaches 0.80, and
+ * the well is drawn there so the player can see it.
+ *
+ * REFITTING THE CURVE INTO 29 AND SCALING THE RESULT BY 0.80 IS A DIFFERENT
+ * FUNCTION, and I shipped that by mistake for one edit. f is quadratic, so
+ * squeezing its domain by 0.7632 and shrinking its range by 0.80 do not
+ * cancel: measured, the refit was up to 0.0329 of lock off at 9.1px, about
+ * +15% of what the pad gave a player there. Keeping the span separate from
+ * the rim is what makes "the comfortable range did not move" true rather than
+ * merely claimed, and `tests/steering.test.ts` re-derives the old mapping from
+ * this constant and holds the difference at exactly zero -- not close, the
+ * same double, because it is the same arithmetic on the same domain.
  */
-const STICK_DEADZONE = 0.08
+export const STICK_CURVE_SPAN = 38
+/**
+ * THE REST SHOULDER, IN PIXELS, BECAUSE THAT IS WHAT IT IS.
+ *
+ * This was 0.08 of the radius, and it stayed correct exactly as long as the
+ * radius did not move. Then the radius moved -- 38 to 29 -- and the shoulder
+ * silently went to 2.32px, with the Pad size dial able to take it to 1.62px.
+ * The old constant's own comment forbade that in so many words: "a thumb's
+ * jitter while it sits on the glass is a distance, not a fraction". A fraction
+ * of something that can change is a distance waiting to be wrong, so it is
+ * now the distance it was always meant to be, and `throw` divides out of it in
+ * `restFraction` so a bigger pad does not buy a twitchier one.
+ *
+ * 3.04 is 0.08 x 38, which is what 0.06 x 50 was before that: the number has
+ * not moved since the stick was first tuned, only the units it is kept in.
+ */
+const STICK_REST_PX = 3.04
+/**
+ * The blend weight `stickCurve` adds `gain` to. See that function for what it
+ * means; it lives up here because STICK_RIM_LOCK below asks the curve for the
+ * rim during module init, and a `const` declared further down is in its
+ * temporal dead zone at that moment. `tsc` does not see it -- the call is
+ * indirect -- so the first thing that happened when I put it beside the
+ * function was a ReferenceError at import. Order is load-bearing here.
+ */
+const CURVE_BASE = 0.35
+/**
+ * THE RIM IS NOT FULL LOCK ANY MORE, AND THAT IS THE POINT OF THIS PASS.
+ *
+ * Vince, on a tablet: the pad slid along under his thumb once he passed the
+ * edge, and what he wanted instead was a fixed anchor with the region BEYOND
+ * the edge steering harder -- "really exaggerate their turning based on the
+ * aggressiveness of the steering".
+ *
+ * That needs somewhere for the extra to live, so the well now covers 0 to 0.80
+ * of lock and the last fifth lives in the overtravel band past the rim.
+ *
+ * THE COMFORTABLE RANGE DID NOT MOVE. 29 is not a shortening: it is where 0.80
+ * of lock ALREADY WAS at 38. Solving the curve for 0.80 gives n = 0.732, so
+ * a = 0.08 + 0.732*0.92 = 0.753, so 28.6px. Every thumb distance inside the
+ * well returns exactly the lock it returned before this change -- the rim
+ * simply moved inward to meet the number, and the well is drawn from the
+ * constant so the two cannot drift.
+ *
+ * WHAT THE PLAYER GAINS IS RESOLUTION AT THE LIMIT. 0.80 to 1.00 used to be
+ * 29-38px: nine pixels for the whole top fifth of the lock, which is why
+ * holding a tight corner meant parking a thumb in the twitchiest part of the
+ * stroke. It is now 18px -- twice the travel for the same fifth -- so 0.85,
+ * 0.90 and 0.95 are distinguishable places a thumb can sit rather than three
+ * pixels of the same one.
+ *
+ * You cannot have a long overtravel band AND a steeper one than the rim: the
+ * remaining lock is fixed, so distance and slope trade directly. This spends
+ * it on distance, because control of the last fifth is what a corner actually
+ * needs, and the "aggression" the player feels is the felt EDGE -- the knob
+ * pinning, the well straining -- rather than a sudden surge.
+ *
+ * DERIVED, NOT WRITTEN DOWN, and it is 0.8095 rather than 0.8000. STICK_RADIUS
+ * is the rounding of 28.6031 to a whole pixel, and a hand-typed 0.80 here
+ * would have been a second opinion about where the rim is -- the kind that
+ * drifts from the first one and is only found when a player says the pad feels
+ * wrong. Asking the curve is free and cannot drift.
+ *
+ * IT IS THE RIM AT gain 1, and gain reshapes the approach, so the rim sits
+ * between about 0.71 and 0.89 of lock across the dial. Anything that needs the
+ * rim AT A GIVEN TUNE must call `stickSteerFrom(STICK_RADIUS * tune.throw,
+ * tune)`; this constant answers for the default and for the drawn well.
+ */
+export const STICK_RIM_LOCK =
+  stickCurve(STICK_RADIUS / STICK_CURVE_SPAN, STICK_REST_PX / STICK_CURVE_SPAN, 1)
+/**
+ * Pixels past the rim that reach full lock. See STICK_RIM_LOCK for the trade.
+ *
+ * Past this the steering simply holds at 1.0: there is nothing above full lock
+ * and pretending otherwise would be a control that lies. The visuals keep
+ * responding for a little longer so a player leaning hard still gets an answer
+ * from the screen.
+ */
+export const STICK_OVERTRAVEL = 18
 
 /** Knob radius in CSS px. The well is drawn from this plus STICK_RADIUS. */
-const STICK_KNOB_R = 34
+export const STICK_KNOB_R = 34
 
 /**
  * THE TOUCH STICK'S OWN RESPONSE, and deliberately not `axisCurve`.
@@ -202,13 +295,44 @@ const STICK_KNOB_R = 34
  *   10px  0.138 -> 0.254  (x1.8)    30px  0.579 -> 0.828  (x1.4)
  *   15px  0.223 -> 0.383  (x1.7)    38px  0.799 -> 1.000  (full lock at 38)
  *   20px  0.354 -> 0.573  (x1.6)    50px  1.000 -> 1.000
+ *
+ * `gain` IS THE PLAYER'S DIAL, AND IT RESHAPES THE CURVE RATHER THAN SCALING
+ * ITS OUTPUT. The blend weight above is the whole of the curve's character, so
+ * the dial simply moves it: `c = CURVE_BASE + gain`, and the response is
+ * `c*n + (1-c)*n^2`, which is the shipped `1.35n - 0.35n^2` at gain 1.
+ *
+ * WHY NOT SCALE THE OUTPUT, which is the obvious thing and is what this
+ * function did for one edit: `out * gain` clamps, so a gain below 1 does not
+ * make the car calmer, it makes the car UNABLE TO TURN AS HARD. Measured
+ * against the roster, gain 0.6 put 12.9% of the curved steering bins out of
+ * reach and the tightest corner on the calendar needs 0.92 of lock -- a player
+ * who nudged a slider labelled "sensitivity" would have been quietly handed a
+ * car that cannot make a corner, and would have had no way to know. A
+ * SENSITIVITY DIAL MUST NOT BE A HANDICAP.
+ *
+ * So this form is chosen for one property above all: it is EXACTLY 1.0 at n=1
+ * for every c, because `c + (1-c)` is 1. Full lock stays reachable at every
+ * setting, at the same place on the glass; what the dial buys is how soon the
+ * lock arrives on the way there. It is monotonic for c in [0, 2] (the slope
+ * `c + 2(1-c)n` is linear in n, so the two ends decide it) and has finite
+ * slope at the origin, which is the trap `n^g` expo falls into and which this
+ * comment already rejects above: a thumb merely resting askew must not steer.
+ *
+ * Measured, lock at the same thumb distance, across the dial (throw 1):
+ *          gain 0.50   gain 1.00   gain 1.40
+ *    9px    0.149       0.220       0.277
+ *   15px    0.308       0.421       0.511
+ *   22px    0.505       0.629       0.728
+ *   29px    0.714       0.809       0.886   <- the rim, at every setting
+ *   47px    1.000       1.000       1.000   <- full lock, at every setting
  */
-export function stickCurve(raw: number, deadzone: number): number {
+export function stickCurve(raw: number, deadzone: number, gain = 1): number {
   const a = raw < 0 ? -raw : raw
   if (a <= deadzone) return 0
   let n = (a - deadzone) / (1 - deadzone)
   if (n > 1) n = 1
-  const out = 1.35 * n - 0.35 * n * n
+  const c = CURVE_BASE + gain
+  const out = c * n + (1 - c) * n * n
   return raw < 0 ? -out : out
 }
 
@@ -219,32 +343,138 @@ export function stickCurve(raw: number, deadzone: number): number {
  * probe can both reach. It used to be spelled out inside the pointermove
  * handler, which meant the only way to measure it was to drive a browser.
  */
-export function stickSteerFrom(dx: number): number {
-  return stickCurve(dx / STICK_RADIUS, STICK_DEADZONE)
+export function stickSteerFrom(dx: number, tune: StickTune = DEFAULT_STICK_TUNE): number {
+  const a = dx < 0 ? -dx : dx
+  const sign = dx < 0 ? -1 : 1
+  const rim = STICK_RADIUS * tune.throw
+  if (a <= rim) {
+    // INSIDE THE WELL THE MAPPING IS THE SHIPPED ONE, UNTOUCHED. The curve's
+    // domain is still STICK_CURVE_SPAN, not the rim -- refitting it into the
+    // shorter radius and scaling the output by 0.80 is a DIFFERENT function,
+    // because f is quadratic and compressing its domain does not cancel
+    // scaling its range. Measured, that refit moved the lock by up to 0.033
+    // at 9px, about 15% of what the pad gave there. Relabelling the rim is
+    // what "the comfortable range did not move" actually requires, and the
+    // test holds this branch bit-identical to the old one at gain 1.
+    return sign * stickCurve(a / (STICK_CURVE_SPAN * tune.throw), restFraction(tune), tune.gain)
+  }
+  // Past it: linear to full lock, then flat. Linear on purpose -- this is the
+  // band a player modulates by feel with no rim to brace against, and a curve
+  // here would make the same push mean different things at different depths.
+  const over = (a - rim) / (STICK_OVERTRAVEL * tune.throw)
+  const rimLock = stickCurve(STICK_RADIUS / STICK_CURVE_SPAN, restFraction(tune), tune.gain)
+  return sign * (rimLock + (1 - rimLock) * (over > 1 ? 1 : over))
 }
 
 /**
- * New origin for ONE AXIS of the floating stick after the thumb reaches `p`.
+ * The rest shoulder as a fraction of the curve's domain, held ABSOLUTE in px.
  *
- * The origin drags only once the thumb is past full travel, which is what lets
- * a long swipe keep steering instead of running out of stroke, and what lets
- * the stick be re-aimed mid-corner without lifting.
- *
- * TAKING ONE AXIS AT A TIME IS THE POINT, not a simplification. This used to
- * clamp the (dx, dy) VECTOR to a circle of STICK_RADIUS and then steer on the
- * clamped dx, so the steering ceiling was not 1.0 -- it was cos(angle of the
- * gesture). A thumb pivots about the knuckle and traces an arc rather than
- * sliding along a ruler, and `tools/probe-stick.ts` measured that arc capping
- * full lock at 0.915-0.982, with a deliberate 45-degree push capped at 0.698.
- * Two independent scalar calls make the coupling structurally impossible
- * rather than merely absent.
+ * STICK_DEADZONE used to be 0.08 of the radius, and this pass shortening the
+ * radius silently took the shoulder from 3.04px to 2.32px -- and the Pad size
+ * dial would have taken it to 1.62px. The constant's own comment forbids
+ * exactly that: "a thumb's jitter while it sits on the glass is a distance,
+ * not a fraction". So it is now a distance, and `throw` divides out of it so a
+ * bigger pad does not buy a twitchier one.
  */
-export function stickOrigin(origin: number, p: number): number {
-  const d = p - origin
-  if (d > STICK_RADIUS) return p - STICK_RADIUS
-  if (d < -STICK_RADIUS) return p + STICK_RADIUS
-  return origin
+function restFraction(tune: StickTune): number {
+  return STICK_REST_PX / (STICK_CURVE_SPAN * tune.throw)
 }
+
+/**
+ * How far past the rim the thumb is, 0 at the rim and 1 at full lock.
+ *
+ * Drives the strain on the drawn control and nothing else. The last pass
+ * rejected a 50px travel in a 150px well because "the drawn well was a LIE" --
+ * the player reached the visible rim before the lock ran out and it read as a
+ * stick that had given up. That objection is exactly as valid now, and the
+ * answer is not to put the rim back at full lock but to make the overtravel
+ * VISIBLE: the knob pins to the rim and the well tightens, so the edge is a
+ * place the control is still working rather than the end of it.
+ *
+ * IT DOES NOT TAKE `gain` AND DOES NOT NEED TO, which was only true after the
+ * gain law changed. While gain scaled the output it also clamped, so above
+ * 1.25 the steering was already pinned eight pixels into a band this still
+ * animated over all eighteen -- the well straining while the car had stopped
+ * answering, which is the drawn-well lie the pass above exists to kill. Gain
+ * reshapes the curve now and full lock is at the same place for every setting,
+ * so the strain and the steering start and finish together by construction.
+ * The check in `tests/steering.test.ts` sweeps the whole dial grid for it.
+ */
+export function stickOvertravel(dx: number, tune: StickTune = DEFAULT_STICK_TUNE): number {
+  const a = dx < 0 ? -dx : dx
+  const rim = STICK_RADIUS * tune.throw
+  if (a <= rim) return 0
+  const over = (a - rim) / (STICK_OVERTRAVEL * tune.throw)
+  return over > 1 ? 1 : over
+}
+
+/**
+ * The player's own steering preferences.
+ *
+ * `gain` scales the lock a given thumb distance returns; `throw` scales the
+ * distances themselves. They are deliberately separate: a big-handed player on
+ * a tablet wants a longer stroke at the same sensitivity, and a player who
+ * finds the car lazy wants more lock from the same stroke. One slider doing
+ * both would move whichever the player was not thinking about.
+ */
+export interface StickTune {
+  gain: number
+  throw: number
+}
+
+export const DEFAULT_STICK_TUNE: StickTune = { gain: 1, throw: 1 }
+/**
+ * Slider bounds. Generous at both ends -- a preference nobody can reach is not
+ * a preference -- but never far enough to make the pad lie.
+ *
+ * GAIN IS BOUNDED BY MONOTONICITY, NOT BY TASTE. `c = 0.35 + gain` and the
+ * curve's slope is `c + 2(1-c)n`, so it stops rising somewhere inside the
+ * travel once c passes 2, i.e. gain 1.65: past that, pushing further would
+ * return LESS lock. 1.40 leaves c at 1.75 and a slope of 0.25 arriving at the
+ * rim -- still a place a thumb can feel it is moving. The low end is bounded
+ * the same way from below (c > 0 at gain -0.35) and is set by feel instead:
+ * 0.50 is where the early travel stops being distinguishable from linear.
+ *
+ * THE OLD MIN OF 0.60 WAS NOT A PREFERENCE FLOOR, it was the point where the
+ * car could still just about make the calendar's hardest corner, because gain
+ * used to scale and clamp the output. It reshapes the curve now, so no setting
+ * can cost the player lock, and the bound has no business being a balance
+ * number any more.
+ */
+export const STICK_GAIN_RANGE = { min: 0.5, max: 1.4 } as const
+export const STICK_THROW_RANGE = { min: 0.7, max: 1.8 } as const
+
+/** Exported so callers holding a tune from storage clamp it the same way the
+ *  control does, rather than each keeping a two-line copy that can drift. */
+export function clampRange(v: number, r: { min: number; max: number }): number {
+  if (!Number.isFinite(v)) return 1
+  return v < r.min ? r.min : v > r.max ? r.max : v
+}
+
+/**
+ * THE ANCHOR NO LONGER MOVES, AND `stickOrigin` IS GONE.
+ *
+ * It used to drag the well along once the thumb passed full travel, which is
+ * what let a long swipe keep steering instead of running out of stroke. Vince
+ * reported it from a tablet as the bug it is: "when i reach beyond the bounds
+ * of the steering joypad, the joypad starts to move along with my finger. This
+ * should not be the behavior."
+ *
+ * He is right, and the reason is worth keeping. A control that re-zeroes under
+ * your thumb has no fixed reference: the same finger position means a
+ * different steering angle depending on how you got there, so a player cannot
+ * build muscle memory for "this much thumb is this much turn". Dragging also
+ * quietly removed the END of the stroke, which is why the previous pass could
+ * write that the pad "always reached full lock... a long swipe never runs out"
+ * -- there was no limit to run out of, and therefore nowhere for an overtravel
+ * band to exist.
+ *
+ * So the anchor is now set once on pointerdown and held for the whole gesture,
+ * the thumb is free to travel anywhere on the glass (pointer capture keeps the
+ * events coming after it leaves the zone), and lifting hides the pad. The next
+ * touch anchors wherever it lands -- which is what the control already did,
+ * and the half of the report that needed no change.
+ */
 
 /** Tilt steering, degrees of roll. */
 const TILT_DEADZONE_DEG = 4
@@ -396,6 +626,22 @@ const CSS = `
   background:radial-gradient(circle at 50% 34%,rgb(var(--cy) / .55),rgba(10,26,48,.55));
   box-shadow:0 0 26px rgb(var(--cy) / .5)}
 .sgtc-zone.live .sgtc-base,.sgtc-zone.live .sgtc-knob{opacity:1}
+/* THE STRAIN. \`--over\` runs 0 at the rim to 1 at full lock, written by the
+   pointermove handler. The knob has pinned by now, so this is the only thing
+   left telling the player that leaning harder is still doing something -- and
+   the previous pass's objection (a drawn rim that is not the end of the lock
+   reads as a stick that has run out) is answered here rather than by putting
+   the rim back at full lock.
+
+   It brightens and tightens rather than growing: a well that GREW would
+   suggest more travel is available, which is the opposite of true. Transitions
+   are off because this tracks a finger, and the reduced-motion block below
+   already removes the opacity fade for the same reason. */
+.sgtc-base.over{
+  border-color:rgb(var(--cy) / calc(.32 + .55 * var(--over,0)));
+  box-shadow:inset 0 0 calc(30px - 14px * var(--over,0)) rgb(var(--cy) / calc(.18 + .5 * var(--over,0))),
+             0 0 calc(10px * var(--over,0)) rgb(var(--cy) / calc(.4 * var(--over,0)));
+  transition:none}
 
 /* --- bottom-left teaching stack ---------------------------------------------
    The steering zone is the lower LEFT of the screen, so the thing that explains
@@ -567,6 +813,16 @@ class TouchControlsImpl implements TouchControls {
 
   private padSteer = 0
   private stickSteer = 0
+  /** 0 at the rim, 1 at full lock. Drives the drawn strain only. */
+  private stickOver = 0
+  /**
+   * The player's steering preferences, from settings.
+   *
+   * Held rather than read per move: a pointermove handler runs at the touch
+   * sample rate and has no business reaching into storage. `setStickTune` is
+   * the only writer.
+   */
+  private tune: StickTune = { ...DEFAULT_STICK_TUNE }
   private tiltTarget = 0
   private tiltSteer = 0
 
@@ -839,32 +1095,48 @@ class TouchControlsImpl implements TouchControls {
       this.base.style.transform = 'translate3d(' + lx + 'px,' + ly + 'px,0)'
       this.knob.style.transform = 'translate3d(' + lx + 'px,' + ly + 'px,0)'
       this.stickSteer = 0
+      this.stickOver = 0
+      this.base.style.setProperty('--over', '0')
+      this.base.classList.remove('over')
+      this.applyTuneToWell()
       this.activity()
     }
     const move = (ev: Event): void => {
       const e = ev as PointerEvent
       if (e.pointerId !== this.stickId) return
       e.preventDefault()
-      // Each axis clamps and drags on its own -- see stickOrigin for why that
-      // is a fix rather than a tidy-up. dx steers; dy only carries the knob,
+      // The anchor is fixed for the life of the gesture -- see the note above
+      // where stickOrigin used to be. dx steers; dy only carries the knob,
       // which is what the `.sgtc-pad` watermark has always claimed it did.
-      const ox = stickOrigin(this.stickOx, e.clientX)
-      const oy = stickOrigin(this.stickOy, e.clientY)
-      // The well only moves on the frames the origin actually drags, which is
-      // the minority of them; the knob below moves on all of them.
-      if (ox !== this.stickOx || oy !== this.stickOy) {
-        this.stickOx = ox
-        this.stickOy = oy
-        const bx = ox - this.zoneLeft
-        const by = oy - this.zoneTop
-        this.base.style.transform = 'translate3d(' + bx + 'px,' + by + 'px,0)'
-      }
       const dx = e.clientX - this.stickOx
       const dy = e.clientY - this.stickOy
-      this.stickSteer = stickSteerFrom(dx)
-      const kx = this.stickOx + dx - this.zoneLeft
-      const ky = this.stickOy + dy - this.zoneTop
+      this.stickSteer = stickSteerFrom(dx, this.tune)
+      /*
+       * THE KNOB PINS AT THE RIM, and the well reports the strain.
+       *
+       * Letting the knob follow the thumb out to arm's length would put the
+       * drawn control somewhere the player is not looking and break the one
+       * thing the well is for: showing where the edge is. Pinning it keeps the
+       * edge where the thumb last felt it.
+       *
+       * But a knob that simply stops reads as a control that has stopped
+       * working, which is the objection the previous pass raised against a rim
+       * that was not full lock -- and it was right. So overtravel is drawn
+       * rather than swallowed: the well tightens and brightens with how hard
+       * the player is leaning, so the edge stays legibly alive.
+       */
+      const radius = STICK_RADIUS * this.tune.throw
+      const len = Math.hypot(dx, dy)
+      const k = len > radius ? radius / len : 1
+      const kx = this.stickOx + dx * k - this.zoneLeft
+      const ky = this.stickOy + dy * k - this.zoneTop
       this.knob.style.transform = 'translate3d(' + kx + 'px,' + ky + 'px,0)'
+      const over = stickOvertravel(dx, this.tune)
+      if (over !== this.stickOver) {
+        this.stickOver = over
+        this.base.style.setProperty('--over', String(over))
+        this.base.classList.toggle('over', over > 0)
+      }
     }
     const up = (ev: Event): void => {
       const e = ev as PointerEvent
@@ -875,6 +1147,8 @@ class TouchControlsImpl implements TouchControls {
       try { z.releasePointerCapture(e.pointerId) } catch { /* already gone */ }
       z.classList.remove('live')
       this.stickSteer = 0
+      this.stickOver = 0
+      this.base.classList.remove('over')
     }
     this.on(z, 'pointerdown', down, { passive: false })
     this.on(z, 'pointermove', move, { passive: false })
@@ -885,6 +1159,33 @@ class TouchControlsImpl implements TouchControls {
   // -------------------------------------------------------------------------
   // State plumbing
   // -------------------------------------------------------------------------
+
+  /**
+   * Apply the player's steering preferences. Safe to call at any time.
+   *
+   * The well is resized from `throw` rather than being a fixed sprite, for the
+   * same reason the constant sized it in the first place: a drawn rim that
+   * does not sit where the control's rim sits is a control that lies about
+   * itself, and this pass has just made the rim mean something specific.
+   */
+  setStickTune(tune: StickTune): void {
+    this.tune = {
+      gain: clampRange(tune.gain, STICK_GAIN_RANGE),
+      throw: clampRange(tune.throw, STICK_THROW_RANGE),
+    }
+    this.applyTuneToWell()
+  }
+
+  private applyTuneToWell(): void {
+    const r = (STICK_RADIUS + STICK_KNOB_R) * this.tune.throw
+    this.base.style.width = 2 * r + 'px'
+    this.base.style.height = 2 * r + 'px'
+    this.base.style.margin = -r + 'px 0 0 ' + -r + 'px'
+    const k = STICK_KNOB_R * this.tune.throw
+    this.knob.style.width = 2 * k + 'px'
+    this.knob.style.height = 2 * k + 'px'
+    this.knob.style.margin = -k + 'px 0 0 ' + -k + 'px'
+  }
 
   private setKind(kind: number, on: boolean): void {
     switch (kind) {

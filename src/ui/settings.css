@@ -1306,3 +1306,182 @@
   border-left: 1px solid rgba(122, 190, 255, 0.22);
   border-right: 1px solid rgba(122, 190, 255, 0.22);
 }
+
+/* --------------------------------------------------------------------------
+   THE STEERING TRY PAD
+   ---------------------------------------------------------------------------
+   Deliberately drawn in the touch layer's own language -- a cyan well, a cyan
+   knob, a rim that brightens and tightens as you lean past it -- because the
+   player is going to close this panel and meet the real one thirty seconds
+   later, and a try pad that looked like a different control would be teaching
+   the wrong thing twice over.
+
+   EVERY SIZE HERE IS A REAL DISTANCE. The two rings are written from
+   JavaScript in CSS px of thumb travel, asked of the shipping mapping rather
+   than computed; nothing in this block may scale them, which is why there is
+   no transform on .sgset-try__surf and no vmin anywhere near the rings. The
+   surface's own height is the only free number, and it is sized to hold the
+   outer ring at the longest stroke the Pad size dial offers.
+   -------------------------------------------------------------------------- */
+
+.sgset-try__surf {
+  position: relative;
+  overflow: hidden;
+  /* WRITTEN FROM THE TRAVEL, by refresh() in settings.ts: 2 x the distance to
+     full lock, plus air, so the outer ring is a circle rather than a chord
+     when the thumb lands near the middle. The fallback is the default tune's
+     2 x 47 + 28.
+
+     min() is the ceiling, and it is here rather than in the JavaScript for
+     one reason: settings.ts reads no layout, ever, so it cannot know how tall
+     the viewport is. At the top of the Pad size range this row would be 198px
+     of a 390px landscape phone; 40vh hands back the difference and lets the
+     ring clip, exactly as the real pad clips against the edge of the screen.
+     The floor is 2 x the SHIPPED travel: a surface shorter than that would
+     teach a stroke that ends before the real one does. */
+  height: min(var(--try-h, 122px), 40vh);
+  min-height: 110px;
+  border-radius: var(--sg-r-md);
+  border: 2px solid var(--sg-line);
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(34, 211, 255, 0.07), rgba(0, 0, 0, 0) 60%),
+    rgba(8, 14, 28, 0.66);
+  /* The control being demonstrated is a drag, and this sits in a panel that
+     scrolls. Without this the browser takes the gesture for a scroll and the
+     player never reaches the overtravel band at all. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.sgset-try__ring,
+.sgset-try__knob {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 130ms ease-out;
+}
+
+.sgset-try__ring--rim {
+  border: 2px solid rgba(34, 211, 255, 0.34);
+  background: radial-gradient(circle, rgba(10, 26, 48, 0.42), rgba(10, 26, 48, 0.04) 72%);
+  box-shadow: inset 0 0 30px rgba(34, 211, 255, 0.18);
+}
+
+/* Full lock. Dashed because it is not a surface the thumb ever meets -- there
+   is no knob to rest against out here, which is the entire reason the ring is
+   drawn at all. */
+.sgset-try__ring--max {
+  border: 2px dashed rgba(34, 211, 255, 0.3);
+}
+
+.sgset-try__knob {
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border: 2px solid rgba(34, 211, 255, 0.85);
+  background: radial-gradient(circle at 50% 34%, rgba(34, 211, 255, 0.55), rgba(10, 26, 48, 0.55));
+  box-shadow: 0 0 26px rgba(34, 211, 255, 0.5);
+}
+
+.sgset-try__surf.is-live .sgset-try__ring,
+.sgset-try__surf.is-live .sgset-try__knob {
+  opacity: 1;
+}
+
+/* THE STRAIN, the same one the real well draws. `--over` runs 0 at the rim to
+   1 at full lock; the ring brightens and tightens rather than growing, because
+   a ring that grew would promise travel that is not there. Transitions off:
+   this tracks a finger. */
+.sgset-try__surf.is-over .sgset-try__ring--rim {
+  border-color: rgba(34, 211, 255, calc(0.34 + 0.55 * var(--over, 0)));
+  box-shadow:
+    inset 0 0 calc(30px - 14px * var(--over, 0))
+      rgba(34, 211, 255, calc(0.18 + 0.5 * var(--over, 0))),
+    0 0 calc(12px * var(--over, 0)) rgba(34, 211, 255, calc(0.45 * var(--over, 0)));
+  transition: none;
+}
+
+.sgset-try__surf.is-over .sgset-try__ring--max {
+  border-color: rgba(34, 211, 255, calc(0.3 + 0.5 * var(--over, 0)));
+  transition: none;
+}
+
+/* Centred on the surface, not on the knob: it is a number to read while the
+   thumb is somewhere else entirely, and a readout that travels with the thumb
+   is a readout under the thumb. */
+.sgset-try__val {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  pointer-events: none;
+  font-family: var(--sg-display);
+  font-size: var(--sg-fs-micro);
+  letter-spacing: var(--sg-ls-caps-wide);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-quiet);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.sgset-try__surf.is-live .sgset-try__val {
+  /* Out of the middle once the rings are up -- that is where the thumb is. */
+  top: auto;
+  bottom: 8px;
+  transform: none;
+  color: var(--sg-ink);
+  font-size: var(--sg-fs-caption);
+}
+
+/* The lock as a length, signed from the centre. The number above says how
+   much; this says which way, which is the half a number cannot show at a
+   glance while a thumb is moving. */
+.sgset-try__meter {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(10, 17, 32, 0.9);
+  box-shadow: inset 0 0 0 1px var(--sg-line);
+  overflow: hidden;
+}
+
+.sgset-try__meter::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(122, 190, 255, 0.5);
+}
+
+.sgset-try__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0%;
+  background: var(--sg-cyan);
+  box-shadow: 0 0 12px rgba(34, 211, 255, 0.6);
+}
+
+.sgset-try__geom {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  font-variant-numeric: tabular-nums;
+  color: var(--sg-dim);
+  line-height: var(--sg-lh-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sgset-try__ring,
+  .sgset-try__knob {
+    transition: none;
+  }
+}

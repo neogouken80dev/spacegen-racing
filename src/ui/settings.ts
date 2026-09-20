@@ -31,6 +31,10 @@ import {
   CAMERA_LIMITS, DEFAULT_CAMERA_SETTINGS, normaliseCameraSettings,
   type CameraSettings,
 } from '../game/camera'
+import {
+  STICK_GAIN_RANGE, STICK_THROW_RANGE, stickOvertravel, stickSteerFrom,
+  type StickTune,
+} from '../game/touchControls'
 
 export interface SettingsPanel {
   root: HTMLElement
@@ -54,6 +58,17 @@ export interface SettingsPanel {
    * before the first race, then on every change.
    */
   onCalloutChange: (level: CalloutLevel) => void
+  /**
+   * Re-read everything this panel only reflects, and redraw.
+   *
+   * For the state this dialog does not own. The control scheme is the case it
+   * was added for: it can change from underneath the panel (tilt denied, a
+   * gamepad woken, a tap on the canvas), and several rows exist only for one
+   * scheme. Cheap and idempotent -- it reads fields and writes attributes,
+   * reads no layout, and allocates nothing worth naming -- so the host may
+   * call it as often as it likes.
+   */
+  refresh(): void
   /** Seed the faders from the audio system's own stored values. */
   setVolumes(v: { master: number; music: number; sfx: number; vo: number }): void
   /** A volume moved, or mute toggled. Values 0..1. */
@@ -157,6 +172,36 @@ const FX_VALUE: Record<FxLevel, number> = {
   low: 0.35,
   off: 0,
 }
+
+/**
+ * THE TWO STEERING DIALS, AS STEPPERS RATHER THAN <input type=range>.
+ *
+ * They are a continuum -- 1.15 and 1.20 are both worth having -- so the named
+ * steps that FX_LEVELS argues for are not the answer. That is the same place
+ * the camera rig landed, and the note above makeStepper is the reasoning:
+ * two ordinary buttons inherit pointer, key and pad support through the one
+ * code path the rest of this dialog already uses, they show the NUMBER (which
+ * matters for a setting a player will want to read out to somebody else), and
+ * they are two fat targets on a phone rather than a thumb-width drag.
+ *
+ * The drag argument is sharper here than it was for the camera, because these
+ * two rows are only ever on screen on a touch device: a range input inside a
+ * scrolling panel has to fight the scroll for every drag, and the control
+ * being tuned is itself a drag.
+ *
+ * STEP 0.05, WHICH PUTS 1.00 ON THE GRID. makeStepper anchors the grid on the
+ * minimum, so the default has to be reachable by stepping or a player who
+ * nudges it once can never get the shipped feel back: 0.50 + 10 steps = 1.00
+ * and 0.70 + 6 steps = 1.00. Both ranges come from touchControls.ts so the
+ * bounds cannot drift away from the ones the pad actually clamps to; only the
+ * step is this file's business, because it is a property of the control and
+ * not of the stick.
+ */
+const STICK_STEP = 0.05
+const GAIN_LIMITS: readonly [number, number, number] =
+  [STICK_GAIN_RANGE.min, STICK_GAIN_RANGE.max, STICK_STEP]
+const THROW_LIMITS: readonly [number, number, number] =
+  [STICK_THROW_RANGE.min, STICK_THROW_RANGE.max, STICK_STEP]
 
 /**
  * The callout ladder. Three steps rather than four, because unlike the two
@@ -807,6 +852,235 @@ function makeStepper(
 }
 
 // ---------------------------------------------------------------------------
+// THE TRY PAD — a live stick you can push while you set the two dials above.
+//
+// A SLIDER YOU CANNOT FEEL WHILE YOU SET IT IS A SLIDER YOU SET WRONG. Every
+// other control in this panel can be judged from where the player is sitting:
+// the camera steppers move a paused frame that is visible behind the scrim,
+// the faders make a noise, the quality tiers change the picture. The steering
+// ratio is the one setting whose whole meaning is a gesture, and the real pad
+// is behind a z-60 dialog and a blurred scrim while this panel is open. So
+// without this the player sets "1.25" blind, closes the panel, drives a
+// corner, opens it again -- and the panel is a modal that pauses the race, so
+// that loop costs a lap each time round.
+//
+// IT CALLS THE SHIPPING FUNCTIONS AND OWNS NO ARITHMETIC OF ITS OWN. Not one
+// number here is derived by hand: `stickSteerFrom` gives the lock, and the two
+// rings are found by BISECTING those same functions for the distance at which
+// the knob pins and the distance at which full lock arrives. That matters more
+// than the usual don't-repeat-yourself reason. A copy would drift, and a try
+// pad that drifts is worse than no try pad -- it teaches a feel the car does
+// not have. And it is the standing check on two
+// invariants this panel would otherwise have to trust: full lock is reachable
+// at every setting of both dials, and the rest shoulder is 3.04px at every
+// setting of both dials. An earlier gain law broke the first and an earlier
+// rest shoulder broke the second; both would have shown here as a ring in the
+// wrong place, under the player's own thumb, before either shipped.
+//
+// IT IS A DIAGRAM OF TRAVEL, NOT A SCREENSHOT OF THE PAD. The real well is
+// drawn a knob-radius wider than the travel so the knob's EDGE meets the rim;
+// here the rings are the travel itself, measured from the anchor, because the
+// second ring (full lock) is a place the real control cannot draw at all. The
+// DISTANCES are identical either way -- both are CSS px of thumb from a fixed
+// anchor through the same function -- and the distances are the thing being
+// tuned.
+// ---------------------------------------------------------------------------
+
+interface TryPad {
+  row: HTMLElement
+  /** Re-read the tune: resize both rings and rewrite the geometry line. */
+  refresh(): void
+  dispose(): void
+}
+
+/**
+ * Smallest px of thumb travel at which `hit` is already true, or -1.
+ *
+ * Bisection rather than a formula, so the only thing this knows about the
+ * stick is how to ask it. `hit` has to be monotonic in px, which all three
+ * uses are: leaving the deadzone, leaving the rim, reaching full lock.
+ */
+function stickPxWhere(hit: (px: number) => boolean, hi = 400): number {
+  if (!hit(hi)) return -1
+  if (hit(0)) return 0
+  let lo = 0
+  for (let i = 0; i < 40; i++) {
+    const m = (lo + hi) / 2
+    if (hit(m)) hi = m
+    else lo = m
+  }
+  return (lo + hi) / 2
+}
+
+function makeTryPad(parent: Element, getTune: () => StickTune): TryPad {
+  const row = el('div', 'sgset-row sgset-row--stack sgset-try', parent)
+  const txt = el('div', 'sgset-row__txt', row)
+  el('div', 'sgset-row__k', txt, 'Try it')
+  el(
+    'div', 'sgset-row__sub', txt,
+    'Push a thumb across the panel below and the two settings above are what '
+    + 'you are feeling. The solid ring is where the knob stops; keep going and '
+    + 'the ring strains as the last of the lock comes on.',
+  )
+
+  // aria-hidden: this is a gesture, and there is nothing in it a screen reader
+  // can do with it. The numbers it reports are on the two steppers above and
+  // in the geometry line below, both of which stay readable.
+  const surf = el('div', 'sgset-try__surf', row)
+  surf.setAttribute('aria-hidden', 'true')
+  const rim = el('div', 'sgset-try__ring sgset-try__ring--rim', surf)
+  const max = el('div', 'sgset-try__ring sgset-try__ring--max', surf)
+  const knob = el('div', 'sgset-try__knob', surf)
+  // Doubles as the invitation and the readout: before the first touch it says
+  // what to do, and from then on it is the lock the car would be carrying.
+  const val = el('div', 'sgset-try__val', surf, 'PUSH HERE')
+
+  const meter = el('div', 'sgset-try__meter', row)
+  meter.setAttribute('aria-hidden', 'true')
+  const fill = el('div', 'sgset-try__fill', meter)
+
+  const geom = el('div', 'sgset-try__geom', row)
+
+  let id = -1
+  /** Anchor in surface coordinates — where the rings are drawn. */
+  let ox = 0
+  let oy = 0
+  /**
+   * Anchor in CLIENT coordinates, so a move never reads layout.
+   *
+   * The rect is taken once, on pointerdown, exactly as bindStick takes it:
+   * a getBoundingClientRect() per pointermove is a forced reflow at the touch
+   * sample rate, on the one control in this panel whose whole job is to feel
+   * immediate.
+   */
+  let cx = 0
+  let cy = 0
+  let pinAt = 0
+
+  const draw = (dx: number, dy: number): void => {
+    const tune = getTune()
+    const steer = stickSteerFrom(dx, tune)
+    const over = stickOvertravel(dx, tune)
+    // The knob pins at the rim exactly as bindStick pins it: clamp the (dx,dy)
+    // VECTOR so a thumb arcing off-axis drags the knob round the rim instead
+    // of sliding along one axis of it. The clamp is on the drawing only --
+    // `steer` above came from dx alone, which is the whole point of the note
+    // in touchControls.ts about not letting the two axes back into one sum.
+    const len = Math.hypot(dx, dy)
+    const k = pinAt > 0 && len > pinAt ? pinAt / len : 1
+    knob.style.transform = `translate3d(${ox + dx * k}px,${oy + dy * k}px,0)`
+    surf.style.setProperty('--over', String(over))
+    surf.classList.toggle('is-over', over > 0)
+    fill.style.width = `${Math.abs(steer) * 50}%`
+    fill.style.left = steer < 0 ? `${50 - Math.abs(steer) * 50}%` : '50%'
+    // Signed and to two places: the sign is what tells the player the pad is
+    // reading the axis they think it is, and two places is the resolution the
+    // overtravel band exists to give them.
+    val.textContent = (steer < 0 ? '−' : '+') + Math.abs(steer).toFixed(2)
+  }
+
+  const down = (ev: Event): void => {
+    const e = ev as PointerEvent
+    e.preventDefault()
+    if (id >= 0) return
+    const r = surf.getBoundingClientRect()
+    id = e.pointerId
+    cx = e.clientX
+    cy = e.clientY
+    ox = cx - r.left
+    oy = cy - r.top
+    // THE ANCHOR IS FIXED FOR THE LIFE OF THE GESTURE, which is the whole of
+    // the report this pass answers. Nothing below ever writes ox/oy or cx/cy
+    // again, so the rings stay where the thumb first landed however far it
+    // travels -- including off the surface entirely, which pointer capture
+    // keeps delivering.
+    const at = `translate3d(${ox}px,${oy}px,0)`
+    rim.style.transform = at
+    max.style.transform = at
+    knob.style.transform = at
+    surf.classList.add('is-live')
+    try { surf.setPointerCapture(e.pointerId) } catch { /* best effort */ }
+    draw(0, 0)
+  }
+  const move = (ev: Event): void => {
+    const e = ev as PointerEvent
+    if (e.pointerId !== id) return
+    e.preventDefault()
+    draw(e.clientX - cx, e.clientY - cy)
+  }
+  const up = (ev: Event): void => {
+    const e = ev as PointerEvent
+    if (e.pointerId !== id) return
+    id = -1
+    try { surf.releasePointerCapture(e.pointerId) } catch { /* already gone */ }
+    surf.classList.remove('is-live')
+    surf.classList.remove('is-over')
+    fill.style.width = '0%'
+    fill.style.left = '50%'
+    val.textContent = 'PUSH HERE'
+  }
+  surf.addEventListener('pointerdown', down, { passive: false })
+  surf.addEventListener('pointermove', move, { passive: false })
+  surf.addEventListener('pointerup', up)
+  surf.addEventListener('pointercancel', up)
+  surf.addEventListener('lostpointercapture', up)
+
+  const refresh = (): void => {
+    const t = getTune()
+    // All three are ASKED FOR, never computed. See the header.
+    const rest = stickPxWhere((px) => stickSteerFrom(px, t) > 0)
+    const pin = stickPxWhere((px) => stickOvertravel(px, t) > 0)
+    const full = stickPxWhere((px) => stickSteerFrom(px, t) >= 1)
+    pinAt = pin
+    const ring = (node: HTMLElement, px: number): void => {
+      node.hidden = px < 0
+      node.style.width = `${2 * px}px`
+      node.style.height = `${2 * px}px`
+      node.style.margin = `${-px}px 0 0 ${-px}px`
+    }
+    ring(rim, pin)
+    ring(max, full)
+    // THE SURFACE GROWS WITH THE STROKE IT HAS TO HOLD, which is the one
+    // place this row can show what Pad size does without the player touching
+    // anything: turn it up and the pad is visibly bigger, because the travel
+    // is. A fixed box would clip the outer ring at the top of the range and
+    // teach a stroke that ends before it does.
+    //
+    // The ceiling is in CSS (min(), against the viewport) rather than here,
+    // because a clamp computed in JavaScript needs to know how tall the
+    // viewport is, and this file reads no layout. The 1.3 keeps a little room
+    // past the rim when full lock lands inside it, so the strain has somewhere
+    // to be read.
+    const outer = Math.max(pin * 1.3, full)
+    surf.style.setProperty('--try-h', `${Math.round(2 * outer + 28)}px`)
+    // ONE SENTENCE, BECAUSE THERE IS NOW ONE ARRANGEMENT. This read three
+    // ways, and the other two were both reports of the same defect: while
+    // `gain` scaled and clamped the pad's output, a setting below 1.00 put
+    // full lock OUT OF REACH -- 0.60 topped the car out at 0.60 of its
+    // steering however far the thumb went, against corners on the roster
+    // demanding 0.92 -- and a setting at 1.25 or above brought full lock in
+    // BEFORE the knob pinned, leaving the top of the well and the whole
+    // overtravel band doing nothing. A row that has to warn the player about
+    // what the row itself just did to their car is a fixed bug wearing a
+    // label. Gain reshapes the curve now, so the well, then the band, is the
+    // only arrangement either dial can produce, at any setting.
+    const px = (v: number): string => `${Math.round(v)}px`
+    geom.textContent = `Knob stops at ${px(pin)} of thumb, full lock at `
+      + `${px(full)}. Ignores a thumb inside ${rest.toFixed(1)}px.`
+  }
+
+  const dispose = (): void => {
+    surf.removeEventListener('pointerdown', down)
+    surf.removeEventListener('pointermove', move)
+    surf.removeEventListener('pointerup', up)
+    surf.removeEventListener('pointercancel', up)
+    surf.removeEventListener('lostpointercapture', up)
+  }
+
+  return { row, refresh, dispose }
+}
+
+// ---------------------------------------------------------------------------
 // A labelled switch row.
 // ---------------------------------------------------------------------------
 
@@ -934,6 +1208,9 @@ class SettingsPanelImpl implements SettingsPanel {
   private readonly swHap: SwitchRow
   private readonly camSteppers: { key: keyof CameraSettings; st: StepperRow }[] = []
   private readonly camReset: HTMLButtonElement
+  private readonly stickSteppers: { get: (t: StickTune) => number; st: StepperRow }[] = []
+  private readonly stickRows: HTMLElement[] = []
+  private readonly tryPad: TryPad
   private readonly tiltRows: HTMLElement[] = []
   private readonly bindSection: HTMLElement
   private readonly bindSlots: { action: KeyAction; slot: number; b: HTMLButtonElement }[] = []
@@ -1114,6 +1391,72 @@ class SettingsPanelImpl implements SettingsPanel {
         this.sync()
       },
     )
+
+    /**
+     * THE STICK'S GEAR RATIO. Two dials and something to feel them against.
+     *
+     * WHY HERE. Driving, not Accessibility: this is not a concession made to
+     * reach a player who could not otherwise play, it is the gear ratio of the
+     * primary control, and it belongs beside the throttle mode for the same
+     * reason. It sits directly under Auto-accelerate and above the two tilt
+     * rows, which puts the section in scheme order -- the row that applies to
+     * every scheme, then the stick's rows, then tilt's.
+     *
+     * WHY IT DISAPPEARS. Gated on the LIVE scheme being 'stick', by exactly
+     * the rule the two tilt rows below already use. That answers the
+     * non-touch question without a single line about touch: a keyboard or
+     * gamepad player is never on 'stick', so these never appear for them, and
+     * no `isTouch` sniff is involved -- which matters, because `isTouch` is a
+     * guess about hardware and the scheme is a fact about what the player is
+     * actually holding. A laptop with a touchscreen that the player is driving
+     * with the stick gets the dials; the same laptop under WASD does not.
+     *
+     * It also means the rows are hidden under 'buttons' and under a WORKING
+     * 'tilt', where the stick genuinely does nothing -- the same rule that
+     * keeps the GAS pad off screen when the throttle is automatic. When tilt
+     * is denied or absent, input.ts drops the player to 'stick', and the dials
+     * arrive with the control they belong to.
+     */
+    const stickRow = (
+      label: string,
+      sub: string,
+      limits: readonly [number, number, number],
+      get: (t: StickTune) => number,
+      set: (t: StickTune, v: number) => StickTune,
+    ): void => {
+      const st = makeStepper(
+        secDrive, label, sub, limits, (v) => `${v.toFixed(2)}×`,
+        () => get(input.stickTune),
+        (v) => {
+          input.setStickTune(set(input.stickTune, v))
+          this.sync()
+        },
+      )
+      this.stickSteppers.push({ get, st })
+      this.stickRows.push(st.row)
+    }
+
+    stickRow(
+      'Steering sensitivity',
+      'How quickly lock builds as the thumb moves. Turn it up if the ship '
+      + 'feels lazy; down if it darts. Full lock is always there at the end '
+      + 'of the stroke. 1.00 is the feel the game ships with.',
+      GAIN_LIMITS,
+      (t) => t.gain,
+      (t, v) => ({ ...t, gain: v }),
+    )
+    stickRow(
+      'Pad size',
+      'How far the thumb travels for that lock. A tablet is not a phone and '
+      + 'the same stroke is a smaller part of it — turn this up for a longer, '
+      + 'steadier stroke at the same sensitivity.',
+      THROW_LIMITS,
+      (t) => t.throw,
+      (t, v) => ({ ...t, throw: v }),
+    )
+
+    this.tryPad = makeTryPad(secDrive, () => input.stickTune)
+    this.stickRows.push(this.tryPad.row)
 
     this.swInvert = makeSwitchRow(
       secDrive,
@@ -1811,6 +2154,15 @@ class SettingsPanelImpl implements SettingsPanel {
     // --- driving ----------------------------------------------------------
     this.swAuto.set(input.autoAccelerate)
     this.swInvert.set(this.tiltInvert)
+    // The stick's two dials and its try pad. Read straight off the input
+    // manager, which owns and persists them -- the same one-source rule
+    // Auto-accelerate, Haptics and One-handed already follow, and the reason
+    // this panel stores nothing for them.
+    const tune = input.stickTune
+    for (const { get, st } of this.stickSteppers) st.set(get(tune))
+    this.tryPad.refresh()
+    const stickOn = scheme === 'stick'
+    for (let i = 0; i < this.stickRows.length; i++) this.stickRows[i].hidden = !stickOn
     const tiltOn = scheme === 'tilt'
     for (let i = 0; i < this.tiltRows.length; i++) this.tiltRows[i].hidden = !tiltOn
 
@@ -2104,6 +2456,11 @@ class SettingsPanelImpl implements SettingsPanel {
     return this.openFlag
   }
 
+  refresh(): void {
+    if (this.disposed) return
+    this.sync()
+  }
+
   open(tab?: TabId): void {
     if (this.disposed) return
     if (tab && tab !== this.tab) {
@@ -2293,6 +2650,7 @@ class SettingsPanelImpl implements SettingsPanel {
     this.disposed = true
     this.endCapture()
     this.padStop()
+    this.tryPad.dispose()
     this.offFsChange?.()
     this.offFsChange = null
     this.dialog.removeEventListener('keydown', this.onKeyDown)

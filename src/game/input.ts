@@ -14,7 +14,8 @@ import { TUNING } from '../content/tuning'
 import { clamp } from '../sim/math'
 import {
   createTouchControls, rampAxis, axisCurve, STEER_RAMP,
-  type TouchControls, type TouchScheme,
+  clampRange, DEFAULT_STICK_TUNE, STICK_GAIN_RANGE, STICK_THROW_RANGE,
+  type StickTune, type TouchControls, type TouchScheme,
 } from './touchControls'
 
 export type ControlScheme = 'keyboard' | 'gamepad' | 'tilt' | 'stick' | 'buttons'
@@ -50,6 +51,19 @@ export interface InputManager {
   setTiltInvert(on: boolean): void
   setHaptics(on: boolean): void
   readonly haptics: boolean
+  /**
+   * The floating stick's gear ratio, owned here rather than by the settings
+   * panel for the same reason `autoAccelerate` and `haptics` are: it has to be
+   * in force before the panel is built. A player who dialled the stick in last
+   * session must not get one corner of the shipped ratio while a dialog they
+   * may never open is still being constructed.
+   *
+   * Both values are clamped into STICK_GAIN_RANGE / STICK_THROW_RANGE on the
+   * way in, so the getter is always something the UI can display and the pad
+   * can use.
+   */
+  readonly stickTune: StickTune
+  setStickTune(tune: StickTune): void
   /** Show the Lift pad; the race sets this from the local chassis class. */
   setLiftEnabled(on: boolean): void
   /**
@@ -161,7 +175,40 @@ interface Persisted {
   tiltInvert?: boolean
   oneHanded?: boolean
   oneHandedSide?: 'left' | 'right'
+  /**
+   * The stick's gear ratio, stored as two loose numbers rather than a nested
+   * object so an older blob that predates them simply has neither key.
+   *
+   * WRITTEN ONLY ONCE MOVED OFF THE DEFAULT, like the camera rig in
+   * ui/settings.ts: a player who has never touched these stores nothing for
+   * them, so a later retune of DEFAULT_STICK_TUNE reaches them. A 1 written
+   * into the record would freeze them on today's ratio forever.
+   */
+  stickGain?: number
+  stickThrow?: number
   keymap?: Partial<Record<string, string[]>>
+}
+
+/**
+ * Untrusted number -> a value the pad can use.
+ *
+ * The stored blob is hand-editable and survives builds, so `null`, a string,
+ * NaN and a value from a range that has since been narrowed all arrive here.
+ * Anything that is not a finite number becomes the DEFAULT -- the same rule
+ * normaliseCameraSettings follows for the rig -- and a finite number outside
+ * the range is pulled to the nearest bound, because a player who once chose
+ * 1.60 meant "as high as it goes" and should land there rather than back at
+ * the middle. STICK_GAIN_RANGE has in fact narrowed once, from 0.60-1.60 to
+ * 0.50-1.40, so this path is live and not hypothetical.
+ *
+ * The bound arithmetic is touchControls.ts's `clampRange`, not a copy of it:
+ * the pad clamps what it is handed as well, and two clamps that can disagree
+ * is how a settings row and the control it drives end up showing different
+ * numbers.
+ */
+function clampTune(v: unknown, r: { min: number; max: number }): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1
+  return clampRange(v, r)
 }
 
 function loadPersisted(): Persisted {
@@ -287,6 +334,7 @@ class InputManagerImpl implements InputManager {
   private oneHandedOn = false
   private oneHandedSide: 'left' | 'right' = 'right'
   private tiltInvert = false
+  private tune: StickTune = { ...DEFAULT_STICK_TUNE }
 
   // --- edge state ---------------------------------------------------------
   private itemHeldPrev = false
@@ -306,11 +354,20 @@ class InputManagerImpl implements InputManager {
     this.tiltInvert = p.tiltInvert === true
     this.oneHandedOn = p.oneHanded === true
     this.oneHandedSide = p.oneHandedSide === 'left' ? 'left' : 'right'
+    this.tune = {
+      gain: clampTune(p.stickGain, STICK_GAIN_RANGE),
+      throw: clampTune(p.stickThrow, STICK_THROW_RANGE),
+    }
 
     this.touch = createTouchControls(uiLayer)
     this.touch.setAutoAccelerate(this.autoAccel)
     this.touch.setTiltInvert(this.tiltInvert)
     this.touch.setOneHanded(this.oneHandedOn, this.oneHandedSide)
+    // Before the first pointerdown, not on the first settings change: the pad
+    // sizes its well from `throw`, and a stick drawn at the shipped size for
+    // one gesture and then resized under the thumb is exactly the kind of
+    // moving control this pass was written to remove.
+    this.touch.setStickTune(this.tune)
     this.touch.onTiltUnavailable = (): void => {
       // Permission denied, or no sensor: drop to the floating stick silently.
       if (isTouchScheme(this.cur)) this.applyScheme('stick', true)
@@ -746,6 +803,18 @@ class InputManagerImpl implements InputManager {
     this.persist()
   }
 
+  /** A copy, so a caller cannot mutate the live tune behind the pad's back. */
+  get stickTune(): StickTune { return { ...this.tune } }
+
+  setStickTune(tune: StickTune): void {
+    this.tune = {
+      gain: clampTune(tune.gain, STICK_GAIN_RANGE),
+      throw: clampTune(tune.throw, STICK_THROW_RANGE),
+    }
+    this.touch.setStickTune(this.tune)
+    this.persist()
+  }
+
   setLiftEnabled(on: boolean): void { this.touch.setLiftEnabled(on) }
 
   setPadsVisible(on: boolean): void {
@@ -757,7 +826,7 @@ class InputManagerImpl implements InputManager {
   get hasGamepad(): boolean { return this.padPresent }
 
   private persist(): void {
-    savePersisted({
+    const p: Persisted = {
       scheme: this.cur === 'gamepad' ? this.lastNonPad : this.cur,
       autoAccel: this.autoAccel,
       haptics: this.hapticsOn,
@@ -765,7 +834,12 @@ class InputManagerImpl implements InputManager {
       oneHanded: this.oneHandedOn,
       oneHandedSide: this.oneHandedSide,
       keymap: this.keymap,
-    })
+    }
+    // See Persisted.stickGain: an untouched ratio stays absent from the record
+    // so a later retune of the default still reaches this player.
+    if (this.tune.gain !== DEFAULT_STICK_TUNE.gain) p.stickGain = this.tune.gain
+    if (this.tune.throw !== DEFAULT_STICK_TUNE.throw) p.stickThrow = this.tune.throw
+    savePersisted(p)
   }
 
   dispose(): void {

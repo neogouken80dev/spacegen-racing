@@ -621,13 +621,29 @@ export class Game {
     // the glass, so the compact instruments are driven from the live control
     // scheme as well as the window size.
     this.compact = installCompactLayout(() => isTouchScheme(this.input.scheme))
-    this.input.onSchemeChange = () => this.compact.refresh()
-
+    // AND SO DOES THE SETTINGS PANEL, for the same reason and one more.
+    //
+    // Several of its rows exist only for one scheme -- Invert tilt and
+    // Re-centre for tilt, the two steering dials and the try pad for the
+    // stick -- and until now the panel only re-read the scheme when the
+    // player changed it THROUGH the panel. The scheme also changes from
+    // underneath: touchControls fires onTiltUnavailable when the sensor is
+    // denied or simply never reports, and input.ts drops the player to the
+    // stick. That can land while the panel is open, and it left the dialog
+    // offering two tilt rows for a scheme that had just been taken away and
+    // hiding the dials for the one that had just arrived.
+    //
+    // Assigned here rather than beside installCompactLayout so `this.settings`
+    // is real before anything can fire it.
     this.settings = createSettingsPanel(container, {
       input: this.input,
       getQuality: () => this.tier,
       getReducedMotion: () => this.reduceMotion,
     })
+    this.input.onSchemeChange = () => {
+      this.compact.refresh()
+      this.settings.refresh()
+    }
     this.settings.onQualityChange = (q) => this.setTier(q)
     this.settings.onReducedMotionChange = (on) => {
       this.reduceMotion = on
