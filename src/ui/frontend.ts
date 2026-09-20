@@ -58,6 +58,9 @@ import {
   CIRCUIT_ROUNDS, isComplete, pointsFor, roundsDone, standings, trackIdForRound,
   type CircuitState,
 } from '../game/circuit'
+import {
+  asDifficulty, DEFAULT_DIFFICULTY, DIFFICULTIES, DIFFICULTY_SPECS, type Difficulty,
+} from '../content/difficulty'
 import { createLobbyScreens, type LobbyScreenId, type LobbyScreens } from './lobby'
 import { createProfileScreen, type Loadout, type ProfileScreen } from './profile'
 import { lobbyService } from '../net'
@@ -80,6 +83,16 @@ export interface StartSelection {
   chassisId: string
   pilotId: string
   quality: QualityTier
+  /**
+   * How hard the AI field drives, for THIS race.
+   *
+   * Carried on the selection rather than read from storage by the game,
+   * because the garage screen is where the player chose it and a second read
+   * somewhere else is a second chance to disagree. It IS persisted -- see
+   * `selectDifficulty` -- so the choice survives a reload; the storage is the
+   * default for the next visit, not the source for this race.
+   */
+  difficulty: Difficulty
 }
 
 export interface FrontEnd {
@@ -240,6 +253,9 @@ const ARROW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
 const LS_CHASSIS = 'sg.chassis'
 const LS_PILOT = 'sg.pilot'
 const LS_QUALITY = 'sg.quality'
+/** Shared with game/main.ts, which reads the same key at boot so the field
+ *  and the segment cannot disagree about what was last chosen. */
+const LS_DIFFICULTY = 'sg.difficulty'
 const LS_TRACK = 'sg.track'
 
 const ORD = ['-', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th']
@@ -627,6 +643,9 @@ class FrontEndImpl implements FrontEnd {
   private readonly chassisCards: HTMLElement[] = []
   private readonly pilotCards: HTMLElement[] = []
   private readonly qualityBtns: HTMLElement[] = []
+  private readonly difficultyBtns: HTMLButtonElement[] = []
+  private difficultyHint!: HTMLElement
+  private difficulty: Difficulty = DEFAULT_DIFFICULTY
 
   private readonly detName: HTMLElement
   private readonly detNick: HTMLElement
@@ -751,6 +770,9 @@ class FrontEndImpl implements FrontEnd {
     this.pilotId = PILOTS.some((p) => p.id === storedP) ? storedP : PILOTS[0].id
     const storedQ = readStore(LS_QUALITY, 'medium') as QualityTier
     this.quality = QUALITIES.indexOf(storedQ) >= 0 ? storedQ : 'medium'
+    // asDifficulty does the validating, so a hand-edited value lands on
+    // Normal rather than on undefined.
+    this.difficulty = asDifficulty(readStore(LS_DIFFICULTY, DEFAULT_DIFFICULTY))
     // Same contract as the chassis and the pilot: the last circuit raced is the
     // one already selected next time, so a rematch is one button.
     const storedT = readStore(LS_TRACK, TRACKS[0].id)
@@ -970,6 +992,32 @@ class FrontEndImpl implements FrontEnd {
       b.addEventListener('click', () => this.selectQuality(q))
       this.qualityBtns.push(b)
     }
+    // OPPONENTS SITS BESIDE QUALITY, NOT ON THE TRACK SCREEN.
+    //
+    // Both are things you set once and rarely change, both are about how this
+    // race will go rather than about which race it is, and this is the last
+    // screen before the grid -- so a player who has just seen the circuit and
+    // picked a car is looking at exactly the decision "how hard should this
+    // be". The track screen is a choice of PLACE; putting a difficulty
+    // segment on it would ask the same question eight times.
+    const diffWrap = el('div', 'sg-opts__diff', opts)
+    const diffSeg = el('div', 'sg-seg', diffWrap)
+    el('span', 'sg-seg__k', diffSeg, 'Opponents')
+    const diffGrp = el('div', 'sg-seg__grp', diffSeg)
+    for (const d of DIFFICULTIES) {
+      const b = button('sg-seg__btn', diffGrp, DIFFICULTY_SPECS[d].label)
+      b.dataset.diff = d
+      b.addEventListener('click', () => this.selectDifficulty(d))
+      this.difficultyBtns.push(b)
+    }
+    // UNDER THE SEGMENT, NOT AT THE FOOT OF THE ROW. The first pass put this
+    // in `.sg-opts` directly, which is a wrapping flex row, so it took a line
+    // of its own at the bottom left -- a sentence about the Opponents control
+    // sitting under the keyboard hints, five hundred pixels from the buttons
+    // it describes. It read as a footnote. Wrapped with its own segment it
+    // reads as the label it is.
+    this.difficultyHint = el('div', 'sg-opts__hint', diffWrap, '')
+
     const controls = el('div', 'sg-controls', opts)
     this.fillControlHint(controls)
     this.startBtn = button('sg-btn sg-btn--gold sg-btn--start', opts, 'Start Race')
@@ -1218,6 +1266,7 @@ class FrontEndImpl implements FrontEnd {
         chassisId: this.chassisId,
         pilotId: this.pilotId,
         quality: this.quality,
+        difficulty: this.difficulty,
       })
     })
     this.rematchBtn.addEventListener('click', () => this.onRematch())
@@ -1318,6 +1367,7 @@ class FrontEndImpl implements FrontEnd {
     this.selectChassis(this.chassisId)
     this.selectPilot(this.pilotId)
     this.selectQuality(this.quality)
+    this.selectDifficulty(this.difficulty)
   }
 
   /** One `KEY / value` block in the circuit panel. Returns the value node. */
@@ -2063,6 +2113,22 @@ class FrontEndImpl implements FrontEnd {
       // A service that will not build is the lobby screen's problem to
       // report, not a reason a chassis cannot be selected.
     }
+  }
+
+  /**
+   * Pick the AI difficulty, paint the segment, and remember it.
+   *
+   * Written through immediately rather than on Start, so a player who opens
+   * the garage, sets Expert and then backs out to the title screen has still
+   * set Expert. The alternative -- commit on Start -- loses the choice for
+   * anyone who changes their mind about the CAR after changing it about the
+   * difficulty, which is most people.
+   */
+  private selectDifficulty(d: Difficulty): void {
+    this.difficulty = d
+    writeStore(LS_DIFFICULTY, d)
+    for (const b of this.difficultyBtns) b.classList.toggle('is-sel', b.dataset.diff === d)
+    this.difficultyHint.textContent = DIFFICULTY_SPECS[d].blurb
   }
 
   private selectQuality(q: QualityTier): void {

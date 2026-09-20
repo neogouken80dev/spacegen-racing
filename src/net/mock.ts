@@ -61,6 +61,7 @@ import {
 import { CHASSIS } from '../content/chassis'
 import { PILOTS, PILOTS_BY_ID } from '../content/pilots'
 import { TRACKS } from '../content/tracks/index'
+import { asDifficulty, skillForSlot, type Difficulty } from '../content/difficulty'
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -460,7 +461,12 @@ function cleanSeries(p: SeriesPlan | undefined): SeriesPlan {
     if (ids.length >= length) break
     if (!ids.includes(id)) ids.push(id)
   }
-  return { length, trackIds: ids, laps: Math.max(1, Math.min(20, Math.floor(p?.laps ?? 3) || 3)) }
+  return {
+    length,
+    trackIds: ids,
+    laps: Math.max(1, Math.min(20, Math.floor(p?.laps ?? 3) || 3)),
+    difficulty: asDifficulty(p?.difficulty),
+  }
 }
 
 const CHASSIS_IDS: readonly string[] = CHASSIS.map((c) => c.id)
@@ -724,6 +730,16 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
     }
   }
 
+  /** See the note at the point of use. Three Normals to one of each other. */
+  const DIFFICULTY_MIX: readonly Difficulty[] =
+    ['normal', 'easy', 'normal', 'hard', 'normal', 'expert']
+  /** The digits out of an id like `lb-14`, so the mix walks rather than
+   *  clumping. Non-numeric ids fall back to 0, which is Normal. */
+  const idNumber = (id: string): number => {
+    const n = Number(id.replace(/^\D+/, ''))
+    return Number.isFinite(n) ? Math.abs(Math.floor(n)) : 0
+  }
+
   function makeLobby(at: number, seeded: boolean): MockLobby {
     const id = nextId('lb-')
     const maxPlayers = pickOne([4, 6, 8, 8])
@@ -746,6 +762,19 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
         length: pickOne([1, 1, 1, 3, 3, 5, 8] as const),
         trackIds: [pickOne(TRACK_IDS)],
         laps: pickOne([3, 3, 5, 5, 7]),
+        // WEIGHTED TOWARD NORMAL, AND DRAWN WITHOUT TOUCHING THE RNG.
+        //
+        // A browser full of Expert rooms looks like a different game from the
+        // one the player just came from, so the mix is three Normals to one
+        // of everything else. It is indexed off the lobby id rather than
+        // `pickOne` for a reason that cost a test: this world is a FIXTURE,
+        // seeded, and a dozen screenshots and `net.test.ts` depend on what
+        // seed 707 produces. One extra draw inside this loop shifted every
+        // subsequent value and a test asserting "about one host in six never
+        // answers a ping" found none at all. A generator that other things
+        // are pinned against is append-only in its RNG calls, not in its
+        // fields.
+        difficulty: DIFFICULTY_MIX[idNumber(id) % DIFFICULTY_MIX.length],
       }),
       round: 0,
       standings: [],
@@ -840,6 +869,7 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
   function summary(lb: MockLobby): LobbySummary {
     const host = lb.members.find((m) => m.playerId === lb.hostId)
     return {
+      difficulty: lb.series.difficulty,
       id: lb.id,
       name: lb.name,
       // The id as well as the name, so a browser row can tell YOUR lobby from
@@ -939,7 +969,7 @@ export function createMockWorld(opts: MockWorldOptions = {}): MockWorld {
         // at exactly the pace it would in either -- and every client is handed
         // the number rather than recomputing it, which is what stops two
         // clients running different AI and desyncing from frame one.
-        aiSkill: 2 + (grid.length % 3),
+        aiSkill: skillForSlot(lb.series.difficulty, grid.length),
       })
     }
     // The worst ping IN THE ROOM, with the host's own 0 included and an

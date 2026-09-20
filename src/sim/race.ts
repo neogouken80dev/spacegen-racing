@@ -13,6 +13,7 @@ import {
 import { TUNING as T } from '../content/tuning'
 import { ITEM_PARAMS, ITEM_ORDER, itemWeightsForPosition } from '../content/items'
 import { getDerived, getLocomotion, CHASSIS } from '../content/chassis'
+import { bandFor } from '../content/difficulty'
 
 const DT = T.sim.dt
 
@@ -425,9 +426,8 @@ export class Race {
    * random makes the first corner read as noise.
    */
   private aiRocketStart(r: RacerState): InputFrame {
-    const skill = clamp(r.aiSkill, 0, 4)
     const rng = this.aiRng[r.id]
-    const sharp = 0.12 + skill * 0.06
+    const sharp = bandFor(r.aiSkill).rocket
     const n = rng.next()
     const react = n < sharp
       // PERFECT: never earlier than the light, so the AI cannot fluke a jump.

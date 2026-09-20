@@ -110,6 +110,9 @@ import { CHASSIS_BY_ID } from '../content/chassis'
 import { PILOTS_BY_ID } from '../content/pilots'
 import { TRACKS, TRACKS_BY_ID } from '../content/tracks'
 import { copyFor } from './trackCopy'
+import {
+  DEFAULT_DIFFICULTY, DIFFICULTIES, DIFFICULTY_SPECS, type Difficulty,
+} from '../content/difficulty'
 
 export type LobbyScreenId = 'browser' | 'create' | 'room'
 
@@ -498,6 +501,17 @@ class LobbyScreensImpl implements LobbyScreens {
    *  is one race, and a create screen that defaults to forty minutes is one
    *  that gets backed out of. */
   private cSeries: SeriesLength = 1
+  /**
+   * How hard the AI filling the empty slots will drive.
+   *
+   * Normal by default and not the host's own single-race setting, because
+   * this is a choice being made ON BEHALF OF everyone who joins. A host who
+   * plays Expert alone would otherwise publish an Expert room without ever
+   * deciding to, and the people who joined it would find out on the grid.
+   */
+  private cDifficulty: Difficulty = DEFAULT_DIFFICULTY
+  private readonly cDiffs: HTMLButtonElement[] = []
+  private readonly cDiffHint: HTMLElement
   private creating = false
 
   // --- room ---------------------------------------------------------------
@@ -760,6 +774,19 @@ class LobbyScreensImpl implements LobbyScreens {
       this.cLens.push(btn)
     }
     this.cSeriesHint = el('div', 'sglb__hint', cBody, '')
+
+    // THE AI FIELD. Below Length because it is a smaller decision, above the
+    // circuit because it applies to every round of the series rather than to
+    // one of them.
+    el('div', 'sglb__k', cBody, 'Opponents')
+    const diffGrp = el('div', 'sglb__seg', cBody)
+    for (const d of DIFFICULTIES) {
+      const btn = button('sglb__segBtn', diffGrp, DIFFICULTY_SPECS[d].label)
+      btn.dataset.diff = d
+      btn.addEventListener('click', () => { this.cDifficulty = d; this.paintCreate() })
+      this.cDiffs.push(btn)
+    }
+    this.cDiffHint = el('div', 'sglb__hint', cBody, '')
 
     this.cTrackK = el('div', 'sglb__k', cBody, 'Circuit')
     const trkGrid = el('div', 'sglb__trackgrid', cBody)
@@ -1611,6 +1638,8 @@ class LobbyScreensImpl implements LobbyScreens {
     for (const b of this.cTracks) b.classList.toggle('is-on', b.dataset.track === this.cTrackId)
     for (const b of this.cLaps) b.classList.toggle('is-on', b.dataset.laps === String(this.cLapCount))
     for (const b of this.cLens) b.classList.toggle('is-on', b.dataset.series === String(this.cSeries))
+    for (const b of this.cDiffs) b.classList.toggle('is-on', b.dataset.diff === this.cDifficulty)
+    this.cDiffHint.textContent = DIFFICULTY_SPECS[this.cDifficulty].blurb
 
     const series = this.cSeries > 1
     // THE WORD "CIRCUIT" CHANGES MEANING WITH THE LENGTH, so the label does
@@ -1679,6 +1708,7 @@ class LobbyScreensImpl implements LobbyScreens {
         length: this.cSeries,
         trackIds: this.plannedTracks(),
         laps: this.cLapCount,
+        difficulty: this.cDifficulty,
       },
     }
     const res = await svc.create(opts)

@@ -59,6 +59,8 @@
 // Identity
 // ---------------------------------------------------------------------------
 
+import type { Difficulty } from '../content/difficulty'
+
 /**
  * A player, as the server knows them.
  *
@@ -224,6 +226,9 @@ export interface LobbySummary {
   /** 1 for a single race. A browser row says "Round 2 of 5" from these two. */
   seriesLength: SeriesLength
   seriesRound: number
+  /** So a player can judge the room before joining it. Display only -- see
+   *  the note on `SeriesPlan.difficulty`. */
+  difficulty: Difficulty
   status: LobbyStatus
   /**
    * Round-trip to the HOST, milliseconds, or null while it is being measured.
@@ -323,6 +328,19 @@ export interface SeriesPlan {
   /** Laps per round. One value for the series: a 3-lap opener and a 7-lap
    *  finale is a fine idea and a different feature. */
   laps: number
+  /**
+   * How hard the AI that fills the empty slots drives.
+   *
+   * IT IS NOT IN THE START PACKET AND MUST NOT BE. The packet carries per-slot
+   * `aiSkill`, which is what the sim actually consumes; a difficulty NAME
+   * beside it would be a second source of truth for the same thing, and a
+   * guest whose build mapped the name to different bands would run a different
+   * field and desync at the first hashed frame. This lives on the lobby so the
+   * host can choose it and the browser can show it. The grid is built from it
+   * once, at start, by the host -- and `difficultyOfGrid` reads the name back
+   * off the published skills wherever a screen needs to say it.
+   */
+  difficulty: Difficulty
 }
 
 /** One driver's line in the series table, between rounds and at the end. */

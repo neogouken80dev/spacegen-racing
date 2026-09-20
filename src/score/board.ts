@@ -79,9 +79,9 @@ function sanitise(raw: unknown): ScoreEntry | null {
   }
 }
 
-function read(trackId: string): ScoreEntry[] {
+function read(boardKey: string): ScoreEntry[] {
   try {
-    const raw = window.localStorage.getItem(PREFIX + trackId)
+    const raw = window.localStorage.getItem(PREFIX + boardKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as Stored
     if (!parsed || parsed.v !== VERSION || !Array.isArray(parsed.rows)) return []
@@ -98,10 +98,10 @@ function read(trackId: string): ScoreEntry[] {
   }
 }
 
-function write(trackId: string, rows: ScoreEntry[]): void {
+function write(boardKey: string, rows: ScoreEntry[]): void {
   try {
     const payload: Stored = { v: VERSION, rows }
-    window.localStorage.setItem(PREFIX + trackId, JSON.stringify(payload))
+    window.localStorage.setItem(PREFIX + boardKey, JSON.stringify(payload))
   } catch { /* quota or blocked storage -- the run is simply not recorded */ }
 }
 
@@ -117,12 +117,16 @@ class LocalScoreStore implements ScoreStore {
     return score > rows[limit - 1].score
   }
 
-  async submit(entry: ScoreEntry, limit: number): Promise<number> {
-    const rows = read(entry.trackId)
+  async submit(boardKey: string, entry: ScoreEntry, limit: number): Promise<number> {
+    // The key is passed in rather than taken from `entry.trackId`, which is
+    // the whole point of the change: those are the same string on Normal and
+    // different strings everywhere else, and the row has to keep displaying
+    // the track while the board files it under the difficulty.
+    const rows = read(boardKey)
     rows.push(entry)
     rows.sort(compare)
     const kept = rows.slice(0, limit)
-    write(entry.trackId, kept)
+    write(boardKey, kept)
     const rank = kept.indexOf(entry)
     return rank < 0 ? 0 : rank + 1
   }

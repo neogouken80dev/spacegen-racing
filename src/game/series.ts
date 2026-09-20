@@ -234,7 +234,9 @@ export function seriesRanking(rows: readonly SeriesStanding[]): StandingRow[] {
       }),
     })
   }
-  const state: CircuitState = { grid, rounds }
+  // A preview built for the standings screenshot, not a real championship.
+  // Normal because nothing here is raced.
+  const state: CircuitState = { grid, rounds, difficulty: 'normal' }
   return circuitStandings(state)
 }
 

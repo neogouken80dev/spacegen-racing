@@ -100,6 +100,10 @@ import {
 } from './attract'
 import { clamp01 } from '../sim/math'
 import type { VfxSystem, TrackVisual, EnvironmentVisual, CrosswindFrame } from '../render/api'
+import {
+  asDifficulty, DEFAULT_DIFFICULTY, difficultyOfGrid, scopeFor, skillForSlot,
+  type Difficulty,
+} from '../content/difficulty'
 
 const DT = T.sim.dt
 const RACER_COUNT = 8
@@ -158,10 +162,19 @@ interface RenderRacer {
 /**
  * The pace a grid slot with no published skill drives at.
  *
- * `2 + (slot % 3)` is the expression game/main.ts uses for a single race,
- * game/circuit.ts reproduces for a championship round and net/mock.ts publishes
- * for an AI slot, so a car filling a multiplayer grid drives at exactly the
- * pace it would anywhere else in the game.
+ * `skillForSlot` is the one function that turns a difficulty and a grid slot
+ * into an AI band, for a single race, a championship round and a multiplayer
+ * fill alike -- so a car standing in for a dropped peer drives at exactly the
+ * pace it would anywhere else in the game. It used to be the expression
+ * `2 + (slot % 3)` written out longhand in six places, which is how a pace
+ * change reaches five of them and not the sixth.
+ *
+ * IT STANDS IN AT NORMAL UNLESS TOLD OTHERWISE, and the caller in
+ * `multiplayerSimConfig` does not tell it otherwise. A difficulty describes
+ * the AI FIELD the host chose to race against; a seat a person was sitting in
+ * until ten seconds ago is not part of that field, and promoting it to Expert
+ * because the room was Expert would hand the disconnected player's car an
+ * advantage nobody asked for over the people still racing.
  *
  * It is needed at all because of the milestone below: a HUMAN slot publishes
  * `aiSkill: null` (a person's skill is their own business) and, with no
@@ -169,8 +182,8 @@ interface RenderRacer {
  * slot number rather than invented, so every client computes the same number
  * from the same packet and the stand-in cannot itself be a source of divergence.
  */
-export function standInSkill(slot: number): number {
-  return 2 + (slot % 3)
+export function standInSkill(slot: number, difficulty: Difficulty = 'normal'): number {
+  return skillForSlot(difficulty, slot)
 }
 
 /**
@@ -333,6 +346,11 @@ export async function bankAward(
   return res.value
 }
 
+
+/** The single-race difficulty. Lobby and circuit difficulties live elsewhere
+ *  on purpose -- see the field comment on `Game.difficulty`. */
+const LS_DIFFICULTY = 'sg.difficulty'
+
 export class Game {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -419,6 +437,17 @@ export class Game {
   private lastTime = 0
   private localId = 0
   private selection = { chassisId: 'solaire', pilotId: 'socket' }
+  /**
+   * How hard the AI field drives in a single race the player starts here.
+   *
+   * NOT read by the multiplayer path and not read by a circuit in progress.
+   * A lobby's difficulty is the HOST's and rides the published grid; a
+   * circuit's is frozen into its save at the moment it was started. Both of
+   * those are promises to somebody -- the room, or the player three rounds
+   * into a championship -- and a settings row must not be able to break them
+   * halfway through.
+   */
+  private difficulty: Difficulty = DEFAULT_DIFFICULTY
 
   /**
    * THE GRAND CIRCUIT.
@@ -691,8 +720,19 @@ export class Game {
     this.circuit = loadCircuit()
     this.publishCircuit()
 
+    // Read once at boot, like every other saved selection. A blocked or
+    // partitioned localStorage leaves it at Normal, which is the right
+    // failure: the pace the game is balanced around.
+    let savedDifficulty: string | null = null
+    try { savedDifficulty = window.localStorage.getItem(LS_DIFFICULTY) } catch { /* blocked */ }
+    this.difficulty = asDifficulty(savedDifficulty)
+
     this.frontEnd.onStart = (sel) => {
       this.selection = { chassisId: sel.chassisId, pilotId: sel.pilotId }
+      // Taken from the selection, not re-read from storage. The garage wrote
+      // it there when the player pressed a button; reading it back would be a
+      // second source for the same fact and a second chance to disagree.
+      this.difficulty = sel.difficulty
       // LEAVING THE LOBBY IS PRESSING START ON THE GARAGE, and it is the only
       // thing that is. Everything else that re-enters startRace -- Rematch,
       // the pause menu's Restart -- deliberately keeps the lobby race, so this
@@ -1171,7 +1211,11 @@ export class Game {
       chassisIds: Array.from({ length: n }, (_, i) => CHASSIS[i % CHASSIS.length].id),
       pilotIds: Array.from({ length: n }, (_, i) => PILOTS[i % PILOTS.length].id),
       localRacerIndex: -1,
-      aiSkill: Array.from({ length: n }, (_, i) => 2 + (i % 3)),
+      // The title-screen attract race is always Normal. It is scenery, nobody
+    // is scored against it, and a player who had set Expert would otherwise
+    // watch a menu background they cannot influence being driven at a pace
+    // that says something about their own setting. It says nothing.
+    aiSkill: Array.from({ length: n }, (_, i) => skillForSlot('normal', i)),
     }
 
     this.race = new Race(this.track, config)
@@ -1654,7 +1698,7 @@ export class Game {
           chassisIds.push(pool[(i - 1) % pool.length].id)
           pilotIds.push(PILOTS[i % PILOTS.length].id)
         }
-        aiSkill.push(i === 0 ? 0 : 2 + (i % 3))
+        aiSkill.push(i === 0 ? 0 : skillForSlot(this.difficulty, i))
       }
     }
 
@@ -2323,6 +2367,34 @@ export class Game {
    * changing, and a screen that only works when the answer is synchronous would
    * have to be rewritten on that day.
    */
+  /**
+   * The difficulty the race that just finished was ACTUALLY run at.
+   *
+   * Read back off the grid rather than off `this.difficulty`, because three
+   * different things choose a field and only one of them is the settings row:
+   * a circuit round uses the difficulty frozen into its save, a multiplayer
+   * round uses the host's, and a single race uses the player's. All three
+   * agree on one thing -- the `aiSkill` array the sim was handed -- so that is
+   * what gets asked. A record filed under the wrong board is worse than no
+   * record, and it is exactly the bug that three sources of truth produce.
+   *
+   * ONLY THE AI SLOTS. The local player's entry in `aiSkill` is a placeholder
+   * that `stepAI` never reads -- it is 0 in a single race, which is band 0,
+   * which would make every race look like Easy.
+   *
+   * Falls back to the setting for a grid that matches no tier: a hand-edited
+   * save, or a guest on a build whose ladder differs. `difficultyOfGrid`
+   * returning null is it refusing to guess, and guessing here would file the
+   * run somewhere arbitrary rather than somewhere merely stale.
+   */
+  private raceDifficulty(): Difficulty {
+    const race = this.race
+    if (!race) return this.difficulty
+    const skills: number[] = []
+    for (const r of race.state.racers) if (r.isAI) skills.push(r.aiSkill)
+    return difficultyOfGrid(skills) ?? this.difficulty
+  }
+
   private async publishScore(): Promise<void> {
     const race = this.race
     if (!race) return
@@ -2359,10 +2431,17 @@ export class Game {
      * row came from different runs, which is a worse lie than a missing row.
      */
     const comparable = race.config.totalLaps === T.race.totalLaps
+    const difficulty = this.raceDifficulty()
+    // The LOCAL board's key. The world board below is deliberately still keyed
+    // by track alone: it is a single global ranking and splitting it four ways
+    // would quarter every board's population, which for a game with one player
+    // on it today means four empty boards instead of one thin one. Whether the
+    // world board should segregate is a product question, not a storage one.
+    const boardKey = scopeFor(trackId, difficulty)
     try {
       if (!comparable) {
-        this.frontEnd.setRecords(await this.records.get(trackId), [])
-        this.frontEnd.setBoard(await this.board.top(trackId, BOARD_SIZE), 0, false)
+        this.frontEnd.setRecords(await this.records.get(trackId, difficulty), [])
+        this.frontEnd.setBoard(await this.board.top(boardKey, BOARD_SIZE), 0, false)
         this.frontEnd.setGlobal({ status: 'loading', rows: [], rank: 0 })
         void this.global.top(trackId).then((b) => this.frontEnd.setGlobal(b))
         return
@@ -2378,6 +2457,7 @@ export class Game {
       try { savedName = window.localStorage.getItem('sg.name') || '' } catch { /* blocked */ }
       const broken = await this.records.submit({
         trackId,
+        difficulty,
         chassisId: local.chassisId,
         pilotId: local.pilotId,
         name: savedName,
@@ -2388,10 +2468,10 @@ export class Game {
         bestCombo: this.lastBestCombo,
         at: Date.now(),
       })
-      this.frontEnd.setRecords(await this.records.get(trackId), broken)
+      this.frontEnd.setRecords(await this.records.get(trackId, difficulty), broken)
 
-      const qualifies = await this.board.qualifies(trackId, score, BOARD_SIZE)
-      const rows = await this.board.top(trackId, BOARD_SIZE)
+      const qualifies = await this.board.qualifies(boardKey, score, BOARD_SIZE)
+      const rows = await this.board.top(boardKey, BOARD_SIZE)
       this.frontEnd.setBoard(rows, 0, qualifies)
 
       // THE GLOBAL BOARD IS READ, NOT POSTED TO, UNTIL THERE IS A NAME.
@@ -2404,7 +2484,7 @@ export class Game {
       this.frontEnd.setGlobal({ status: 'loading', rows: [], rank: 0 })
       void this.global.top(trackId).then((b) => this.frontEnd.setGlobal(b))
       this.frontEnd.onSaveScore = async (name: string): Promise<void> => {
-        const rank = await this.board.submit({
+        const rank = await this.board.submit(boardKey, {
           name,
           score,
           trackId,
@@ -2415,13 +2495,13 @@ export class Game {
           bestCombo: this.lastBestCombo,
           at: Date.now(),
         }, BOARD_SIZE)
-        const after = await this.board.top(trackId, BOARD_SIZE)
+        const after = await this.board.top(boardKey, BOARD_SIZE)
         this.frontEnd.setBoard(after, rank, false)
         // Put the name on the records this race took. NOT by re-submitting the
         // run: an exact tie does not beat the standing record, so a second
         // submit of the same figures is a no-op and the name never lands.
-        await this.records.rename(trackId, broken, name)
-        this.frontEnd.setRecords(await this.records.get(trackId), broken)
+        await this.records.rename(trackId, difficulty, broken, name)
+        this.frontEnd.setRecords(await this.records.get(trackId, difficulty), broken)
         // And the world board, now the run has someone's name on it. A DNF has
         // no race time but may still own a fast lap, which is worth posting.
         this.frontEnd.setGlobal(await this.global.submit({

@@ -139,6 +139,8 @@
  * `ui/settings.ts` and `game/input.ts`. A wallet that takes the game down in a
  * private window is infinitely worse than a wallet that forgets a balance.
  */
+import { DEFAULT_DIFFICULTY, DIFFICULTY_SPECS, type Difficulty } from '../content/difficulty'
+
 
 /** Flat credits for getting it home at all, before the repeat multiplier. */
 export const FINISH_CREDITS = 20
@@ -190,6 +192,16 @@ export interface PayoutRun {
   trackId: string
   score: number
   raceTime: number
+  /**
+   * The field this was raced against. Optional, and Normal when absent.
+   *
+   * Optional because `PayoutRun` is deliberately a structural subset of
+   * `RunRecord` and several tests build one by hand; a required field here
+   * would break all of them to say "Normal", which is what absent already
+   * means. `RunRecord` itself requires it, so nothing on the real path can
+   * forget it.
+   */
+  difficulty?: Difficulty
   /** Epoch ms. Optional, and used only to refuse an accidental double bank. */
   at?: number
 }
@@ -204,11 +216,16 @@ export interface Payout {
   skill: number
   /** The repeat multiplier that was applied, 0.40..1. */
   repeat: number
+  /** The difficulty multiplier, 0.70..1.80. Broken out so the results screen
+   *  can show WHY an Expert run paid what it did. */
+  difficulty: number
   /** True if `MAX_PER_RACE` bound. Worth showing, and worth investigating. */
   capped: boolean
 }
 
-const NOTHING: Payout = { credits: 0, finish: 0, skill: 0, repeat: 1, capped: false }
+const NOTHING: Payout = {
+  credits: 0, finish: 0, skill: 0, repeat: 1, difficulty: 1, capped: false,
+}
 
 /**
  * The repeat multiplier for racing `trackId` given the recent finishes.
@@ -237,13 +254,26 @@ export function payout(run: PayoutRun, history: readonly string[] = []): Payout 
   const score = Number.isFinite(run.score) ? Math.max(0, run.score) : 0
   const skill = SKILL_CREDITS * Math.sqrt(score / REF_SCORE)
   const repeat = repeatFactor(run.trackId, history)
-  const raw = (FINISH_CREDITS + skill) * repeat
+  // DIFFICULTY MULTIPLIES BEFORE THE CAP, NOT AFTER.
+  //
+  // `MAX_PER_RACE` bounds what one race can be worth, and that bound is a
+  // property of the economy rather than of the field -- so an Expert run big
+  // enough to reach it is capped at the same number an Easy one would be,
+  // which is what a cap is for. Multiplying afterwards would let Expert earn
+  // 1.8x the ceiling and quietly turn one cap into four.
+  //
+  // The real work happens at the other end. Easy pays 0.70 because a field
+  // that brakes early for you is otherwise the correct way to farm credits,
+  // and a ladder whose bottom rung pays best is a ladder nobody climbs.
+  const diff = DIFFICULTY_SPECS[run.difficulty ?? DEFAULT_DIFFICULTY].payout
+  const raw = (FINISH_CREDITS + skill) * repeat * diff
   const capped = raw > MAX_PER_RACE
   return {
     credits: Math.max(0, Math.round(Math.min(raw, MAX_PER_RACE))),
     finish: FINISH_CREDITS,
     skill,
     repeat,
+    difficulty: diff,
     capped,
   }
 }

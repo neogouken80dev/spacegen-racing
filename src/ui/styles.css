@@ -2644,6 +2644,40 @@
   gap: 8px;
 }
 
+/*
+ * The Opponents control and the line that explains it, as one object.
+ *
+ * A column rather than two members of `.sg-opts`, because `.sg-opts` is a
+ * wrapping flex row: a hint dropped straight into it takes a line of its own
+ * at the bottom LEFT, under the keyboard hints and half a screen from the
+ * buttons it describes, where it reads as a footnote about the page rather
+ * than a label on the control. Kept together, it moves with the segment when
+ * the row wraps, which is the behaviour a caption has to have.
+ *
+ * `align-items: flex-end` so the caption's right edge lines up with the last
+ * button rather than dangling past it, and `max-width` so the longest blurb
+ * cannot stretch the column wider than the segment it belongs to.
+ */
+.sg-opts__diff {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.sg-opts__hint {
+  max-width: 42ch;
+  text-align: right;
+  font-size: clamp(11px, 1.35vmin, 14px);
+  line-height: 1.4;
+  color: var(--sg-dim);
+}
+
+/* Never empty in practice -- a difficulty is always selected -- but a future
+ * state with no caption should collapse rather than leave a gap the eye reads
+ * as a missing element. */
+.sg-opts__hint:empty { display: none; }
+
 .sg-seg__k {
   font-family: var(--sg-display);
   font-size: var(--sg-fs-micro);

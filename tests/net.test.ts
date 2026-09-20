@@ -66,7 +66,7 @@ afterEach(() => {
  * single race.
  */
 function single(trackId: string, laps = 3): SeriesPlan {
-  return { length: 1, trackIds: [trackId], laps }
+  return { length: 1, trackIds: [trackId], laps, difficulty: 'normal' }
 }
 
 /** A world with its clock stopped, so a test ticks it by hand. */
@@ -1108,7 +1108,7 @@ async function series(seed: number, length: SeriesLength, trackIds: string[]) {
   host.onStart = (p) => starts.push(p)
   const room = unwrap(await settle(host.create({
     name: 'Series', region: 'eu-west', maxPlayers: 8, private: false,
-    series: { length, trackIds, laps: 3 },
+    series: { length, trackIds, laps: 3, difficulty: 'normal' },
   }), 10))
   unwrap(await settle(guest.join(room.id), 10))
   await vi.advanceTimersByTimeAsync(10)
@@ -1241,7 +1241,7 @@ describe('a lobby of length 1 is a single race and nothing else', () => {
       name: 'Sloppy', region: 'oce', maxPlayers: 4, private: false,
       // Three rounds asked for, one circuit named, and a duplicate and an id
       // this build does not have thrown in.
-      series: { length: 3, trackIds: ['neonspire', 'neonspire', 'not-a-track'], laps: 3 },
+      series: { length: 3, trackIds: ['neonspire', 'neonspire', 'not-a-track'], laps: 3, difficulty: 'normal' },
     }), 10))
     expect(room.series.length).toBe(3)
     expect(room.series.trackIds).toHaveLength(3)
@@ -1256,7 +1256,7 @@ describe('a lobby of length 1 is a single race and nothing else', () => {
     // rather than to a series that never ends.
     const room = unwrap(await settle(svc.create({
       name: 'Seven', region: 'oce', maxPlayers: 4, private: false,
-      series: { length: 7 as SeriesLength, trackIds: ['rustfall'], laps: 3 },
+      series: { length: 7 as SeriesLength, trackIds: ['rustfall'], laps: 3, difficulty: 'normal' },
     }), 10))
     expect(SERIES_LENGTHS).toContain(room.series.length)
     expect(room.series.length).toBe(1)

@@ -66,6 +66,7 @@ import {
   type RaceTransport, type Result, type SeriesStanding,
   type RoundResume,
 } from './types'
+import { DEFAULT_DIFFICULTY, skillForSlot } from '../content/difficulty'
 
 /** Eight cars, as `LOBBY_MAX_PLAYERS` and the whole of `Race` insist. */
 const GRID_SIZE = LOBBY_MAX_PLAYERS
@@ -2102,7 +2103,7 @@ export class LiveLobbyService implements LobbyService {
       region: rec?.region ?? 'na-west',
       private: rec?.private ?? false,
       joinCode: this.isHost ? rec?.code ?? null : null,
-      series: rec?.series ?? { length: 1, trackIds: [], laps: 3 },
+      series: rec?.series ?? { length: 1, trackIds: [], laps: 3, difficulty: DEFAULT_DIFFICULTY },
       round: this.round,
       standings: this.standings,
       maxPlayers: rec?.maxPlayers ?? GRID_SIZE,
@@ -2162,7 +2163,7 @@ export class LiveLobbyService implements LobbyService {
       // draws one: `joinCode: null` is what the room screen renders as "ask
       // the host", and an empty string would render as a code of no digits.
       joinCode: null,
-      series: rec?.series ?? { length: 1, trackIds: [], laps: 3 },
+      series: rec?.series ?? { length: 1, trackIds: [], laps: 3, difficulty: DEFAULT_DIFFICULTY },
       round: this.round,
       standings: this.standings,
       maxPlayers: rec?.maxPlayers ?? GRID_SIZE,
@@ -2346,7 +2347,10 @@ export class LiveLobbyService implements LobbyService {
         // PUBLISHED, NOT DERIVED, which types.ts spends a paragraph on: it is
         // an input to the physics exactly as the seed is, and a client that
         // invented its own would diverge from frame one.
-        aiSkill: 2 + (slot % 3),
+        // The HOST's difficulty, resolved to a band here and published as a
+        // number. See SeriesPlan.difficulty for why the name does not ride
+        // the start packet alongside it.
+        aiSkill: skillForSlot(this.record?.series.difficulty ?? DEFAULT_DIFFICULTY, slot),
       })
     }
     const rec = this.record

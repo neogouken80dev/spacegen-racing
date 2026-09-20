@@ -15,7 +15,7 @@ import {
 } from '../src/score/records'
 
 const run = (over: Partial<RunRecord> = {}): RunRecord => ({
-  trackId: 'rustfall', chassisId: 'solaire', pilotId: 'socket', name: 'VIN',
+  trackId: 'rustfall', difficulty: 'normal', chassisId: 'solaire', pilotId: 'socket', name: 'VIN',
   bestLap: 55, raceTime: 170, score: 10000, bestCombo: 4, at: 1000, ...over,
 })
 

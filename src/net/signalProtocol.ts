@@ -58,6 +58,7 @@ import {
   type JoinError, type LobbyStatus, type LobbySummary, type RegionId,
   type SeriesLength, type SeriesPlan,
 } from './types'
+import { asDifficulty } from '../content/difficulty'
 
 /** Where the function is mounted. Imported by the client so there is one path. */
 export const SIGNAL_PATH = '/api/signal'
@@ -302,7 +303,7 @@ const isLength = (v: unknown): v is SeriesLength =>
 
 function cleanSeries(raw: unknown): SeriesPlan | null {
   if (!raw || typeof raw !== 'object') return null
-  const r = raw as { length?: unknown; trackIds?: unknown; laps?: unknown }
+  const r = raw as { length?: unknown; trackIds?: unknown; laps?: unknown; difficulty?: unknown }
   if (!isLength(r.length)) return null
   if (!Array.isArray(r.trackIds)) return null
   const ids: string[] = []
@@ -320,7 +321,7 @@ function cleanSeries(raw: unknown): SeriesPlan | null {
   const laps = typeof r.laps === 'number' && isFinite(r.laps)
     ? Math.max(1, Math.min(20, Math.round(r.laps)))
     : 3
-  return { length: r.length, trackIds: ids, laps }
+  return { length: r.length, trackIds: ids, laps, difficulty: asDifficulty(r.difficulty) }
 }
 
 const isStatus = (v: unknown): v is LobbyStatus =>
@@ -394,6 +395,7 @@ function livePeers(rec: LobbyRecord, now: number): SignalPeer[] {
 function toSummary(rec: LobbyRecord, now: number): LobbySummary {
   const n = livePeers(rec, now).length
   return {
+    difficulty: rec.series.difficulty,
     id: rec.id,
     name: rec.name,
     hostId: rec.hostId,

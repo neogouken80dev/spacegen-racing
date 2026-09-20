@@ -18,6 +18,7 @@ import { PILOTS } from '../src/content/pilots'
 import { resetAI } from '../src/sim/ai'
 import { emptyInput } from '../src/sim/types'
 import type { SimConfig } from '../src/sim/types'
+import { skillForSlot } from '../src/content/difficulty'
 
 export function makeConfig(seed: number, racerCount = 8, laps = 3): SimConfig {
   return {
@@ -28,7 +29,11 @@ export function makeConfig(seed: number, racerCount = 8, laps = 3): SimConfig {
     chassisIds: Array.from({ length: racerCount }, (_, i) => CHASSIS[i % CHASSIS.length].id),
     pilotIds: Array.from({ length: racerCount }, (_, i) => PILOTS[i % PILOTS.length].id),
     localRacerIndex: -1, // all AI
-    aiSkill: Array.from({ length: racerCount }, (_, i) => 2 + (i % 3)),
+    // NORMAL, AND THE GATE WOULD BE MEANINGLESS ON ANYTHING ELSE. The pinned
+    // hash is a statement about one field at one pace; racing the gate at a
+    // difficulty would make it a statement about the ladder instead, and a
+    // retune of Hard would go red here for no reason.
+    aiSkill: Array.from({ length: racerCount }, (_, i) => skillForSlot('normal', i)),
   }
 }
 

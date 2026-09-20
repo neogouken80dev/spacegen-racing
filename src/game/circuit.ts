@@ -70,6 +70,9 @@
  */
 import { CHASSIS } from '../content/chassis'
 import { PILOTS } from '../content/pilots'
+import {
+  asDifficulty, DEFAULT_DIFFICULTY, skillForSlot, type Difficulty,
+} from '../content/difficulty'
 
 /**
  * Points by finishing position, 1st through 8th. Settled with Vince; not a
@@ -119,16 +122,24 @@ const OPPONENTS: readonly { pilotId: string; chassisId: string }[] = [
 ]
 
 /**
- * AI skill per grid slot.
+ * AI skill per grid slot, at the difficulty the circuit was STARTED on.
  *
- * The same expression main.ts uses for a single race (`2 + (i % 3)` behind a
- * player at 0), reproduced rather than imported so a circuit's pace is
- * identical to a one-off race on the same circuit. Captured INTO the stored
- * grid so a later change to either formula cannot re-tune a series a player is
- * halfway through -- the saved circuit keeps the skills it was built with.
+ * This used to reproduce main.ts's expression rather than import it, so that a
+ * circuit's pace matched a one-off race. It imports `skillForSlot` now, which
+ * is the same guarantee held in one place instead of two -- and it has to be,
+ * because a difficulty that a circuit and a single race disagreed about would
+ * be a difficulty the player could not trust.
+ *
+ * STILL CAPTURED INTO THE STORED GRID, and that matters more now than it did.
+ * A saved circuit keeps the skills it was built with, so a player halfway
+ * through an Expert run finishes it on Expert even if they change the setting
+ * in between -- the championship they are a third of the way through is not a
+ * thing a settings row gets to retune under them. Slot 0 is the player and its
+ * skill is never read, because `stepAI` is not called for a car a person is
+ * driving.
  */
-function skillFor(slot: number): number {
-  return slot === 0 ? 0 : 2 + (slot % 3)
+function skillFor(slot: number, difficulty: Difficulty): number {
+  return slot === 0 ? 0 : skillForSlot(difficulty, slot)
 }
 
 export interface CircuitEntrant {
@@ -174,6 +185,17 @@ export interface RoundResult {
 export interface CircuitState {
   grid: CircuitEntrant[]
   rounds: RoundResult[]
+  /**
+   * The difficulty this championship was STARTED on, held for the whole run.
+   *
+   * Redundant with the grid -- every entrant's `aiSkill` already came from it
+   * -- and kept anyway, for two reasons. The standings screen wants to SAY
+   * "Expert", and `difficultyOfGrid` can only answer for a grid whose bands
+   * all fall inside one tier, which a hand-edited save need not. And a circuit
+   * saved before this field existed reads back as Normal, which is exactly
+   * what it was raced at, rather than as whatever the player has since set.
+   */
+  difficulty: Difficulty
 }
 
 /** One row of the championship table, already placed and already broken out. */
@@ -248,9 +270,13 @@ const MAX_PER_PILOT = 2
  * Deterministic in its inputs, so the same player choice always produces the
  * same field -- and it is called once per circuit anyway, the result stored.
  */
-export function buildGrid(localPilotId: string, localChassisId: string): CircuitEntrant[] {
+export function buildGrid(
+  localPilotId: string,
+  localChassisId: string,
+  difficulty: Difficulty,
+): CircuitEntrant[] {
   const grid: CircuitEntrant[] = [{
-    id: 0, pilotId: localPilotId, chassisId: localChassisId, aiSkill: skillFor(0),
+    id: 0, pilotId: localPilotId, chassisId: localChassisId, aiSkill: skillFor(0, difficulty),
   }]
   const taken = new Set<string>([localPilotId + '/' + localChassisId])
   const uses = new Map<string, number>([[localPilotId, 1]])
@@ -274,14 +300,18 @@ export function buildGrid(localPilotId: string, localChassisId: string): Circuit
     }
     taken.add(pilotId + '/' + chassisId)
     uses.set(pilotId, used(pilotId) + 1)
-    grid.push({ id: i + 1, pilotId, chassisId, aiSkill: skillFor(i + 1) })
+    grid.push({ id: i + 1, pilotId, chassisId, aiSkill: skillFor(i + 1, difficulty) })
   }
   return grid
 }
 
 /** A fresh circuit with nothing raced. */
-export function newCircuit(localPilotId: string, localChassisId: string): CircuitState {
-  return { grid: buildGrid(localPilotId, localChassisId), rounds: [] }
+export function newCircuit(
+  localPilotId: string,
+  localChassisId: string,
+  difficulty: Difficulty = DEFAULT_DIFFICULTY,
+): CircuitState {
+  return { grid: buildGrid(localPilotId, localChassisId, difficulty), rounds: [], difficulty }
 }
 
 /** Which circuit round `n` (0-based) is run on. */
@@ -376,7 +406,7 @@ export function applyRound(s: CircuitState, r: RoundResult): CircuitState {
     if (!f || !f.pilotId || !f.chassisId) return e
     return { ...e, pilotId: f.pilotId, chassisId: f.chassisId }
   })
-  return { grid, rounds: [...s.rounds, r] }
+  return { grid, rounds: [...s.rounds, r], difficulty: s.difficulty }
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +534,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
  * naming a chassis that no longer exists would reach `new Race()` and throw
  * there instead of here.
  */
-function readGrid(raw: unknown): CircuitEntrant[] | null {
+function readGrid(raw: unknown, difficulty: Difficulty): CircuitEntrant[] | null {
   if (!Array.isArray(raw) || raw.length !== CIRCUIT_GRID) return null
   const out: CircuitEntrant[] = []
   for (let i = 0; i < raw.length; i++) {
@@ -516,7 +546,7 @@ function readGrid(raw: unknown): CircuitEntrant[] | null {
     if (id !== i) return null
     if (!PILOTS.some((p) => p.id === pilotId)) return null
     if (!CHASSIS.some((c) => c.id === chassisId)) return null
-    out.push({ id, pilotId, chassisId, aiSkill: num(e.aiSkill, skillFor(i)) })
+    out.push({ id, pilotId, chassisId, aiSkill: num(e.aiSkill, skillFor(i, difficulty)) })
   }
   return out
 }
@@ -562,10 +592,14 @@ export function loadCircuit(): CircuitState | null {
     if (!p || typeof p !== 'object') return null
     if (num(p.v, -1) !== VERSION) return null
     if (str(p.sig) !== signature()) return null
-    const grid = readGrid(p.grid)
+    // A save written before difficulty existed has no field here, and Normal
+    // is not a default in the "pick something" sense -- it is what that
+    // circuit was actually raced at, because it was the only pace there was.
+    const difficulty = asDifficulty(p.difficulty)
+    const grid = readGrid(p.grid, difficulty)
     const rounds = readRounds(p.rounds)
     if (!grid || !rounds) return null
-    return { grid, rounds }
+    return { grid, rounds, difficulty }
   } catch {
     return null
   }
@@ -575,6 +609,7 @@ export function saveCircuit(s: CircuitState): void {
   try {
     window.localStorage.setItem(LS_KEY, JSON.stringify({
       v: VERSION, sig: signature(), grid: s.grid, rounds: s.rounds,
+      difficulty: s.difficulty,
     }))
   } catch {
     /* quota, private mode, partitioned storage — the circuit still plays out,
@@ -588,7 +623,9 @@ export function clearCircuit(): void {
 
 /** Exported for tests: the pure round-trip without touching storage. */
 export function serialise(s: CircuitState): string {
-  return JSON.stringify({ v: VERSION, sig: signature(), grid: s.grid, rounds: s.rounds })
+  return JSON.stringify({
+    v: VERSION, sig: signature(), grid: s.grid, rounds: s.rounds, difficulty: s.difficulty,
+  })
 }
 
 /** Exported for tests: the parse half of the round-trip. */
@@ -598,10 +635,14 @@ export function deserialise(raw: string): CircuitState | null {
     if (!p || typeof p !== 'object') return null
     if (num(p.v, -1) !== VERSION) return null
     if (str(p.sig) !== signature()) return null
-    const grid = readGrid(p.grid)
+    // A save written before difficulty existed has no field here, and Normal
+    // is not a default in the "pick something" sense -- it is what that
+    // circuit was actually raced at, because it was the only pace there was.
+    const difficulty = asDifficulty(p.difficulty)
+    const grid = readGrid(p.grid, difficulty)
     const rounds = readRounds(p.rounds)
     if (!grid || !rounds) return null
-    return { grid, rounds }
+    return { grid, rounds, difficulty }
   } catch {
     return null
   }

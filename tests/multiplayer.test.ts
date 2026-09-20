@@ -219,7 +219,7 @@ describe('the field comes from the packet', () => {
     // The stand-in is the same expression a single race and a circuit round use,
     // so a car filling a human's slot drives at a pace that already exists in
     // the game rather than one invented for multiplayer.
-    expect([0, 1, 2, 3, 4, 5, 6, 7].map(standInSkill)).toEqual([2, 3, 4, 2, 3, 4, 2, 3])
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((slot) => standInSkill(slot))).toEqual([2, 3, 4, 2, 3, 4, 2, 3])
   })
 })
 

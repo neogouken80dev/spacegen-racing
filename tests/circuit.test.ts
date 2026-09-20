@@ -40,7 +40,7 @@ function playFrom(seed: CircuitState, orders: number[][]): CircuitState {
   return s
 }
 
-const fresh = (): CircuitState => newCircuit('socket', 'solaire')
+const fresh = (): CircuitState => newCircuit('socket', 'solaire', 'normal')
 
 describe('the circuit itself', () => {
   it('runs every circuit on the roster exactly once', () => {
@@ -92,14 +92,14 @@ describe('the points table', () => {
 
 describe('the grid', () => {
   it('is eight cars with the player in slot 0', () => {
-    const g = buildGrid('socket', 'solaire')
+    const g = buildGrid('socket', 'solaire', 'normal')
     expect(g.length).toBe(CIRCUIT_GRID)
     expect(g[0]).toMatchObject({ id: 0, pilotId: 'socket', chassisId: 'solaire' })
     expect(g.map((e) => e.id)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
   })
 
   it('gives the player no AI skill and every opponent some', () => {
-    const g = buildGrid('socket', 'solaire')
+    const g = buildGrid('socket', 'solaire', 'normal')
     expect(g[0].aiSkill).toBe(0)
     for (const e of g.slice(1)) expect(e.aiSkill).toBeGreaterThan(0)
   })
@@ -114,7 +114,7 @@ describe('the grid', () => {
   it('never puts two identical cars on the grid, for any player choice', () => {
     for (const p of PILOTS) {
       for (const c of CHASSIS) {
-        const g = buildGrid(p.id, c.id)
+        const g = buildGrid(p.id, c.id, 'normal')
         const pairs = g.map((e) => e.pilotId + '/' + e.chassisId)
         expect(new Set(pairs).size, `${p.id}/${c.id} -> ${pairs.join(', ')}`).toBe(CIRCUIT_GRID)
       }
@@ -124,7 +124,7 @@ describe('the grid', () => {
   it('names only pilots and chassis that exist', () => {
     for (const p of PILOTS) {
       for (const c of CHASSIS) {
-        for (const e of buildGrid(p.id, c.id)) {
+        for (const e of buildGrid(p.id, c.id, 'normal')) {
           expect(PILOTS.some((x) => x.id === e.pilotId)).toBe(true)
           expect(CHASSIS.some((x) => x.id === e.chassisId)).toBe(true)
         }
@@ -136,7 +136,7 @@ describe('the grid', () => {
     for (const p of PILOTS) {
       for (const c of CHASSIS) {
         const counts = new Map<string, number>()
-        for (const e of buildGrid(p.id, c.id)) {
+        for (const e of buildGrid(p.id, c.id, 'normal')) {
           counts.set(e.pilotId, (counts.get(e.pilotId) ?? 0) + 1)
         }
         for (const [, n] of counts) expect(n).toBeLessThanOrEqual(2)
@@ -145,11 +145,11 @@ describe('the grid', () => {
   })
 
   it('is the same grid every time it is asked', () => {
-    expect(buildGrid('socket', 'solaire')).toEqual(buildGrid('socket', 'solaire'))
+    expect(buildGrid('socket', 'solaire', 'normal')).toEqual(buildGrid('socket', 'solaire', 'normal'))
   })
 
   it('reports a field whose opponents have drifted', () => {
-    const g = buildGrid('socket', 'solaire')
+    const g = buildGrid('socket', 'solaire', 'normal')
     const same = g.map((e) => ({ ...e }))
     expect(gridMismatch(g, same)).toEqual([])
     // The player's own car IS allowed to change between rounds.

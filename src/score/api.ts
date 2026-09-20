@@ -126,13 +126,31 @@ export interface ScoreEntry {
  * immediately, and a network one cannot, and the callers have to already be
  * shaped for the slow case or they will all need rewriting on the day.
  */
+/**
+ * ONE BOARD PER TRACK PER DIFFICULTY, AND THE KEY IS HOW.
+ *
+ * Every method below still takes a single string, and it is now a BOARD KEY
+ * rather than a track id -- `scopeFor(trackId, difficulty)`, which is the bare
+ * track id on Normal and `rustfall@hard` elsewhere. The store does not know
+ * what a difficulty is and does not need to: it keeps a list under a key.
+ *
+ * Doing it this way rather than adding a difficulty parameter to four methods
+ * is not laziness, it is the thing that makes the Normal boards survive
+ * untouched. A pre-difficulty board was set against the only field the game
+ * had, which is the Normal field, so its key is already right and nothing has
+ * to be migrated. See `scopeFor` in content/difficulty.ts.
+ *
+ * `ScoreEntry.trackId` stays the real track id, because that is what a row
+ * DISPLAYS. The key and the column are different facts and conflating them is
+ * how a board row ends up reading "RUSTFALL@HARD".
+ */
 export interface ScoreStore {
-  /** The top `limit` runs for a track, best first. */
-  top(trackId: string, limit: number): Promise<ScoreEntry[]>
+  /** The top `limit` runs for a board, best first. */
+  top(boardKey: string, limit: number): Promise<ScoreEntry[]>
   /** Would this score make the board? Lets the UI ask before prompting. */
-  qualifies(trackId: string, score: number, limit: number): Promise<boolean>
-  /** Record a run. Returns its 1-based rank, or 0 if it did not make the cut. */
-  submit(entry: ScoreEntry, limit: number): Promise<number>
-  /** Wipe one track's board, or all of them. */
-  clear(trackId?: string): Promise<void>
+  qualifies(boardKey: string, score: number, limit: number): Promise<boolean>
+  /** Record a run under `boardKey`. Returns its 1-based rank, or 0 for no cut. */
+  submit(boardKey: string, entry: ScoreEntry, limit: number): Promise<number>
+  /** Wipe one board, or all of them. */
+  clear(boardKey?: string): Promise<void>
 }

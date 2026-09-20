@@ -22,6 +22,7 @@
  */
 import type { ScoreStore } from './api'
 import { bankRun } from './wallet'
+import { scopeFor, type Difficulty } from '../content/difficulty'
 
 /** The four things worth remembering per circuit. */
 export type RecordId = 'fastestLap' | 'fastestRace' | 'highestScore' | 'bestCombo'
@@ -65,6 +66,16 @@ export type TrackRecords = Partial<Record<RecordId, RecordEntry>>
 /** One race's candidate figures, offered to every record at once. */
 export interface RunRecord {
   trackId: string
+  /**
+   * Which field this run was set against.
+   *
+   * A record is a claim about a lap, and a lap is only comparable to another
+   * lap run in the same traffic -- an Easy field brakes early and leaves the
+   * road clear, which is worth seconds a player did not drive for. So it is
+   * part of the KEY (see `scopeFor`), not a column: the Easy board and the
+   * Expert board are different boards rather than one board with an asterisk.
+   */
+  difficulty: Difficulty
   chassisId: string
   pilotId: string
   name: string
@@ -157,7 +168,7 @@ function sanitise(raw: unknown): RecordEntry | null {
  * answer that does not arrive immediately.
  */
 export interface RecordStore {
-  get(trackId: string): Promise<TrackRecords>
+  get(trackId: string, difficulty: Difficulty): Promise<TrackRecords>
   /** Apply a run. Returns which records it broke, in RECORD_ORDER. */
   submit(run: RunRecord): Promise<RecordId[]>
   /**
@@ -170,14 +181,14 @@ export interface RecordStore {
    * a real bug I wrote and then found by reading my own comment back, which is
    * why this exists as its own operation rather than a clever reuse of submit.
    */
-  rename(trackId: string, ids: readonly RecordId[], name: string): Promise<void>
+  rename(trackId: string, difficulty: Difficulty, ids: readonly RecordId[], name: string): Promise<void>
   clear(trackId?: string): Promise<void>
 }
 
 class LocalRecordStore implements RecordStore {
-  async get(trackId: string): Promise<TrackRecords> {
+  async get(trackId: string, difficulty: Difficulty): Promise<TrackRecords> {
     try {
-      const raw = window.localStorage.getItem(PREFIX + trackId)
+      const raw = window.localStorage.getItem(PREFIX + scopeFor(trackId, difficulty))
       if (!raw) return {}
       const parsed = JSON.parse(raw) as { v: number; r: Record<string, unknown> }
       if (!parsed || parsed.v !== VERSION || !parsed.r) return {}
@@ -211,18 +222,26 @@ class LocalRecordStore implements RecordStore {
     // takes the answer. `wallet.ts` is written for that day; this line is the
     // one that has to move on it.
     bankRun(run)
-    const prev = await this.get(run.trackId)
+    const prev = await this.get(run.trackId, run.difficulty)
     const { next, broken } = applyRun(prev, run)
     if (broken.length === 0) return []
     try {
-      window.localStorage.setItem(PREFIX + run.trackId, JSON.stringify({ v: VERSION, r: next }))
+      window.localStorage.setItem(
+        PREFIX + scopeFor(run.trackId, run.difficulty),
+        JSON.stringify({ v: VERSION, r: next }),
+      )
     } catch { /* quota or blocked storage -- the race still happened */ }
     return broken
   }
 
-  async rename(trackId: string, ids: readonly RecordId[], name: string): Promise<void> {
+  async rename(
+    trackId: string,
+    difficulty: Difficulty,
+    ids: readonly RecordId[],
+    name: string,
+  ): Promise<void> {
     if (ids.length === 0) return
-    const cur = await this.get(trackId)
+    const cur = await this.get(trackId, difficulty)
     let touched = false
     for (const id of ids) {
       const e = cur[id]
@@ -232,7 +251,10 @@ class LocalRecordStore implements RecordStore {
     }
     if (!touched) return
     try {
-      window.localStorage.setItem(PREFIX + trackId, JSON.stringify({ v: VERSION, r: cur }))
+      window.localStorage.setItem(
+        PREFIX + scopeFor(trackId, difficulty),
+        JSON.stringify({ v: VERSION, r: cur }),
+      )
     } catch { /* blocked storage */ }
   }
 

@@ -5,6 +5,7 @@ import type { Rng } from './rng'
 import { Track, SURFACE_GRIP, bridgeSolidThrough } from './track'
 import { TUNING as T } from '../content/tuning'
 import { getDerived, getLocomotion } from '../content/chassis'
+import { bandFor, type SkillBand } from '../content/difficulty'
 import {
   STEER_SIGN, lateralBudget, cornerSpeedAt, driftSurfaceFactor, signedAngleAround,
   vacuumGripMult, vacuumTopSpeedMult,
@@ -102,9 +103,9 @@ function bridgeCruise(
   r: RacerState,
   raceTime: number,
   desired: number,
-  skill: number,
+  band: SkillBand,
 ): number {
-  const horizon = T.ai.bridgeHorizon * T.ai.bridgeHorizonSkill[skill]
+  const horizon = T.ai.bridgeHorizon * band.bridge
   const steps = T.ai.bridgeSpeedSteps
   for (let i = 0; i < steps.length; i++) {
     const v = Math.max(6, desired * steps[i])
@@ -182,10 +183,10 @@ const LANE_WANDER = 0.18
 function bridgeLane(
   track: Track,
   r: RacerState,
-  skill: number,
+  band: SkillBand,
   halfWidth: number,
 ): number | null {
-  const horizon = T.ai.bridgeHorizon * T.ai.bridgeHorizonSkill[skill]
+  const horizon = T.ai.bridgeHorizon * band.bridge
   let bestD = Infinity
   let side = 0
   for (const b of track.bridges) {
@@ -213,8 +214,13 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   _grav = track.hasGravity
   const derived = getDerived(r.chassisId, r.pilotId)
   const loco = getLocomotion(r.chassisId)
-  const skill = clamp(Math.round(r.aiSkill), 0, T.ai.skillSpeed.length - 1)
-  const speedCap = T.ai.skillSpeed[skill]
+  // ONE LOOKUP, AND EVERY SKILL-DEPENDENT NUMBER BELOW COMES OUT OF IT.
+  // Bands 0-4 are the expressions this function used to spell out inline,
+  // evaluated in content/difficulty.ts -- see that file's header for why they
+  // are computed rather than typed, and `tests/difficulty.test.ts` for the
+  // proof that Normal is bit-identical to the build this replaced.
+  const band = bandFor(r.aiSkill)
+  const speedCap = band.speed
 
   const speed = planarSpeed(r.vel)
   const lookahead = T.ai.lookaheadBase + speed * T.ai.lookaheadPerSpeed
@@ -236,7 +242,7 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   // causeway is straight (R > 5000m measured) so there is no apex to give up:
   // the line the bias would have asked for and the lane are the same metres,
   // and where they are not, the lane wins because the other one is a hole.
-  const lane = track.hasBridges ? bridgeLane(track, r, skill, halfWidth) : null
+  const lane = track.hasBridges ? bridgeLane(track, r, band, halfWidth) : null
   const targetLateral = lane !== null
     ? clamp(lane + m.lineBias * halfWidth * LANE_WANDER, -halfWidth * 0.86, halfWidth * 0.86)
     : clamp((apexBias + m.lineBias) * halfWidth, -halfWidth * 0.86, halfWidth * 0.86)
@@ -296,7 +302,7 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   if (m.reactionTimer > 0) {
     steer = m.lastSteer
   } else {
-    m.reactionTimer = T.ai.reactionTime * (1.4 - skill * 0.12)
+    m.reactionTimer = T.ai.reactionTime * band.reaction
     m.lastSteer = steer
   }
 
@@ -304,7 +310,7 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   m.mistakeTimer -= dt
   if (m.mistakeTimer <= 0) {
     m.mistakeTimer = 2.0 + rng.next() * 3.0
-    if (rng.next() < T.ai.mistakeChance * (5 - skill)) {
+    if (rng.next() < T.ai.mistakeChance * band.mistake) {
       m.lineBias += (rng.next() - 0.5) * 1.6
     }
   }
@@ -364,12 +370,16 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
     budget *= vacuumGripMult(aheadSample.vacuum, loco)
     ceiling *= vacuumTopSpeedMult(aheadSample.vacuum)
   }
-  const cornerLimit = cornerSpeedAt(budget, k) * T.ai.corneringCaution
+  // `band.caution` is EXACTLY 1 for bands 0-4, so this multiply is an identity
+  // there and the shipped ladder cannot drift by a bit. Above band 4 it is what
+  // actually makes the AI harder: a scale on top speed does nothing on a lap
+  // that is mostly corners.
+  const cornerLimit = cornerSpeedAt(budget, k) * T.ai.corneringCaution * band.caution
   let desired = Math.min(ceiling, cornerLimit)
   // The light-bridges. Gated on the track carrying any, so the two shipped
   // circuits never enter the planner and their AI is bit-identical.
   if (track.hasBridges) {
-    desired = Math.min(desired, bridgeCruise(track, r, state.time, desired, skill))
+    desired = Math.min(desired, bridgeCruise(track, r, state.time, desired, band))
   }
 
   let throttle = 1
@@ -388,7 +398,7 @@ export function stepAI(r: RacerState, state: RaceState, track: Track, rng: Rng):
   const wantDrift =
     speed > T.drift.minSpeedToDrift * 1.4 &&
     sustained > 0.0075 &&
-    rng.next() < T.ai.driftCommitment + skill * 0.05
+    rng.next() < T.ai.driftCommitment + band.drift
 
   // ONCE COMMITTED, HOLD. The entry gate reads curvature 6m AHEAD over a 30m
   // window; the hold gate reads it AT the car over 20m. Those are different
