@@ -16,7 +16,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  HEARTBEAT_MS, LOBBY_TTL_MS, MAX_BODY_CHARS,
+  HEARTBEAT_MS, HOST_CLAIM_AFTER_MS, LOBBY_TTL_MS, MAX_BODY_CHARS,
   handleSignal, type SignalRequest, type SignalResponse, type SignalStore,
 } from '../src/net/signalProtocol'
 
@@ -390,5 +390,169 @@ describe('who may say what', () => {
       await h.call({ op: 'poll', id: lb.id, peer: host.id }))
     expect(poll.lobby?.status).toBe('open')
     expect(poll.lobby?.peers.map((p) => p.id)).toEqual([host.id])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The host role, when the host is gone
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ONLY SHARED ARBITER THIS ARCHITECTURE HAS.
+ *
+ * Host migration is decided locally -- the survivors cannot negotiate, because
+ * the thing that would have carried the negotiation is the thing that died --
+ * and that is what makes the RACE recover in seconds. This endpoint decides
+ * the other half: the DIRECTORY ROW, which is the one piece of a lobby that
+ * lives somewhere neither the old host nor the new one controls.
+ *
+ * Without it the lobby vanishes from the browser mid-race. `update` is
+ * host-only by design, so a room whose host has gone keeps being polled by
+ * seven people and is still struck from the list at `LOBBY_TTL_MS`, because
+ * nothing can say "the race is still going, and this is who to ask now".
+ */
+describe('a survivor claiming a room whose host has gone', () => {
+  const second = { id: 'p-third', name: 'Kit' }
+
+  /** A lobby with two guests in it, mid-race. */
+  async function racing(h: ReturnType<typeof harness>) {
+    const lb = await openLobby(h)
+    ok(await h.call({ op: 'join', id: lb.id, peer: guest }))
+    ok(await h.call({ op: 'join', id: lb.id, peer: second }))
+    ok(await h.call({ op: 'update', id: lb.id, peer: host.id, status: 'racing' }))
+    return lb
+  }
+
+  const claim = (h: ReturnType<typeof harness>, id: string, peer: { id: string; name: string }) =>
+    h.call({ op: 'host', id, peer: peer.id, name: peer.name, was: host.id })
+
+  it('refuses while the host is still being heard from', async () => {
+    // A CLAIM MUST NOT BE A THEFT. A host on a phone that locked its screen
+    // for a moment keeps its lobby; the endpoint cannot tell a dead host from
+    // a slow one, and refusing is the right answer to that ambiguity.
+    const h = harness()
+    const lb = await racing(h)
+    const res = await claim(h, lb.id, guest)
+    expect(res.ok).toBe(false)
+    expect((res as { error: string }).error).toBe('host-alive')
+  })
+
+  it('allows it once the host has been quiet for the claim window', async () => {
+    const h = harness()
+    const lb = await racing(h)
+    h.advance(HOST_CLAIM_AFTER_MS + 1)
+    // The claimant keeps polling, which is also its heartbeat -- so it is
+    // demonstrably here while the host is demonstrably not.
+    ok(await h.call({ op: 'poll', id: lb.id, peer: guest.id }))
+    const res = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, guest))
+    expect(res.lobby.hostId).toBe(guest.id)
+    expect(res.lobby.hostName).toBe('Ada')
+  })
+
+  it('allows it AT ONCE when the host said goodbye mid-race', async () => {
+    // A host that leaves cleanly does not make seven people wait out a timer
+    // for information it already gave them. `bye` mid-race marks the row
+    // rather than closing it -- see `LobbyRecord.hostGone`.
+    const h = harness()
+    const lb = await racing(h)
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const res = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, guest))
+    expect(res.lobby.hostId).toBe(guest.id)
+  })
+
+  it('keeps a racing lobby alive when its host leaves, instead of closing it', async () => {
+    const h = harness()
+    const lb = await racing(h)
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const poll = ok<Extract<SignalResponse, { op: 'poll' }>>(
+      await h.call({ op: 'poll', id: lb.id, peer: guest.id }))
+    expect(poll.lobby?.status).toBe('racing')
+    expect(poll.lobby?.hostGone).toBe(true)
+    // And the survivors are still in it, which is the point.
+    expect(poll.lobby?.peers.map((p) => p.id).sort()).toEqual([guest.id, second.id].sort())
+  })
+
+  it('still closes a lobby whose host leaves with nobody racing', async () => {
+    // THE OLD BEHAVIOUR IS NOT REGRESSED. A room sitting on the lobby screen
+    // has nothing to save, and a host leaving it still ends it.
+    const h = harness()
+    const lb = await openLobby(h)
+    ok(await h.call({ op: 'join', id: lb.id, peer: guest }))
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const poll = ok<Extract<SignalResponse, { op: 'poll' }>>(
+      await h.call({ op: 'poll', id: lb.id, peer: guest.id }))
+    expect(poll.lobby?.status).toBe('closed')
+  })
+
+  it('gives the room to exactly one claimant and tells the loser who won', async () => {
+    // TWO SURVIVORS CAN REACH DIFFERENT ANSWERS -- a drop the dying host
+    // announced to one and not the other, inside the last moments of its life.
+    // The endpoint is where that is settled, and the loser is handed the
+    // winner's record rather than an error so it learns who to dial from the
+    // same reply.
+    const h = harness()
+    const lb = await racing(h)
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const first = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, guest))
+    const loser = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, second))
+    expect(first.lobby.hostId).toBe(guest.id)
+    expect(loser.lobby.hostId).toBe(guest.id)
+  })
+
+  it('refuses a claim from somebody who is not in the lobby', async () => {
+    const h = harness()
+    const lb = await racing(h)
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const res = await claim(h, lb.id, { id: 'p-stranger', name: 'Nobody' })
+    expect(res.ok).toBe(false)
+    expect((res as { error: string }).error).toBe('not-member')
+  })
+
+  it('lets the new host publish the row again, which is the whole point', async () => {
+    // Before the claim, `update` from a guest is refused and the row goes
+    // stale under a race that is still running. After it, the row is theirs.
+    const h = harness()
+    const lb = await racing(h)
+    const before = await h.call({ op: 'update', id: lb.id, peer: guest.id, status: 'racing' })
+    expect(before.ok).toBe(false)
+
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    ok(await claim(h, lb.id, guest))
+    ok(await h.call({ op: 'update', id: lb.id, peer: guest.id, status: 'racing', round: 2 }))
+
+    h.advance(LOBBY_TTL_MS - 1000)
+    const list = ok<Extract<SignalResponse, { op: 'list' }>>(await h.call({ op: 'list' }))
+    expect(list.lobbies).toHaveLength(1)
+    expect(list.lobbies[0].hostName).toBe('Ada')
+  })
+
+  it('forgets the old host rather than leaving it to expire', async () => {
+    // Left in the peer list, the new host spends a whole TTL opening a
+    // connection to a tab that is not there, and the room reads as "still
+    // connecting" for forty-five seconds of a race that is already running.
+    const h = harness()
+    const lb = await racing(h)
+    ok(await h.call({ op: 'bye', id: lb.id, peer: host.id }))
+    const res = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, guest))
+    expect(res.lobby.peers.map((p) => p.id)).not.toContain(host.id)
+  })
+
+  it('answers a claim on a lobby that is already ours without changing anything', async () => {
+    const h = harness()
+    const lb = await racing(h)
+    const res = ok<Extract<SignalResponse, { op: 'host' }>>(await claim(h, lb.id, host))
+    expect(res.lobby.hostId).toBe(host.id)
+  })
+
+  it('has no ICE servers of its own to give out', async () => {
+    // The mint talks to a third party with a credential that must never leave
+    // the function, so it is answered in netlify/functions/signal.mts and not
+    // here. A refusal is the right answer from this handler AND the right
+    // answer for the probe's in-memory server: no relay configured, fall back
+    // to STUN.
+    const h = harness()
+    const res = await h.call({ op: 'ice' })
+    expect(res.ok).toBe(false)
+    expect((res as { error: string }).error).toBe('no-ice')
   })
 })

@@ -119,6 +119,19 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: 'server' }))
       return
     }
+    // AND THE ACCOUNT ENDPOINT, REFUSING IN THE SAME WAY AND FOR THE SAME
+    // REASON. `live` resolves a peer's identity through `accountService()`, so
+    // every page under that profile posts here before it can do anything at
+    // all. Left unrouted it fell through to the file server and the browser
+    // logged a 404 -- which this probe counts as a fault, because an anonymous
+    // 404 from its own server is how a previous session went looking for a bug
+    // in the bundle. A refusal is what the screen is being tested against
+    // anyway; tools/probe-netcode.mjs runs the real handler.
+    if (p === '/api/account') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({ ok: false, error: 'server' }))
+      return
+    }
     if (p === '/' || p.endsWith('/')) p += 'index.html'
     const buf = await readFile(join(ROOT, p))
     res.writeHead(200, { 'content-type': MIME[extname(p)] || 'application/octet-stream' })
@@ -1080,6 +1093,69 @@ await page.waitForTimeout(1200)
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// WHY THE ROOM WENT AWAY, WHICH THE SCREEN USED TO THROW AWAY
+// ---------------------------------------------------------------------------
+//
+// A room that ends mid-RACE fires `onClosed` while this screen is not on. The
+// navigation branch in that handler does nothing (there is nothing to navigate
+// away from), the notice is written to a browser screen nobody is looking at,
+// and then game/main.ts walks back to the room -- where `enter('room')` finds
+// no room and used to overwrite the whole thing with "You are not in a lobby."
+//
+// That is the ONLY route by which host migration and rejoin ever report
+// anything to a player, and every sentence net/live.ts writes for them went
+// down it. The mock cannot produce one -- it closes rooms with a reason and no
+// detail -- so the two failures are driven straight into the service's own
+// callback here, which is the seam ui/lobby.ts subscribes to.
+console.log('\n-- a room that ended with something to say --------------------')
+if (await screenOf(page) !== 'lobby') await goto(page, 'lobby')
+await page.waitForTimeout(400)
+{
+  const cases = [
+    ['migration ran out of budget', 'hostLeft',
+      'Could not reach Ada, who took over when the host left. Thirty seconds was '
+      + 'the whole budget and the race went on without us.'],
+    ['a rejoin that never landed', 'unreachable',
+      'Could not get back to Ada in 30 seconds. Your car finished the round under '
+      + 'the AI from the frame you went quiet.'],
+    ['a plain host departure, which has no detail at all', 'hostLeft', null],
+  ]
+  for (const [label, reason, detail] of cases) {
+    const seen = await page.evaluate(async ([r, d]) => {
+      const svc = window.__NET__.lobbyService()
+      if (svc.current()) await svc.leave()
+      const n = document.querySelector('.sglb__notice')
+      if (n) { n.textContent = ''; n.hidden = true }
+      // The wire speaks while the player is in a race, so this screen is off.
+      window.__GAME__.frontEnd.hide()
+      svc.onClosed(r, d ?? undefined)
+      // The race ends and the game goes back to the room it no longer has.
+      window.__GAME__.frontEnd.show('room')
+      await new Promise((res) => setTimeout(res, 120))
+      const el = document.querySelector('.sglb__notice')
+      return {
+        text: el && !el.hidden ? el.textContent : '',
+        screen: document.querySelector('.sg-fe')?.dataset.screen ?? '-',
+      }
+    }, [reason, detail])
+    say(`${label}:`)
+    say(`   "${seen.text}"`)
+    if (seen.screen === 'room') note(`${label}: left standing on a room screen with no room`)
+    if (!seen.text) {
+      note(`${label}: the room ended and the screen said nothing at all`)
+    } else if (/not in a lobby/i.test(seen.text) && detail) {
+      note(`${label}: the specific sentence was replaced by the generic one, which `
+        + 'is the whole of what a player would be told about a failed repair')
+    } else if (detail && !seen.text.includes(detail)) {
+      note(`${label}: the detail never reached the screen`)
+    } else if (!detail && !/host left/i.test(seen.text)) {
+      note(`${label}: a closure with no detail lost its generic sentence too`)
+    }
+  }
+  say('shot ' + await shoot(page, 'room-closed-detail'))
 }
 
 // ---------------------------------------------------------------------------

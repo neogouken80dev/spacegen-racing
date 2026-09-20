@@ -35,16 +35,26 @@ import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types
  *   `lobbyService()`   A round has to be able to END. `endRound(standings)` is
  *                      what advances a series, and nothing else in the process
  *                      knows the finishing order.
+ *   `accountService()` Credits are earned locally and BANKED on a server. The
+ *                      wallet fires `onBank` and refuses to know the network
+ *                      exists; the account service takes a number and cannot
+ *                      know what a race is. This file is the only one that
+ *                      knows both, and the only one that knows whether the
+ *                      race was won. See `forwardAward`.
  *
- * Both are still lazy: `lobbyService()` is only ever called on a frame where a
- * multiplayer packet is live, which means the front end has already created
- * the service and no directory starts ticking because this module was
- * imported. The attract loop, the headless harness and every unit test that
- * never opens a lobby still pay nothing.
+ * All three are still lazy: `lobbyService()` is only ever called on a frame
+ * where a multiplayer packet is live, which means the front end has already
+ * created the service and no directory starts ticking because this module was
+ * imported, and `accountService()` is only reached from a payout, which needs
+ * a finished race. The attract loop, the headless harness and every unit test
+ * that never opens a lobby still pay nothing.
  */
-import { liveLobby, lobbyService, raceTransport } from '../net'
+import { accountService, liveLobby, lobbyService, raceTransport } from '../net'
 import { LockstepRunner } from '../net/lockstep'
-import type { RaceStartPacket, SeriesStanding } from '../net/types'
+import type {
+  AccountService, PlayerProfile, RaceStartPacket, RaceTransport, RoundResume,
+  SeriesStanding,
+} from '../net/types'
 import { QUALITY_PRESETS, type QualityTier, type RenderQuality } from '../render/api'
 import { createVehicleVisual, disposeVehicleCache, type VehicleVisualEx } from '../render/vehicles'
 import { buildTrackVisual } from '../render/trackMesh'
@@ -53,13 +63,14 @@ import { createEntityVisuals, type EntityVisualsWithGate } from '../render/entit
 import { createVfx } from '../render/vfx'
 import { createNameplates, type NameplateRoster, type NameplateSystem } from '../render/nameplates'
 import { createPostFx, type PostFx } from '../render/postfx'
-import { createHud, type Hud, type PodiumLine } from '../ui/hud'
+import { createHud, type Hud, type NetMigration, type PodiumLine } from '../ui/hud'
 import { createCheer, type Cheer, type CheerLevel } from '../ui/cheer'
 import { createScoreHud, type ScoreHud } from '../ui/scoreHud'
 import { CATALOGUE } from '../audio/catalogue'
 import { Scorer } from '../score/scorer'
 import { createScoreboard, BOARD_SIZE } from '../score/board'
 import { createRecordStore, type RecordStore } from '../score/records'
+import { sharedWallet, type Payout, type Wallet } from '../score/wallet'
 import { createGlobalStore, type GlobalStore } from '../score/global'
 import type { ScoreStore } from '../score/api'
 import { createAudio, type AudioSystem } from '../audio'
@@ -265,6 +276,63 @@ export function multiplayerSimConfig(
   }
 }
 
+/**
+ * Post a race's payout to the account service and take back what it ACTUALLY
+ * paid.
+ *
+ * ---------------------------------------------------------------------------
+ * `adopt` IS NOT BOOKKEEPING, IT IS THE POINT. The server clamps.
+ * `MAX_PER_RACE` bounds a single post -- 200, imported by net/account.ts from
+ * score/wallet.ts rather than copied, so the two cannot drift -- and
+ * `AWARD_MIN_GAP_MS` / `AWARD_PER_HOUR` bound the rate. So what the client
+ * proposes is routinely not what it is paid, and a client that kept its own
+ * number would show a balance the shop then refuses to spend, and have it
+ * corrected out from under the player on some later `load()` with no
+ * explanation attached. net/account.ts states the rule from its own side:
+ * "What the client must NOT do is treat its own number as banked."
+ *
+ * The wallet is written for exactly this -- `adopt` replaces both numbers with
+ * the server's, "no merge, no max, no argument" -- and the reason it can be
+ * that blunt is that there is nothing to reconcile: the local copy is a cache
+ * of something the server owns.
+ *
+ * A FAILURE IS DROPPED RATHER THAN QUEUED, which is the account layer's
+ * decision and not an omission here. A queue that replays on reconnect is a
+ * client posting a burst of races at once, which is precisely the shape the
+ * pace limit exists to refuse -- so it would be rejected on arrival, having
+ * spent the whole outage convincing the player their credits were safe. The
+ * local wallet keeps the balance through the outage instead, which is the same
+ * outcome with none of the lying. There is nothing to tell the player either:
+ * this runs behind a results screen that has already appeared, and the profile
+ * screen is already saying the account is offline.
+ *
+ * FREE-STANDING AND EXPORTED so the three-way handshake can be tested without
+ * a WebGL context: a Game needs a canvas, and the property worth pinning here
+ * -- that a clamped award leaves the local wallet agreeing with the server
+ * rather than with itself -- has nothing to do with one. Returns what was
+ * banked, or null when nothing was.
+ */
+export async function bankAward(
+  account: Pick<AccountService, 'award'>,
+  wallet: Pick<Wallet, 'adopt'>,
+  credits: number,
+  won: boolean,
+): Promise<PlayerProfile | null> {
+  // `Wallet.bank` only fires `onBank` on a positive payout, so this is belt and
+  // braces -- and it is worth having, because `AWARD_MIN_GAP_MS` is derived
+  // from that fact and a zero-credit post would spend the account's next
+  // thirty seconds of quota on nothing.
+  if (!Number.isFinite(credits) || credits <= 0) return null
+  const res = await account.award(credits, { won })
+  if (!res.ok) {
+    console.warn(`account: ${credits} credits could not be banked (${res.error}); `
+      + 'the wallet keeps them locally until the next successful load')
+    return null
+  }
+  wallet.adopt(res.value)
+  return res.value
+}
+
 export class Game {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -402,6 +470,26 @@ export class Game {
    * handle on them from outside.
    */
   net: LockstepRunner | null = null
+  /**
+   * The repair the room is in the middle of, or null. PUBLIC for the same
+   * reason `net` is: tools/probe-migrate.mjs photographs the wait and has to be
+   * able to read the state the line on screen is drawn from.
+   *
+   * A FIELD AND NOT A PUSH, because the HUD's net line has exactly one writer
+   * (`netFrame`, once per rendered frame) and two would race each other. The
+   * transport refreshes this four times a second; the frame loop reads it.
+   */
+  netMigration: NetMigration | null = null
+  /**
+   * The round's transport, for the one thing the runner cannot answer: what the
+   * WIRE is doing. types.ts asks the HUD to render all four `LinkStatus` values
+   * differently, and `rejoining` -- this client's own link gone and being got
+   * back -- is a state the runner only knows as "paused".
+   *
+   * Held rather than fetched per frame so it is provably the transport this
+   * round's runner was built with, and dropped with the runner in `detachNet`.
+   */
+  private netTransport: RaceTransport | null = null
   /**
    * The series table this client last banked, and the round it belongs to.
    *
@@ -770,6 +858,43 @@ export class Game {
     // note on Cheer.onLine: one set of editorial rules, two media.
     this.cheer.onLine = (kind) => { this.audio.callout(kind) }
 
+    /**
+     * ===================================================================
+     * WHERE THE CREDITS GO, WHICH UNTIL NOW WAS NOWHERE
+     *
+     * `score/wallet.ts` has always paid out -- `RecordStore.submit` banks every
+     * finished race into the process-wide wallet -- and documented `onBank` as
+     * existing "so the account layer can forward it to `award()`". Nothing ever
+     * did. Meanwhile `ui/profile.ts` draws `PlayerProfile.credits`, which is the
+     * SERVER's number. So the shop and the rank ladder were reading a balance
+     * that no race had ever touched: credits were earned into a local cache
+     * nothing displayed and banked nowhere anybody could spend them.
+     *
+     * THIS IS THE ONLY FILE THAT CAN CLOSE IT, and not by elimination:
+     *
+     *   the wallet   refuses to know the network exists, deliberately, and a
+     *                results screen must not wait on one.
+     *   records.ts   is the same layer -- `src/score` -- and pulling `net/` into
+     *                it would invert a dependency that already points the other
+     *                way (`net/account.ts` imports `MAX_PER_RACE` from the
+     *                wallet, because the server's clamp and the client's cap
+     *                have to be the same number).
+     *   the account  is handed a count of credits and cannot know what a race
+     *                is, let alone whether this one was won.
+     *
+     * And WON is the part that settles it. `award(credits, { won })` carries the
+     * flag because `PlayerProfile.wins` is a counter the profile screen shows
+     * and the `flagbearer` feat is re-derived from -- "identity, not payment",
+     * as wallet.ts puts it -- and `RunRecord` deliberately carries no finishing
+     * position, so the payout cannot supply it. The finishing order is in
+     * `this.race`. That is here.
+     *
+     * INSTALLED ONCE, AT BOOT, rather than per race: `onBank` is one slot on one
+     * process-wide wallet, and re-assigning it from a race path would be a
+     * subscription whose lifetime is a race and whose owner is not.
+     */
+    sharedWallet().onBank = (paid) => { void this.forwardAward(paid) }
+
     this.onResize()
     this.tools.hidden = true
     this.frontEnd.show('title')
@@ -1129,8 +1254,33 @@ export class Game {
    * byte for byte the race the previous pass shipped: a lobby flow that works
    * end to end on one machine with AI in the other seats. Two behaviours from
    * one packet, decided by whether there is anybody on the other end.
+   *
+   * ==========================================================================
+   * IT IS CALLED MORE THAN ONCE PER PAGE, WHICH IT DID NOT USED TO BE
+   *
+   * For most of this function's life the only caller was `onStart` and a page
+   * saw one packet ever: the game was on a menu screen, nothing was standing,
+   * and "build a race" and "replace a race" were the same thing. `onResync` is
+   * the second caller and it arrives ON TOP OF A LIVE RACE -- a running round,
+   * its runner, possibly its ceremony or its podium -- because that is what
+   * coming back to a round is.
+   *
+   * So the teardown below is not defensive tidying, it is the difference
+   * between the two callers. `startRace` already rebuilds everything it OWNS
+   * (`buildWorld` tears the scene down first, the vehicles are respawned, the
+   * scorer and the callouts are reset), and what it does not own is exactly
+   * what survived into the second race and was visible in the probe: the
+   * previous round's runner still gating a `Race` that is about to be thrown
+   * away, its net banner still on screen with nothing left to refresh it, and
+   * the podium's cars still in the scene with their card over the top --
+   * `teardownWorld` has never known about `podiumStage`, because until now
+   * nothing could start a race from the podium.
    */
   private startMultiplayer(packet: RaceStartPacket): void {
+    // FIRST, AND BEFORE `setTrack` TOUCHES ANYTHING. Everything from here on
+    // rebuilds; none of it removes. See the note above.
+    this.detachNet()
+    this.closePodium()
     // The track BEFORE the config, because the config has to name the circuit
     // that is actually going to be loaded -- `setTrack` falls back to Rustfall
     // for an id this build does not have, and every client resolves it the same
@@ -1172,15 +1322,20 @@ export class Game {
    *
    *   transport -> runner   `onInput` / `onHash` / `onDropped`, all three set
    *                         by the runner's own constructor. Not here.
-   *   transport -> runner   `onRoundDrop` / `onDesync`: the room's VERDICTS,
-   *                         which a guest applies rather than reaches. Here,
-   *                         because the runner cannot subscribe to messages it
-   *                         does not know the shape of.
+   *   transport -> runner   `onRoundDrop` / `onRoundLive` / `onDesync`: the
+   *                         room's VERDICTS, which a guest applies rather than
+   *                         reaches. Here, because the runner cannot subscribe
+   *                         to messages it does not know the shape of.
    *   runner -> transport   `announceDrop` / `announceDesync`: the same two
    *                         verdicts going the other way, and HOST ONLY. The
    *                         runner already refuses to call them on a guest;
    *                         wiring them unconditionally is safe and means the
    *                         host/guest split lives in exactly one file.
+   *   transport -> THIS     `onResync` and `onMigration`, which are not the
+   *                         runner's to take: one REPLACES the runner and the
+   *                         race under it, and the other is a sentence for the
+   *                         screen about a repair the runner is only the
+   *                         subject of. Both are below, with their own notes.
    *
    * `health` COMES FROM THE MESH AND NOT FROM THE SCHEDULER. The scheduler can
    * only see that an input has not arrived; the mesh knows whether the wire is
@@ -1191,7 +1346,11 @@ export class Game {
    * information.
    */
   private attachNet(packet: RaceStartPacket): void {
+    // BOTH, AND TOGETHER. `netTransport` is only ever read alongside a runner,
+    // so a path that cleared one and not the other would leave `netFrame`
+    // reporting the LAST round's link status over this one.
     this.net = null
+    this.netTransport = null
     const race = this.race
     if (!race || this.multiplayer !== packet) return
     // The lobby's transport for THIS round. Null under the mock, which is the
@@ -1229,14 +1388,150 @@ export class Game {
       announceDesync: (frame) => transport.announceDesync(frame),
     })
     transport.onRoundDrop = (playerId, frame) => runner.acceptDrop(playerId, frame)
+    /**
+     * THE EXACT MIRROR OF THE LINE ABOVE, AND IT HAS TO BE.
+     *
+     * A drop hands a slot to `stepAI` from an agreed frame; a restore takes it
+     * back from one. Both are load-bearing for the same reason and the reason
+     * is not politeness: `stepAI` draws from a per-car rng, so a client that
+     * substitutes one frame earlier or later than the room makes a different
+     * NUMBER of draws, its stream parts company with everybody else's, and the
+     * rejoin causes the desync it was meant to survive.
+     *
+     * `acceptRestore` is what honours the frame -- it refuses a restore that
+     * has already been stepped past rather than rewriting history, and the
+     * host's `REJOIN_LEAD_FRAMES` exists so that refusal is unreachable. What
+     * this line must not do is apply it on ARRIVAL: the announcement is
+     * deliberately ahead of the play head, and "as soon as it turns up" is a
+     * different frame on every client.
+     */
+    transport.onRoundLive = (playerId, frame) => runner.acceptRestore(playerId, frame)
     transport.onDesync = (frame) => runner.acceptDesync(frame)
+    /**
+     * A REPAIR, FOR THE SCREEN.
+     *
+     * Kept on this object rather than pushed straight at the HUD because the
+     * HUD is fed once per rendered frame from `netFrame` and nowhere else:
+     * `setNetStatus` takes the whole state each time, so a second writer would
+     * be a second source for one line and the next frame would overwrite
+     * whichever one lost. The transport ticks this four times a second (see
+     * `tickMigration`); the countdown on screen therefore moves at that rate
+     * however fast or slow the renderer happens to be going.
+     *
+     * The ids are resolved to names HERE, where the grid is. See `NetMigration`.
+     */
+    transport.onMigration = (state) => {
+      this.netMigration = state
+        ? {
+          ...state,
+          previousHostName: this.gridName(state.previousHostId),
+          newHostName: this.gridName(state.newHostId),
+        }
+        : null
+    }
+    /**
+     * COMING BACK TO A ROUND: REBUILD, THEN REPLAY. ALWAYS BOTH.
+     *
+     * The rebuild is not a fallback for "we lost the race object" -- this
+     * client is usually still holding a perfectly good `Race` for this very
+     * round, and it is still wrong. `RoundResume` in net/types.ts sets out why
+     * at length and the short version is that the frames either side of our own
+     * handover are poisoned: the host hands a slot to the AI from the last
+     * input it HEARD, and a dropped client holds its own inputs `inputDelay`
+     * frames beyond that and goes on stepping them until it runs out. So we
+     * have simulated frames with a person at the wheel where the room ran an
+     * AI. Forward replay cannot undo a frame that was already stepped wrong.
+     *
+     * AND IT IS UNCONDITIONAL. There is a condition under which reusing the
+     * race would be safe -- a drop we never stepped past -- and testing for it
+     * would mean the rejoin path taken in a race is not the rejoin path
+     * anything was ever verified on, and the one it misjudges desyncs quietly
+     * three corners later. types.ts weighs the cost and it is one circuit load
+     * plus 52-76ms of replay for six hundred frames, against a world rebuild
+     * the player has already paid for once.
+     *
+     * `startMultiplayer` IS THE REBUILD and is called with the resume's own
+     * packet, which types.ts guarantees is identical to the round's original --
+     * same seed, same grid, same `inputDelay`, and `localPlayerId` stamped for
+     * this reader. Reaching for it rather than for a private rebuild is the
+     * point: a returning client is starting the same race everybody else
+     * started, so it takes the same path, teardown and all.
+     *
+     * Then the replay, and it is SYNCHRONOUS with the rebuild on purpose. The
+     * transport queues the live inputs arriving at 60Hz while we have no runner
+     * to give them to and flushes them the moment the new one introduces itself
+     * (see `LiveRaceTransport.pending`), so an await between these two lines
+     * would be frames on the floor that the relay will never send again.
+     */
+    transport.onResync = (resume) => this.resync(resume)
+    this.netTransport = transport
     this.net = runner
+  }
+
+  /**
+   * The display name on this round's grid for a player id, or ''.
+   *
+   * The grid is the packet's, so it answers for exactly the people in this
+   * round and nobody else -- including, deliberately, an old host who left
+   * before it started and whose id a migration can still name.
+   */
+  private gridName(playerId: string): string {
+    const grid = this.multiplayer?.grid
+    if (!grid || !playerId) return ''
+    for (const s of grid) if (s.playerId === playerId) return s.name
+    return ''
+  }
+
+  /**
+   * Take the round back after an absence: rebuild the race, then replay the
+   * tape into it.
+   *
+   * REFUSING A SHORT REPLAY IS THE WHOLE OF THE ERROR HANDLING. `replay`
+   * returns the frame it actually reached, which is less than the tape claimed
+   * when the tape had a hole in it -- and a client that joined a race it is
+   * behind in would be a client stepping frames nobody else is, which is a
+   * desync with a longer fuse. There is nothing to retry with, so it says so
+   * and leaves the way an ejection leaves.
+   */
+  /** True only for the duration of a resync rebuild. See the start-hint note
+   *  in startRace for the one thing that reads it. */
+  private resuming = false
+
+  private resync(resume: RoundResume): void {
+    this.resuming = true
+    try {
+      this.startMultiplayer(resume.packet)
+    } finally {
+      this.resuming = false
+    }
+    const runner = this.net
+    if (!runner) {
+      console.warn('net: a resync rebuilt no race — the packet does not place this '
+        + 'client on the grid, or the round has no wire any more')
+      return
+    }
+    const reached = runner.replay(resume.rows, resume.handovers, resume.frame)
+    if (reached >= resume.frame) return
+    console.warn(`net: resync replayed to frame ${reached} of ${resume.frame}; the tape `
+      + 'was short, so this client would be racing a race the room has left behind')
+    // `ejected` RATHER THAN A SIXTH SENTENCE. The state it describes is exactly
+    // the one we are in -- the round carried on without us and our slot was
+    // driven by the AI -- and `abandonRound` already says that, banks nothing
+    // and goes back to the room. A new word for the same outcome would be a
+    // state the front end has never heard of.
+    this.abandonRound('ejected')
   }
 
   /** Drop the round's lockstep state. The MESH is not touched -- it belongs to
    *  the lobby and outlives the round, which is what makes a series cheap. */
   private detachNet(): void {
     this.net = null
+    this.netTransport = null
+    // THE LINE GOES WITH THE RUNNER THAT WROTE IT. `netFrame` is the only
+    // thing that refreshes the net sentence and it only runs while there is a
+    // runner, so a migration banner left standing here would stay on screen
+    // over whatever came next -- including the rebuilt race a migration ends in.
+    this.netMigration = null
     this.hud.setNetStatus(null)
   }
 
@@ -1425,8 +1720,15 @@ export class Game {
      * `takeStartHint()` is called INSIDE the branch rather than outside it, so
      * an auto-accelerate player does not silently spend their one showing on a
      * race that could not show it.
+     *
+     * AND NOT ON A RESYNC, for the same reason one step further out. A rejoin
+     * rebuilds the race and replays it straight past the countdown at speed --
+     * there is no green light to react to and nothing on screen long enough to
+     * read. A player whose first-ever lobby race is the one their wifi
+     * interrupted would otherwise spend their single showing on a countdown
+     * that never actually ran.
      */
-    this.hud.setStartHint(!this.input.autoAccelerate && takeStartHint())
+    this.hud.setStartHint(!this.resuming && !this.input.autoAccelerate && takeStartHint())
     this.cheer.reset()
     this.cheer.setLevel(this.calloutLevel)
     this.scorer.reset()
@@ -1968,6 +2270,31 @@ export class Game {
   }
 
   /**
+   * A race paid out. Post it, and take back whatever the server says it is
+   * worth.
+   *
+   * ------------------------------------------------------------------------
+   * WHY `won` IS READ OFF THE LIVE RACE. `onBank` carries a `Payout` and a
+   * `PayoutRun`, and neither has a finishing position in it -- wallet.ts is
+   * explicit that placement is already inside `score` and must not be paid for
+   * twice. But `award` still wants the flag, for `PlayerProfile.wins` and the
+   * feat derived from it. The flag is available for one reason: `onBank` fires
+   * SYNCHRONOUSLY inside `RecordStore.submit`, which `publishScore` calls with
+   * the finished race still standing, so `this.race` here is the race that just
+   * paid. A `Race` that has gone -- a rebuild, a quit -- reads as no win rather
+   * than a wrong one, which is the safe direction to be wrong in: `wins` is a
+   * counter two avatar unlocks are derived from.
+   *
+   * Everything after that is `bankAward` below, which is free-standing so the
+   * clamp can be exercised without a browser in the room.
+   */
+  private async forwardAward(paid: Payout): Promise<void> {
+    const local = this.race?.state.racers[this.localId] ?? null
+    const won = !!local && local.finished && local.position === 1
+    await bankAward(accountService(), sharedWallet(), paid.credits, won)
+  }
+
+  /**
    * Show the board for this track, and offer to record the run if it placed.
    *
    * NOTHING IS WRITTEN UNTIL THE PLAYER NAMES IT. `qualifies` only decides
@@ -2342,14 +2669,41 @@ export class Game {
     if (!net) return
     const verdict = net.verdict
     if (verdict === 'desync' || verdict === 'ejected') {
-      this.hud.setNetStatus({ verdict, waitingFor: [], loading: false })
+      this.hud.setNetStatus({
+        verdict, waitingFor: [], loading: false, migration: null, link: 'down',
+      })
       this.abandonRound(verdict)
       return
     }
     this.hud.setNetStatus({
       verdict,
-      waitingFor: net.waitingFor,
+      /**
+       * IDS IN, NAMES OUT, AND THE DIFFERENCE IS NOT COSMETIC.
+       *
+       * `LockstepRunner` is built with a slot -> PLAYER ID map, because that is
+       * what `announceDrop` has to put on the wire, and it fills `waitingFor`
+       * from the same map. `NetStatus.waitingFor` is documented as display
+       * names -- and under the live profile a player id is a minted account id
+       * with a device salt on the end, so the stall banner was offering to wait
+       * for `a7f3…-9c21`.
+       *
+       * Resolved HERE for the same reason the migration's two ids are: the grid
+       * is the packet's and the packet is this file's. Anything that does not
+       * resolve is passed through rather than blanked, so a mapping bug reads
+       * as an id on screen instead of as an empty banner.
+       */
+      waitingFor: net.waitingFor.map((id) => this.gridName(id) || id),
       loading: net.waitingToLoad,
+      // THE REPAIR OUTRANKS THE STALL, and `netSentence` is where that is
+      // decided rather than here: this function's job is to report every fact
+      // it has, and choosing between them is the grammar's. Both are true at
+      // once during a migration -- the race is stopped AND the relay is being
+      // replaced -- and only one of them is worth a player's attention.
+      migration: this.netMigration,
+      // THE WIRE'S OWN WORD, which the runner does not have one for. A rejoin
+      // looks to the runner exactly like a migration -- `paused`, stepping
+      // nothing -- and reads to the player as the opposite thing happening.
+      link: this.netTransport ? this.netTransport.status : 'up',
     })
   }
 

@@ -25,7 +25,8 @@ import {
 } from '../src/game/series'
 import { CIRCUIT_POINTS, CIRCUIT_TRACK_IDS, pointsFor } from '../src/game/circuit'
 import { SERIES_LENGTHS, type MultiplayerSlot, type SeriesStanding } from '../src/net/types'
-import { netSentence, type NetStatus } from '../src/ui/hud'
+import { netSentence, type NetMigration, type NetStatus } from '../src/ui/hud'
+import { MIGRATION_BUDGET_MS } from '../src/net/types'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -310,7 +311,15 @@ describe('the running order', () => {
 
 describe('the sentence a stalled race puts on screen', () => {
   const st = (over: Partial<NetStatus> = {}): NetStatus => ({
-    verdict: 'waiting', waitingFor: [], loading: false, ...over,
+    verdict: 'waiting', waitingFor: [], loading: false, migration: null, link: 'up', ...over,
+  })
+  /** A repair in progress. Defaults to a guest watching somebody else take
+   *  over, because that is what seven people out of eight are doing. */
+  const mig = (over: Partial<NetMigration> = {}): NetMigration => ({
+    previousHostId: 'p-ada', previousHostName: 'Ada',
+    newHostId: 'p-ben', newHostName: 'Ben',
+    isLocal: false, remainingMs: MIGRATION_BUDGET_MS,
+    connected: 0, expected: 3, ...over,
   })
 
   it('says nothing at all while the race is running', () => {
@@ -354,5 +363,104 @@ describe('the sentence a stalled race puts on screen', () => {
     expect(void_.length).toBeGreaterThan(0)
     expect(out.length).toBeGreaterThan(0)
     expect(void_).not.toBe(out)
+  })
+
+  // -------------------------------------------------------------------------
+  // THE ONE A PLAYER READS FOR TEN SECONDS
+  // -------------------------------------------------------------------------
+  //
+  // Every other sentence here is up for a moment. A host migration is a pause
+  // of up to MIGRATION_BUDGET_MS on a race that is standing perfectly still,
+  // so this line is read, re-read, and used to decide whether the game has
+  // crashed. A screenshot shows one frame of it and cannot show the only
+  // property that matters, which is that the number moves.
+
+  it('names who left, says what is being done, and puts a clock on it', () => {
+    expect(netSentence(st({ migration: mig() })))
+      .toBe('ADA LEFT — RECONNECTING TO BEN, 30S')
+  })
+
+  it('counts down', () => {
+    // THE WHOLE POINT. A wait with no clock on it is indistinguishable from a
+    // hang, which is the same argument the stall policy makes about saying
+    // anything at all. Two readings a few seconds apart must differ.
+    const a = netSentence(st({ migration: mig({ remainingMs: 27_400 }) }))
+    const b = netSentence(st({ migration: mig({ remainingMs: 24_100 }) }))
+    expect(a).toBe('ADA LEFT — RECONNECTING TO BEN, 28S')
+    expect(b).toBe('ADA LEFT — RECONNECTING TO BEN, 25S')
+    expect(a).not.toBe(b)
+  })
+
+  it('rounds the last second up, and only says zero when it means it', () => {
+    // A budget with 200ms left is still working. Printing "0S" a fifth of a
+    // second early tells the player it has given up while it has not.
+    expect(netSentence(st({ migration: mig({ remainingMs: 200 }) }))).toMatch(/, 1S$/)
+    expect(netSentence(st({ migration: mig({ remainingMs: 0 }) }))).toMatch(/, 0S$/)
+    // The budget can be overrun by a tick before the failure lands. Negative
+    // milliseconds are not a negative countdown.
+    expect(netSentence(st({ migration: mig({ remainingMs: -450 }) }))).toMatch(/, 0S$/)
+  })
+
+  it('tells the new host they are the one doing the work', () => {
+    // "Reconnecting to Ben" is a lie on Ben's own screen: nothing is being
+    // dialled out, everybody is dialling IN to them.
+    expect(netSentence(st({ migration: mig({ isLocal: true, newHostName: 'Ben' }) })))
+      .toBe('ADA LEFT — YOU ARE TAKING OVER, 30S')
+  })
+
+  it('still says something useful when it cannot name anybody', () => {
+    // The ids in a MigrationState are ids. game/main.ts resolves them off the
+    // round's grid and leaves them empty when it cannot -- an old host who was
+    // never on this round's grid, a packet that has gone -- and an empty gap
+    // where a name was promised is worse than the generic noun.
+    expect(netSentence(st({ migration: mig({ previousHostName: '', newHostName: '' }) })))
+      .toBe('THE HOST LEFT — RECONNECTING, 30S')
+  })
+
+  it('outranks the stall it is the cause of', () => {
+    // During a repair the runner is 'waiting' and may well be naming the last
+    // peer whose input went missing -- who is a player that is perfectly fine.
+    // Naming them blames the wrong person AND buries the only fact there is.
+    const both = netSentence(st({ waitingFor: ['Cyd'], migration: mig() }))
+    expect(both).toBe('ADA LEFT — RECONNECTING TO BEN, 30S')
+    expect(both).not.toContain('CYD')
+  })
+
+  it('says something for a link that is migrating before any state has arrived', () => {
+    // One tick wide in practice -- live.ts ticks the migration on the same turn
+    // it sets the status -- but the fallback matters because the alternative is
+    // falling through to the stall grammar and naming a bystander.
+    expect(netSentence(st({ link: 'migrating', waitingFor: ['Cyd'] })))
+      .toBe('THE HOST LEFT — RECONNECTING')
+  })
+
+  it('tells a player whose OWN link went that their car is still theirs', () => {
+    // The other half of the same freeze, and the one with nothing else to say
+    // it: a migration publishes a whole MigrationState, a rejoin publishes this
+    // word and nothing more. types.ts asks for all four LinkStatus values to
+    // render differently and this is the one that had no sentence at all.
+    const line = netSentence(st({ link: 'rejoining', waitingFor: ['Ada'] }))
+    expect(line).toBe('YOUR CONNECTION DROPPED — GETTING YOU BACK IN')
+    // NO CLOCK, deliberately: nothing publishes a countdown for a rejoin, and a
+    // number invented on this side would be a number about a wait this client
+    // cannot see the far end of.
+    expect(line).not.toMatch(/\d/)
+  })
+
+  it('lets a migration outrank a rejoin, because it is the bigger fact', () => {
+    // Both can be true at once -- this client's link came back INTO a room that
+    // is replacing its host -- and the countdown is the one with a deadline on
+    // it that ends the race.
+    expect(netSentence(st({ link: 'rejoining', migration: mig() })))
+      .toBe('ADA LEFT — RECONNECTING TO BEN, 30S')
+  })
+
+  it('does not outrank a round that is already over', () => {
+    // A void round and an ejection are terminal: the race is not coming back,
+    // so a countdown to a repair that cannot help is a countdown to nothing.
+    expect(netSentence(st({ verdict: 'desync', migration: mig() })))
+      .toBe(netSentence(st({ verdict: 'desync' })))
+    expect(netSentence(st({ verdict: 'ejected', migration: mig() })))
+      .toBe(netSentence(st({ verdict: 'ejected' })))
   })
 })

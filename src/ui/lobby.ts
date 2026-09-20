@@ -534,6 +534,15 @@ class LobbyScreensImpl implements LobbyScreens {
   private readonly rMsg: HTMLElement
   private readonly memberRows = new Map<string, MemberRow>()
   private roomModel: LobbyRoom | null = null
+  /**
+   * Why the last room ended, written by `onClosed` and read once by whichever
+   * screen gets there first. Empty when nothing has ended.
+   *
+   * IT OUTLIVES THE CALLBACK ON PURPOSE. A room can close while this whole
+   * screen is off -- during a race, which is when host migration and rejoin
+   * both fail -- and the sentence has to survive until somebody is looking.
+   */
+  private closedNotice = ''
   /** Set on arrival, consumed by the next paint. See scrollMembersToMe. */
   private scrollToMe = false
   private readyBusy = false
@@ -1051,7 +1060,29 @@ class LobbyScreensImpl implements LobbyScreens {
     const svc = this.service()
     const room = svc?.current() ?? null
     if (!room) {
-      this.notice('You are not in a lobby.')
+      /**
+       * THE COMMONEST WAY TO GET HERE IS NOT "YOU ARE NOT IN A LOBBY", AND
+       * SAYING THAT THREW AWAY THE ONLY EXPLANATION THERE WAS.
+       *
+       * A room that ends mid-RACE fires `onClosed` while this screen is not on
+       * -- the race is -- so the branch there that navigates does nothing and
+       * all it leaves behind is the sentence. The race then ends, game/main.ts
+       * walks back to the room, and this line used to answer a question nobody
+       * asked: the player knows they are not in a lobby, they are looking at
+       * the place it used to be. What they do not know is that the host left
+       * and thirty seconds of reconnection did not reach whoever took over.
+       *
+       * So the closure's own sentence wins when there is one, and "you are not
+       * in a lobby" is kept for the case it was actually written for: walking
+       * into the room screen without ever having been in a room.
+       */
+      this.notice(this.takeClosedNotice() || 'You are not in a lobby.')
+      // AND THE ROUND'S NOTICE GOES WITH THE ROOM IT WAS FOR. `setRoomNotice`
+      // is how a void or abandoned round explains itself on the way back, and
+      // it is read by the room screen -- which there is no longer one of.
+      // Left standing it would surface over the NEXT room this player joins,
+      // describing a round in a lobby that no longer exists.
+      pendingRoomNotice = null
       this.deps.goto('browser')
       return
     }
@@ -1552,6 +1583,9 @@ class LobbyScreensImpl implements LobbyScreens {
 
   private enterRoom(room: LobbyRoom): void {
     this.roomModel = room
+    // IN A ROOM IS THE END OF THE LAST ROOM'S STORY. Held rather than dropped
+    // on the way out, so this is where it stops being true.
+    this.closedNotice = ''
     this.stopPoll()
     // The garage's choice follows the player into the lobby. Fire and forget:
     // `setLoadout` returns void and the push that follows is the truth.
@@ -1682,10 +1716,34 @@ class LobbyScreensImpl implements LobbyScreens {
    * peer-to-peer connections will not traverse NAT without a relay this
    * project does not have, which makes it the commonest way a real join fails,
    * and "that lobby ended unexpectedly" tells a player nothing they can act
-   * on. `detail` carries whatever the transport actually knows -- which ICE
-   * state it died in -- and is shown in the smaller type under it, the same
-   * split the browser's error block already makes between the player's
-   * sentence and the developer's.
+   * on. `detail` carries whatever the transport actually knows.
+   *
+   * ------------------------------------------------------------------------
+   * `detail` REPLACES THE SENTENCE RATHER THAN TRAILING IT IN BRACKETS, WHICH
+   * IS A CHANGE AND IS WORTH THE PARAGRAPH.
+   *
+   * It used to render as `${text} (${detail})`, which was right when a detail
+   * was a fragment -- the ICE state a connection died in, developer's type
+   * under a player's sentence, the same split the browser's error block makes.
+   * Host migration and rejoin changed what arrives. Both of `net/live.ts`'s
+   * producers now pass a finished, player-facing account of what happened:
+   *
+   *   "Could not reach Ada, who took over when the host left. Thirty seconds
+   *    was the whole budget and the race went on without us."
+   *   "Could not get back to Ada in 30 seconds. Your car finished the round
+   *    under the AI from the frame you went quiet."
+   *
+   * Prefixing the generic line to either is worse than useless. "The host
+   * left, so that lobby closed" in front of the first one CONTRADICTS it --
+   * the lobby did not close when the host left, that is the entire point of
+   * migration, it closed thirty seconds later when the repair ran out -- and
+   * the brackets frame the only sentence that describes this failure as an
+   * aside to one that does not.
+   *
+   * The generic text is what remains when nothing more specific was said,
+   * which is every mock closure and every `hostLeft` that really is just a
+   * host leaving a lobby. Nothing is lost; the specific case stops being
+   * overwritten by the general one.
    */
   private onClosed(reason: 'hostLeft' | 'kicked' | 'unreachable' | 'error', detail?: string): void {
     this.roomModel = null
@@ -1697,8 +1755,31 @@ class LobbyScreensImpl implements LobbyScreens {
             + 'each other. Nothing is wrong with either of you — some pairs of '
             + 'connections cannot be introduced without a relay.'
             : 'That lobby ended unexpectedly.'
-    this.notice(detail ? `${text} (${detail})` : text)
+    const said = detail && detail.trim() ? detail.trim() : text
+    /**
+     * HELD AS WELL AS SHOWN, because this fires from the wire and the wire does
+     * not care which screen is up. A room that ends mid-race closes while the
+     * player is looking at a RACE: the branch below navigates nothing, the
+     * notice is written to a browser screen nobody is on, and by the time they
+     * walk back to it the round has put its own sentence up. So it is kept
+     * until a screen actually reads it -- see `takeClosedNotice`.
+     */
+    this.closedNotice = said
+    this.notice(said)
     if (this.on === 'room' || this.on === 'create') this.deps.goto('browser')
+  }
+
+  /**
+   * Why the last room ended, once, or ''.
+   *
+   * TAKEN AND CLEARED, exactly as `pendingRoomNotice` is and for the same
+   * reason: a closure is a thing that happened at a moment, and a screen still
+   * explaining it two lobbies later is a screen that is wrong.
+   */
+  private takeClosedNotice(): string {
+    const said = this.closedNotice
+    this.closedNotice = ''
+    return said
   }
 
   private paintRoom(room: LobbyRoom): void {

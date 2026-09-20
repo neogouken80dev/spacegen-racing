@@ -12,10 +12,13 @@
  * The decision Vince made is PEER-TO-PEER WebRTC: no game server, one player
  * hosts, and a serverless endpoint does nothing but introduce them. That is
  * cheap and it is also the netcode model with the most ways to be wrong --
- * the host has a latency advantage, a host who leaves ends the race, and
- * somewhere between a tenth and a fifth of connections will not traverse NAT
- * without a TURN relay. Those are live design problems, not reasons to
- * re-litigate the choice.
+ * the host has a latency advantage, and somewhere between a tenth and a fifth
+ * of connections will not traverse NAT without a TURN relay. Those are live
+ * design problems, not reasons to re-litigate the choice.
+ *
+ * "A host who leaves ends the race" used to be the third item on that list and
+ * is no longer true: see MIGRATION_BUDGET_MS. It ends the race only if no
+ * survivor can be reached inside the budget.
  *
  * What this file buys is the ability to change the answer later for the price
  * of one implementation rather than the price of the whole front end. The UI
@@ -346,9 +349,11 @@ export interface SeriesStanding {
  * If they come back, they take their own slot again and score normally from
  * that round on. The slot is theirs for the whole series.
  *
- * A HOST WHO LEAVES IS DIFFERENT and is the unavoidable cost of peer-to-peer:
- * the room has no server to outlive them. The series ends, and the standings
- * as they stand are shown rather than discarded.
+ * A HOST WHO LEAVES is no longer the end of it. The role migrates to the
+ * lowest surviving grid slot (see MIGRATION_BUDGET_MS), and the series carries
+ * on under them. Only a migration that cannot complete inside the budget ends
+ * things -- and then the standings as they stand are shown rather than
+ * discarded.
  */
 export interface CreateLobbyOptions {
   name: string
@@ -416,6 +421,68 @@ export interface MultiplayerSlot {
    * If it is in the sim's config, it belongs in the packet.
    */
   aiSkill: number | null
+}
+
+/**
+ * One slot's inputs, as they travel.
+ *
+ * THE INPUTS ARE THE SAVE STATE. This sim's world is not serialisable and its
+ * inputs are, so rebuilding a race means replaying it rather than shipping a
+ * snapshot -- which is only possible because the sim is deterministic, and is
+ * the same property the whole netcode rests on. Measured: ~650 frames replay in
+ * 52-76ms, so "start again from frame 1" is a real option rather than a
+ * theoretical one, and it is the option taken, because a returning client has
+ * routinely stepped PAST its own handover frame and forward replay cannot undo
+ * that. One path, no condition to get wrong.
+ *
+ * `from` is the first frame in `packed`; -1 inside it is a hole.
+ */
+export interface TapeRow {
+  slot: number
+  from: number
+  packed: readonly number[]
+}
+
+/**
+ * Everything needed to put a race back on screen mid-round.
+ *
+ * THE RECEIVER MUST REBUILD THE RACE FROM `packet` AND THEN REPLAY, EVERY
+ * TIME, even when it still has the `Race` it was using a moment ago. That
+ * looks wasteful and it is the only correct rule.
+ *
+ * The reason is the drop rule read from the other direction. The host chooses
+ * the AI handover from the last input it HEARD -- which no other client can
+ * have stepped past, and which the dropped client itself routinely HAS: it
+ * holds its own inputs `inputDelay` frames beyond anything the host received,
+ * and goes on stepping them until it runs out. So a returning client's own
+ * frames either side of the handover were simulated with a person at the wheel
+ * where the room had an AI, and no amount of forward replay undoes that.
+ *
+ * Measured on an ordinary link cut rather than a contrived one: the host
+ * handed the slot over at frame 304 and the returning client had already
+ * stepped 304, and the hashes disagreed from the next checkpoint. Rebuilding
+ * costs one circuit load plus a replay -- 52-76ms for six hundred frames --
+ * against a world rebuild the player has already paid for once. Choosing
+ * between two paths on a condition this subtle would be choosing to be wrong
+ * occasionally.
+ */
+export interface RoundResume {
+  /** Identical to the round's original -- same seed, same grid, same
+   *  `inputDelay`. Anything else is a different race. */
+  packet: RaceStartPacket
+  /** Every slot's inputs, frame 1 to `frame`. */
+  rows: readonly TapeRow[]
+  /**
+   * Agreed AI/person toggle frames per player, ascending.
+   *
+   * CARRIED WITH THE TAPE AND NOT DERIVED FROM IT. A client that replayed the
+   * inputs but not the handover history would rebuild a race that is subtly
+   * not the room's race, and the desync detector would then void a round that
+   * was fine for everybody else.
+   */
+  handovers: ReadonlyMap<string, readonly number[]>
+  /** The frame the room had reached. Replay to here, then run live. */
+  frame: number
 }
 
 export interface RaceStartPacket {
@@ -607,6 +674,63 @@ export interface LobbyService {
  * authoritative server would need to receive -- so the interface survives the
  * decision being revisited.
  */
+/**
+ * HOST MIGRATION, and why a star can do it at all.
+ *
+ * When the hub dies the graph is EMPTY -- every guest was connected only to the
+ * host, so nobody holds a link to anybody. Migration is therefore a full
+ * re-handshake through the signalling mailbox, which is polled, which is where
+ * the seconds go. It is not instant and cannot be made instant.
+ *
+ * WHAT MAKES IT POSSIBLE IS DETERMINISTIC LOCKSTEP. No client can step a frame
+ * it lacks inputs for, so the moment the host vanishes every survivor is
+ * stopped at a known frame holding IDENTICAL state. There is nothing to
+ * reconcile -- only a relay to replace. A state-synchronised netcode would have
+ * to merge eight worlds that had drifted apart; this one has to make a phone
+ * call.
+ *
+ * Vince asked for a window rather than an instant swap, which is exactly the
+ * right shape: `MIGRATION_BUDGET_MS` is how long the room will wait before it
+ * gives up and ends the race.
+ *
+ * THE ELECTION IS DETERMINISTIC BECAUSE IT HAS TO BE. The survivors cannot
+ * talk -- that is the whole problem -- so they cannot negotiate. Every client
+ * runs the same rule over the same grid and arrives at the same answer alone:
+ * the lowest surviving grid slot. NOT "best ping", which would require the
+ * measurements that require the connections that do not exist yet.
+ *
+ * AND THE HOST IS A ROLE, NOT AN IDENTITY. An old host who reconnects rejoins
+ * as a guest. Letting them reclaim would mean a second migration triggered by
+ * the event that was supposed to end the first one.
+ */
+export const MIGRATION_BUDGET_MS = 30_000
+
+export type LinkStatus =
+  /** Connected and stepping. */
+  | 'up'
+  /** The host is gone and a new one is being elected and dialled. */
+  | 'migrating'
+  /** This client lost its own link and is trying to get back in. */
+  | 'rejoining'
+  /** Over. `onClosed` has the reason. */
+  | 'down'
+
+export interface MigrationState {
+  /** The host that went away, so the screen can name who left rather than
+   *  only who is taking over. */
+  previousHostId: string
+  /** Who every survivor independently elected. */
+  newHostId: string
+  /** True when that is this client. */
+  isLocal: boolean
+  /** Milliseconds left of `MIGRATION_BUDGET_MS`. Drives the countdown on
+   *  screen -- a wait with no clock reads as a hang. */
+  remainingMs: number
+  /** Peers already re-connected, and how many are expected. */
+  connected: number
+  expected: number
+}
+
 export interface RaceTransport {
   /** Publish the local player's input for a frame. */
   sendInput(frame: number, packed: number): void
@@ -638,6 +762,22 @@ export interface RaceTransport {
    */
   onRoundDrop: (playerId: string, aiFromFrame: number) => void
   /**
+   * The room has AGREED that a slot is a PERSON again, from `frame`.
+   *
+   * The exact mirror of `onRoundDrop` and load-bearing for the identical
+   * reason: substitute one frame apart and the two clients make a different
+   * number of stepAI draws and their rng streams part. A drop is agreed far
+   * enough BEHIND that nobody has stepped past it; a restore is agreed far
+   * enough AHEAD that the returning player's own inputs arrive first.
+   */
+  onRoundLive: (playerId: string, frame: number) => void
+  /**
+   * Rebuild the race from here -- the answer to `rejoin()`.
+   *
+   * See `TapeRow` for why this is a tape and not a snapshot.
+   */
+  onResync: (resume: RoundResume) => void
+  /**
    * The clients have diverged, detected from the hashes above.
    *
    * THERE IS NO SUCH THING AS A SMALL DESYNC in a deterministic sim: a 1e-4
@@ -653,5 +793,34 @@ export interface RaceTransport {
   onDesync: (frame: number) => void
   /** Worst round trip in the room right now, for the HUD's connection pip. */
   readonly worstPingMs: number
+  /** Up, migrating, rejoining or down. The HUD renders all four differently. */
+  readonly status: LinkStatus
+  /**
+   * Migration started, progressed, or finished (null).
+   *
+   * The race is PAUSED throughout, which costs nothing: lockstep was already
+   * stopped the instant the host's inputs stopped arriving. What the player
+   * must see is that the game is waiting rather than hung -- hence the clock in
+   * `MigrationState`.
+   */
+  onMigration: (state: MigrationState | null) => void
+  /**
+   * The host role moved. Fired on every client including the new host.
+   *
+   * Everything the old host was authoritative for moves with it: relaying
+   * inputs, declaring drops, refereeing desyncs, publishing pings,
+   * re-advertising the lobby row (or the room vanishes from the browser
+   * mid-race) and, in a series, owning the standings.
+   */
+  onHostChange: (hostId: string) => void
+  /**
+   * Take a slot back after losing the link.
+   *
+   * A player whose wifi blips is handed to the AI at an agreed frame, and
+   * their slot stays THEIRS for the round -- nobody else can have it. Coming
+   * back is the same re-handshake migration uses, then the reverse of a drop:
+   * the host announces a frame from which that slot is a person again.
+   */
+  rejoin(): Promise<Result<void>>
   dispose(): void
 }

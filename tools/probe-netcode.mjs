@@ -72,11 +72,25 @@
  * to agree with them. A stub cannot fail the way the endpoint fails, which
  * makes it the one thing not worth testing against.
  */
+/*
+ * RUN IT WITH tsx, NOT node:  npx tsx tools/probe-netcode.mjs
+ *
+ * This probe imports the real server logic out of src/net/*.ts so the two
+ * browsers talk to the code that ships rather than to a stub. Those modules
+ * import each other WITHOUT file extensions, which Node's ESM resolver does
+ * not do for local files -- so plain `node` dies on the first hop with
+ * ERR_MODULE_NOT_FOUND naming a path that obviously exists, which reads like
+ * a broken build and is not one. tsx resolves them.
+ *
+ * Every other probe in tools/ runs under plain node because none of them
+ * import TypeScript. These two are the exception; hence the sign.
+ */
 import { chromium } from 'playwright'
 import { createServer } from 'node:http'
 import { readFile, mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
 import { join, extname } from 'node:path'
 import { handleSignal } from '../src/net/signalProtocol.ts'
+import { handleAccount } from '../src/net/account.ts'
 
 const SHAPE = process.argv.includes('--shape')
 const KEEP = process.argv.includes('--keep')
@@ -117,21 +131,72 @@ const newId = () => {
   return out
 }
 
+/**
+ * THE ACCOUNT ENDPOINT, FOR REAL, BECAUSE `live` MEANS LIVE EVERYTHING.
+ *
+ * net/index.ts resolves a peer's identity through `accountService().load()`
+ * before a lobby can be created, so a harness with no `/api/account` is one in
+ * which every page opens by minting an offline profile and logging a 404 that
+ * reads exactly like a fault in the bundle -- which is the thing the named 404
+ * line at the bottom of this server exists to stop happening. `handleAccount`
+ * takes its store, its clock and its token source as arguments precisely so it
+ * can be stood up next to the signalling handler, which is what happens here.
+ *
+ * `newToken` is length-aware and `newId` is not: an id is 16 characters and a
+ * secret is 32, and both are validated on the way in, so the 12-character
+ * signalling id would be refused by the endpoint's own `secretOk`.
+ */
+const newToken = (len) => {
+  let out = ''
+  while (out.length < len) out += newId()
+  return out.slice(0, len)
+}
+const acctBlobs = new Map()
+let acctTag = 0
+const acctStore = {
+  get: async (k) => (acctBlobs.has(k) ? { ...acctBlobs.get(k) } : null),
+  create: async (k, v) => {
+    if (acctBlobs.has(k)) return false
+    acctBlobs.set(k, { value: v, etag: String(++acctTag) })
+    return true
+  },
+  replace: async (k, v, etag) => {
+    const cur = acctBlobs.get(k)
+    // A null etag writes unconditionally, which is the contract in account.ts.
+    if (etag !== null && (!cur || cur.etag !== etag)) return false
+    acctBlobs.set(k, { value: v, etag: String(++acctTag) })
+    return true
+  },
+  del: async (k) => { acctBlobs.delete(k) },
+}
+
 let signalCalls = 0
+const readBody = (req) => new Promise((r) => {
+  let b = ''
+  req.on('data', (c) => { b += c })
+  req.on('end', () => r(b))
+})
 const server = createServer(async (req, res) => {
   try {
     const path = decodeURIComponent((req.url || '/').split('?')[0])
     if (path === '/api/signal') {
       signalCalls++
-      const body = await new Promise((r) => {
-        let b = ''
-        req.on('data', (c) => { b += c })
-        req.on('end', () => r(b))
-      })
+      const body = await readBody(req)
       let parsed = null
       try { parsed = JSON.parse(body) } catch { /* handled below */ }
       const out = parsed
         ? await handleSignal(store, parsed, Date.now(), newId)
+        : { ok: false, error: 'bad-body' }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(out))
+      return
+    }
+    if (path === '/api/account') {
+      const body = await readBody(req)
+      let parsed = null
+      try { parsed = JSON.parse(body) } catch { /* handled below */ }
+      const out = parsed
+        ? await handleAccount(acctStore, parsed, Date.now(), newToken)
         : { ok: false, error: 'bad-body' }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
       res.end(JSON.stringify(out))

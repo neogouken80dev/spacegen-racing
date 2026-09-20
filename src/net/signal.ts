@@ -47,7 +47,7 @@
  * to be told which half is broken.
  */
 import {
-  HEARTBEAT_MS, SIGNAL_PATH,
+  HEARTBEAT_MS, HOST_CLAIM_AFTER_MS, SIGNAL_PATH,
   type LobbyRecord, type SignalKind, type SignalMsg, type SignalRequest,
   type SignalResponse,
 } from './signalProtocol'
@@ -58,6 +58,33 @@ import type { LobbySummary } from './types'
 export const POLL_FAST_MS = 900
 /** The host's rate while its lobby is open and empty. See the header. */
 export const POLL_OPEN_MS = 3000
+/**
+ * The HOST's rate while a round is actually running.
+ *
+ * THE FOURTH RATE, AND IT EXISTS ENTIRELY FOR HOST MIGRATION. A racing host
+ * has nothing to say to the endpoint -- the race is peer to peer and the row
+ * is already marked `racing` -- so it belongs on the ten-second heartbeat, and
+ * that is where it used to sit. What changed is that `seenAt` is now EVIDENCE:
+ * the endpoint refuses a survivor's claim on the room until the host has been
+ * quiet for `HOST_CLAIM_AFTER_MS`, because a silent host and a slow one look
+ * identical from there, and at a ten-second beat "three missed beats" is
+ * thirty-one seconds -- past the whole migration budget.
+ *
+ * Four seconds makes the same three missed beats fourteen, which is the number
+ * `HOST_CLAIM_AFTER_MS` actually is. The cost is one request every four
+ * seconds for the duration of a race, on one client per lobby: a two-minute
+ * round is thirty requests, against the eight hundred a lobby already spends
+ * sitting on the room screen for twenty minutes. It buys the lobby not
+ * disappearing from the browser when its host's laptop lid closes.
+ *
+ * It is asserted against `HOST_CLAIM_AFTER_MS` below rather than left as two
+ * numbers in two files that agree by coincidence.
+ */
+export const POLL_RACE_MS = 4000
+if (POLL_RACE_MS * 3 > HOST_CLAIM_AFTER_MS) {
+  console.warn('signal: a racing host heartbeats too slowly for the endpoint to tell '
+    + 'it apart from a dead one inside the migration budget')
+}
 /** Consecutive poll failures before the owner is told the service is down. */
 export const OFFLINE_AFTER = 3
 /** Backoff ceiling. A dead endpoint is retried at this, for ever, quietly. */
@@ -110,7 +137,7 @@ export class SignalClient {
   private failures = 0
   private disposed = false
   /** Set by the owner every time it learns something. See the header. */
-  rate: 'fast' | 'open' | 'idle' = 'fast'
+  rate: 'fast' | 'open' | 'race' | 'idle' = 'fast'
 
   onMail: (from: string, msgs: readonly SignalMsg[]) => void = () => {}
   onLobby: (lobby: LobbyRecord | null) => void = () => {}
@@ -199,6 +226,67 @@ export class SignalClient {
   }
 
   /**
+   * IS THE HOST GONE, OR AM I?
+   *
+   * THE QUESTION A GUEST CANNOT ANSWER FOR ITSELF, and it decides which of two
+   * completely different repairs to run. In a star a guest holds exactly one
+   * link, so a dead host and a dead guest look identical from where the guest
+   * is standing -- and getting it wrong means a guest whose wifi blipped
+   * promotes itself to host and races on alone while the real room races on
+   * without it.
+   *
+   * The endpoint hears from everybody, so it can tell. Three answers, and the
+   * third is as important as the other two:
+   *
+   *   gone     the host said goodbye mid-race, or has not been heard from for
+   *            `HOST_CLAIM_AFTER_MS`. Migrate.
+   *   closed   the lobby is over. Nothing to repair.
+   *   quiet    the host's last heartbeat is recent. AMBIGUOUS, and that is the
+   *            hard part: one second after a host crashes, its last heartbeat
+   *            is also recent. So this answer carries `quietMs` and the caller
+   *            watches whether it GROWS -- a crashed host's quiet time only
+   *            ever increases, a live one's drops back on its next beat.
+   *   unknown  we could not reach the endpoint either -- which is itself
+   *            evidence, and it points at us. The caller keeps asking until
+   *            the migration budget runs out rather than guessing.
+   *
+   * `quietMs` is measured on the SERVER's clock and sent as an elapsed time,
+   * so no client has to reason about skew against a serverless function.
+   */
+  async hostState(): Promise<{ state: 'gone' | 'unknown' | 'closed' | 'quiet'; quietMs: number }> {
+    const id = this.lobbyId
+    if (!id) return { state: 'unknown', quietMs: 0 }
+    const res = await this.post({ op: 'poll', id, peer: this.peerId })
+    if (!res.ok || res.op !== 'poll') return { state: 'unknown', quietMs: 0 }
+    if (!res.lobby || res.lobby.status === 'closed') return { state: 'closed', quietMs: 0 }
+    if (res.lobby.hostGone === true) return { state: 'gone', quietMs: res.hostQuietMs }
+    return {
+      state: res.hostQuietMs >= HOST_CLAIM_AFTER_MS ? 'gone' : 'quiet',
+      quietMs: res.hostQuietMs,
+    }
+  }
+
+  /**
+   * Take the host role in the directory, after a migration.
+   *
+   * NOT FIRE-AND-FORGET, unlike `update`, and the difference is that this one
+   * can be REFUSED and the refusals mean different things. `wait` is the
+   * endpoint saying the old host is still being heard from, which is a reason
+   * to try again in a moment; `lost` is another survivor's claim having stuck
+   * first, which is a reason to stop and go and talk to them instead. Folding
+   * the two into a boolean would make the caller retry against a room that
+   * already has a host.
+   */
+  async claimHost(name: string, was: string): Promise<'ok' | 'wait' | 'lost' | 'error'> {
+    const id = this.lobbyId
+    if (!id) return 'error'
+    const res = await this.post({ op: 'host', id, peer: this.peerId, name, was })
+    if (!res.ok) return res.error === 'host-alive' ? 'wait' : 'error'
+    if (res.op !== 'host') return 'error'
+    return res.lobby.hostId === this.peerId ? 'ok' : 'lost'
+  }
+
+  /**
    * Leave, and MEAN IT BEFORE THE TAB GOES.
    *
    * Returns the promise so a caller with time can await it, but the common
@@ -261,8 +349,28 @@ export class SignalClient {
   // -------------------------------------------------------------------------
 
   private attach(lobbyId: string): void {
+    /**
+     * THE HIGH-WATER MARKS SURVIVE A RE-JOIN OF THE SAME LOBBY, and that is
+     * not an optimisation.
+     *
+     * `RaceTransport.rejoin` re-posts its membership through `join`, which
+     * lands here -- and the first cut cleared `since`, so the next poll handed
+     * the returning client every letter the host had EVER sent it: the
+     * original offer, its answer, and a dozen ICE candidates from a
+     * negotiation that finished five minutes ago. Those went straight into a
+     * brand new `RTCPeerConnection` which was sitting in `have-local-offer`,
+     * so the stale answer was applied to the fresh offer and the connection
+     * that was about to work never did.
+     *
+     * The probe found it as a rejoin that timed out at the full thirty-second
+     * budget with both ends apparently healthy, which is the worst kind of
+     * bug to find any other way.
+     *
+     * A DIFFERENT lobby gets a clean slate, because there is nothing to
+     * remember: those mailboxes have never been read.
+     */
+    if (lobbyId !== this.lobbyId) this.since = {}
     this.lobbyId = lobbyId
-    this.since = {}
     this.failures = 0
     this.rate = 'fast'
     this.schedule(0)
@@ -314,7 +422,8 @@ export class SignalClient {
     try { this.onLobby(res.lobby) } catch (e) { console.warn('signal: lobby handler threw', e) }
 
     this.schedule(this.rate === 'fast' ? POLL_FAST_MS
-      : this.rate === 'open' ? POLL_OPEN_MS : HEARTBEAT_MS)
+      : this.rate === 'open' ? POLL_OPEN_MS
+        : this.rate === 'race' ? POLL_RACE_MS : HEARTBEAT_MS)
   }
 
   /** Time since the last successful poll, for a caller that wants to say so. */

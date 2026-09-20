@@ -157,21 +157,41 @@ const readRoom = () => page.evaluate(() => {
  * ship having been read and never looked at.
  *
  * Pushed straight into the HUD instead. `setNetStatus` is a projection of the
- * runner's three public fields and nothing else -- it decides nothing, which
- * is the contract on it -- so a hand-made status renders byte for byte what a
- * real one does, and tests/series.test.ts checks the grammar of all six
- * branches without a browser. What the PICTURE is for is the placement: that
- * the line sits below the racing line rather than across it, and that it does
- * not collide with the round card or the countdown.
+ * runner's public fields and the transport's migration state, and nothing else
+ * -- it decides nothing, which is the contract on it -- so a hand-made status
+ * renders byte for byte what a real one does, and tests/series.test.ts checks
+ * the grammar of every branch without a browser. What the PICTURE is for is the
+ * placement: that the line sits below the racing line rather than across it,
+ * and that it does not collide with the round card or the countdown.
+ *
+ * THE MIGRATION LINE IS THE LONGEST ONE THIS BANNER EVER DRAWS -- two names, a
+ * clause and a clock -- so it is photographed at both ends of its length range.
+ * tools/probe-migrate.mjs shows it during a real repair with the number moving;
+ * this shows whether it FITS.
  */
 async function shootStallLine() {
   await page.setViewportSize(VIEWPORT)
   await page.waitForTimeout(800)
+  const mig = (over) => ({
+    previousHostId: 'p-ada', previousHostName: 'Ada',
+    newHostId: 'p-ben', newHostName: 'Ben',
+    isLocal: false, remainingMs: 27_400, connected: 1, expected: 3, ...over,
+  })
   for (const [tag, status] of [
-    ['stall-one', { verdict: 'waiting', waitingFor: ['Ada'], loading: false }],
-    ['stall-load', { verdict: 'waiting', waitingFor: ['Ada'], loading: true }],
-    ['stall-three', { verdict: 'waiting', waitingFor: ['Ada', 'Ben', 'Cyd'], loading: false }],
-    ['stall-void', { verdict: 'desync', waitingFor: [], loading: false }],
+    ['stall-one', { verdict: 'waiting', waitingFor: ['Ada'], loading: false, migration: null, link: 'up' }],
+    ['stall-load', { verdict: 'waiting', waitingFor: ['Ada'], loading: true, migration: null, link: 'up' }],
+    ['stall-three', { verdict: 'waiting', waitingFor: ['Ada', 'Ben', 'Cyd'], loading: false, migration: null, link: 'up' }],
+    ['stall-void', { verdict: 'desync', waitingFor: [], loading: false, migration: null, link: 'down' }],
+    // A guest watching somebody else take over: the ordinary case, and the
+    // widest one -- both names are drawn.
+    ['migrate-guest', { verdict: 'waiting', waitingFor: ['Cyd'], loading: false, migration: mig(), link: 'migrating' }],
+    // The new host's own screen, and the narrow end: nobody is being dialled.
+    ['migrate-host', { verdict: 'waiting', waitingFor: [], loading: false, migration: mig({ isLocal: true, remainingMs: 8_200 }), link: 'migrating' }],
+    // Neither id resolves to anybody on this round's grid.
+    ['migrate-noname', { verdict: 'waiting', waitingFor: [], loading: false, migration: mig({ previousHostName: '', newHostName: '', remainingMs: 2_100 }), link: 'migrating' }],
+    // The other half of the same freeze: this player's OWN link went. No
+    // countdown is published for it, so the line has none.
+    ['rejoining', { verdict: 'waiting', waitingFor: ['Ada'], loading: false, migration: null, link: 'rejoining' }],
   ]) {
     await page.evaluate((st) => { window.__GAME__.hud.setNetStatus(st) }, status)
     await page.waitForTimeout(300)

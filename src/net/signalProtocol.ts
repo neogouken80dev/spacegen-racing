@@ -82,6 +82,31 @@ export const HEARTBEAT_MS = 10_000
  */
 export const LOBBY_TTL_MS = 45_000
 
+/**
+ * How long after the host was last heard from before another member of the
+ * lobby may take the role.
+ *
+ * THIS ENDPOINT IS THE ONLY ARBITER THERE IS. Host migration is decided
+ * locally -- every survivor runs the same rule over the same grid, because
+ * they cannot talk to each other to negotiate (see types.ts) -- but the
+ * DIRECTORY ROW is shared state that only this service owns, and a row still
+ * advertising a host who is not there is a row that vanishes from the browser
+ * at `LOBBY_TTL_MS` and takes the race's identity with it. So the new host
+ * claims the row, and this number is what stops a claim being a theft.
+ *
+ * FOURTEEN SECONDS, against a racing host that heartbeats every four (see
+ * `POLL_RACE_MS` in signal.ts). Three missed beats plus slack: long enough
+ * that a host on a phone which locked its screen for a moment keeps its lobby,
+ * short enough to land inside `MIGRATION_BUDGET_MS` with half of it to spare.
+ *
+ * A host that leaves CLEANLY does not wait for any of this: `bye` mid-race
+ * sets `hostGone`, and a claim against that is allowed at once. The timer is
+ * only for the case where nobody said anything -- a closed laptop, a crashed
+ * tab, a train going into a tunnel -- which is also the case a timer is the
+ * only available evidence for.
+ */
+export const HOST_CLAIM_AFTER_MS = 14_000
+
 /** Longest a mailbox may grow before the oldest letters are dropped. */
 export const MAX_BOX_MSGS = 96
 /** Longest a single signalling body may be. An SDP offer is ~4KB. */
@@ -137,6 +162,21 @@ export interface LobbyRecord {
   peers: SignalPeer[]
   createdAt: number
   seenAt: number
+  /**
+   * The host said goodbye and the room did NOT end with them.
+   *
+   * A HOST LEAVING USED TO BE THE END OF THE LOBBY, FULL STOP, and for a room
+   * sitting on the lobby screen it still is. Mid-race it cannot be: the
+   * survivors are all stopped at an identical known frame and are about to
+   * elect one of their own, and a record that closed under them would take the
+   * mailbox they are about to re-handshake through with it.
+   *
+   * So a `bye` from the host of a RACING lobby with other live members sets
+   * this instead of closing, and it means exactly one thing to the endpoint:
+   * a `host` claim is allowed immediately rather than after
+   * `HOST_CLAIM_AFTER_MS`. It is cleared by the claim that succeeds.
+   */
+  hostGone?: boolean
 }
 
 export type SignalRequest =
@@ -150,6 +190,32 @@ export type SignalRequest =
   | { op: 'send'; id: string; from: string; to: string; msgs: { kind: string; body: string }[] }
   /** Host only: publish the row the directory shows. */
   | { op: 'update'; id: string; peer: string; status?: string; round?: number }
+  /**
+   * Take the host role. Refused unless the current host is demonstrably gone
+   * -- see `HOST_CLAIM_AFTER_MS` and `LobbyRecord.hostGone`.
+   */
+  | { op: 'host'; id: string; peer: string; name?: string
+      /**
+       * Who the claimant believes has died.
+       *
+       * IT IS HOW THE ENDPOINT TELLS THE TWO REFUSALS APART, and they are
+       * completely different answers. "The host you named is still being
+       * heard from" means wait and try again; "the room already moved on to
+       * somebody else" means stop and go and talk to them. Without it the
+       * second case is indistinguishable from the first and a survivor whose
+       * election lost spends the whole migration budget retrying against a
+       * room that has had a host for twenty seconds.
+       */
+      was?: string }
+  /**
+   * ICE servers, minted. Answered by `netlify/functions/signal.mts` and NOT by
+   * this file: it is the one operation that talks to a third party rather than
+   * to the store, and the API token it needs must never leave the function.
+   * `handleSignal` therefore answers it with a refusal, which is also exactly
+   * the right answer for the probe's in-memory server -- no relay configured,
+   * fall back to STUN, which is what a loopback wanted anyway.
+   */
+  | { op: 'ice' }
   | { op: 'bye'; id: string; peer: string }
 
 export type SignalResponse =
@@ -158,8 +224,29 @@ export type SignalResponse =
   | { ok: true; op: 'join'; lobby: LobbyRecord }
   | { ok: true; op: 'poll'; lobby: LobbyRecord | null
       /** Sender id -> the letters they have for me, oldest first. */
-      mail: Record<string, SignalMsg[]> }
+      mail: Record<string, SignalMsg[]>
+      /**
+       * How long the HOST has been quiet, in milliseconds, on the SERVER's
+       * clock.
+       *
+       * THE ONE FACT A GUEST CANNOT WORK OUT FOR ITSELF, and it decides which
+       * of two completely different repairs to run. In a star a guest holds
+       * exactly one link, so "the host died" and "my own connection died" look
+       * IDENTICAL from where it is standing -- and the first cut of host
+       * migration could not tell them apart, so a guest whose wifi blipped
+       * promoted itself to host and raced on alone while the real room raced
+       * on without it. Two races, both convinced they were the room.
+       *
+       * This endpoint can tell, because it hears from everybody. Sent as an
+       * elapsed time rather than a timestamp so no client has to reason about
+       * clock skew against a serverless function.
+       */
+      hostQuietMs: number }
   | { ok: true; op: 'send' | 'update' | 'bye' }
+  /** The record AFTER the claim, so a loser learns who won without a second
+   *  request. See `commitHost`. */
+  | { ok: true; op: 'host'; lobby: LobbyRecord }
+  | { ok: true; op: 'ice'; iceServers: unknown[] }
   | { ok: false; error: string }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +366,14 @@ function asRecord(raw: unknown): LobbyRecord | null {
     peers,
     createdAt: Number(r.createdAt) || 0,
     seenAt: Number(r.seenAt) || 0,
+    hostGone: r.hostGone === true,
   }
+}
+
+/** When the host was last heard from, or 0 if the record has forgotten them
+ *  entirely -- which is itself the strongest possible evidence they are gone. */
+function hostSeenAt(rec: LobbyRecord): number {
+  return rec.peers.find((p) => p.id === rec.hostId)?.seenAt ?? 0
 }
 
 /** Alive peers only. The caller has already decided `now`. */
@@ -489,15 +583,29 @@ export async function handleSignal(
       const rec = await readLobby(store, req.id)
       if (!rec || now - rec.seenAt >= LOBBY_TTL_MS) return err('notfound' satisfies JoinError)
       if (rec.status === 'closed') return err('notfound' satisfies JoinError)
-      if (rec.status === 'racing') return err('racing' satisfies JoinError)
-      if (rec.private && (req.code ?? '').toUpperCase() !== rec.code) {
-        return err('badcode' satisfies JoinError)
-      }
       const live = livePeers(rec, now)
       // A rejoin is not a join. A player whose poll lapsed for a moment, or who
       // reloaded the tab, keeps their slot rather than being told the lobby is
       // full of themselves.
       const already = live.some((p) => p.id === req.peer.id)
+      /**
+       * A RACING LOBBY REFUSES STRANGERS AND NOT ITS OWN PLAYERS.
+       *
+       * The grid was fixed when the round started and a dropped slot is an AI
+       * driving a car that still belongs to a person -- types.ts: "their slot
+       * stays THEIRS for the round". So a member coming back through
+       * `RaceTransport.rejoin` has to get past this line, and the first cut
+       * did not let them: `rejoin()` re-posts its membership exactly as a join
+       * does, and the endpoint answered `racing` and ended the rejoin before
+       * any of the interesting machinery ran. The probe found it immediately.
+       *
+       * Somebody who was never in the room is still refused, which is what the
+       * check was for.
+       */
+      if (rec.status === 'racing' && !already) return err('racing' satisfies JoinError)
+      if (rec.private && (req.code ?? '').toUpperCase() !== rec.code) {
+        return err('badcode' satisfies JoinError)
+      }
       if (!already && live.length >= rec.maxPlayers) return err('full' satisfies JoinError)
       const next = await commitMember(store, rec,
         { id: req.peer.id, name: cleanName(req.peer.name, 'Racer'), seenAt: now }, now)
@@ -508,7 +616,7 @@ export async function handleSignal(
     case 'poll': {
       if (!idOk(req.peer)) return err('bad-peer')
       const rec = await readLobby(store, req.id)
-      if (!rec) return { ok: true, op: 'poll', lobby: null, mail: {} }
+      if (!rec) return { ok: true, op: 'poll', lobby: null, mail: {}, hostQuietMs: 0 }
       // A poll IS the heartbeat. Separating them would double the request rate
       // for no information: a client that is polling is a client that is here.
       const me = rec.peers.find((p) => p.id === req.peer)
@@ -539,7 +647,13 @@ export async function handleSignal(
         }
         if (got.length > 0) mail[p.id] = got
       }
-      return { ok: true, op: 'poll', lobby: publicRecord({ ...rec, peers: livePeers(rec, now) }), mail }
+      return {
+        ok: true,
+        op: 'poll',
+        lobby: publicRecord({ ...rec, peers: livePeers(rec, now) }),
+        mail,
+        hostQuietMs: Math.max(0, now - hostSeenAt(rec)),
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -593,16 +707,123 @@ export async function handleSignal(
     }
 
     // -----------------------------------------------------------------------
+    /**
+     * TAKE THE HOST ROLE, WHEN THE HOST IS DEMONSTRABLY NOT THERE.
+     *
+     * The survivors of a dead host elect one of their own without talking to
+     * each other -- lowest surviving grid slot, run over a grid every client
+     * holds a byte-identical copy of -- and that election is what makes the
+     * RACE recover in seconds. This operation is about the other half: the
+     * directory row, which is the only piece of a lobby that lives somewhere
+     * neither the old host nor the new one controls.
+     *
+     * WITHOUT IT THE LOBBY DISAPPEARS FROM THE BROWSER MID-RACE. `update` is
+     * host-only (a guest who could set the status could hide somebody else's
+     * room), and `seenAt` is refreshed by whoever polls -- so a room whose
+     * host has gone keeps being polled by seven people and is still struck
+     * from the list at `LOBBY_TTL_MS`, because nothing can say "the race is
+     * still going, and this is who to ask about it now".
+     *
+     * THE ENDPOINT ARBITRATES AND THE CLIENTS DO NOT. Two clients that somehow
+     * reached different answers both claim; the read-back below means exactly
+     * one wins, and the loser is handed the winner's record rather than an
+     * error, so it learns who to dial from the same reply. That is the only
+     * shared arbiter this architecture has and it costs one request.
+     *
+     * IT CANNOT BE A THEFT, which is the property that matters: a claim is
+     * refused outright while the host is still being heard from. The only two
+     * ways through are the host having said goodbye mid-race (`hostGone`) or
+     * `HOST_CLAIM_AFTER_MS` of silence from it.
+     */
+    case 'host': {
+      if (!idOk(req.peer)) return err('bad-peer')
+      const rec = await readLobby(store, req.id)
+      if (!rec) return err('notfound')
+      if (rec.hostId === req.peer) return { ok: true, op: 'host', lobby: rec }
+      // SOMEBODY ELSE ALREADY TOOK IT. Answered with the record rather than a
+      // refusal: the claimant reads a `hostId` that is neither the host it
+      // was replacing nor itself, and re-points at the winner from this one
+      // reply instead of discovering it a poll later.
+      if (req.was && rec.hostId !== req.was) {
+        return { ok: true, op: 'host', lobby: publicRecord(rec) }
+      }
+      // A CLAIM FROM A STRANGER IS NOT A CLAIM. Only somebody the record
+      // already knows as a live member may take the room, which is the same
+      // membership test every other operation makes and the reason a passer-by
+      // who can read the directory cannot walk off with a race.
+      const live = livePeers(rec, now)
+      if (!live.some((p) => p.id === req.peer)) return err('not-member')
+      const quiet = now - hostSeenAt(rec)
+      if (!rec.hostGone && quiet < HOST_CLAIM_AFTER_MS) return err('host-alive')
+      const name = cleanName(req.name, live.find((p) => p.id === req.peer)?.name ?? 'Host')
+      const next: LobbyRecord = {
+        ...rec,
+        hostId: req.peer,
+        hostName: name,
+        hostGone: false,
+        // THE OLD HOST IS FORGOTTEN HERE AND NOT LEFT TO EXPIRE. Leaving them
+        // in the peer list means the new host's `absorb` keeps trying to open
+        // a connection to a tab that is not there, for a whole TTL, and the
+        // room reads as "still connecting" for forty-five seconds of a race
+        // that is already running.
+        peers: live.filter((p) => p.id !== rec.hostId),
+        seenAt: now,
+      }
+      await store.set(lobbyKey(rec.id), next)
+      // Read back, exactly as `commitMember` does and for the same reason:
+      // there is no compare-and-swap, so the only way to know whether this
+      // claim is the one that stuck is to look.
+      const back = await readLobby(store, rec.id)
+      await indexAdd(store, rec.id, alive)
+      return { ok: true, op: 'host', lobby: publicRecord(back ?? next) }
+    }
+
+    // -----------------------------------------------------------------------
+    /**
+     * Minted ICE servers. Not answered here -- see `SignalRequest`'s comment.
+     *
+     * A refusal is the CORRECT answer from this handler rather than a hole in
+     * it: the only other caller is tools/probe-netcode.mjs, which mounts this
+     * over a Map on a loopback where a relay would be a slower path to the
+     * same place. The client treats it as "no relay configured" and falls back
+     * to STUN, which is the shipped behaviour today.
+     */
+    case 'ice':
+      return err('no-ice')
+
+    // -----------------------------------------------------------------------
     case 'bye': {
       const rec = await readLobby(store, req.id)
       if (!rec) return { ok: true, op: 'bye' }
       if (rec.hostId === req.peer) {
-        // THE HOST LEAVING ENDS THE LOBBY, which types.ts calls the unavoidable
-        // cost of peer-to-peer and which this endpoint must therefore make
-        // true rather than merely likely. Marked closed and left in place for
-        // one TTL so a guest's next poll gets the reason rather than a 404 --
-        // "the host left" and "this lobby never existed" are different
-        // sentences and the guest is entitled to the right one.
+        /**
+         * A HOST WHO LEAVES MID-RACE HANDS THE ROOM ON RATHER THAN ENDING IT.
+         *
+         * types.ts used to call a host leaving the unavoidable cost of
+         * peer-to-peer, and for a room sitting on the lobby screen it still
+         * is -- there is nothing to save. A RACING room is the opposite case:
+         * every survivor is stopped at an identical known frame, which is the
+         * whole reason migration is possible at all, and a record that closed
+         * under them would take away the mailbox they are about to
+         * re-handshake through.
+         *
+         * So the row stays, marked, and the first survivor to claim it gets
+         * it immediately. If there is nobody left to claim it, the second
+         * branch below runs and the lobby closes exactly as it always did.
+         */
+        const others = livePeers(rec, now).filter((p) => p.id !== rec.hostId)
+        if (rec.status === 'racing' && others.length > 0) {
+          await store.set(lobbyKey(rec.id), {
+            ...rec, hostGone: true, peers: others, seenAt: now,
+          })
+          return { ok: true, op: 'bye' }
+        }
+        // OTHERWISE THE HOST LEAVING ENDS THE LOBBY. Nobody is racing, so
+        // there is nothing that could outlive them, and the endpoint has to
+        // make that true rather than merely likely. Marked closed and left in
+        // place for one TTL so a guest's next poll gets the reason rather
+        // than a 404 -- "the host left" and "this lobby never existed" are
+        // different sentences and the guest is entitled to the right one.
         await store.set(lobbyKey(rec.id), { ...rec, status: 'closed', seenAt: now })
         await indexDrop(store, rec.id)
         return { ok: true, op: 'bye' }

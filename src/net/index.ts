@@ -49,6 +49,7 @@ import {
   HASH_EVERY as HASH_EVERY_N, LockstepRunner as LockstepRunnerClass,
   packInput as packInputFn, unpackInput as unpackInputFn,
 } from './lockstep'
+import { LiveAccountService } from './account'
 import type { AccountService, LobbyService } from './types'
 
 export type NetProfile = 'mock' | 'perfect' | 'live'
@@ -197,7 +198,12 @@ let lobby: LobbyService | null = null
  * should begin because a module was named.
  */
 export function accountService(): AccountService {
-  if (!account) account = createMockAccountService(optionsFor(netProfile()))
+  if (!account) {
+    const profile = netProfile()
+    account = profile === 'live'
+      ? new LiveAccountService()
+      : createMockAccountService(optionsFor(profile))
+  }
   return account
 }
 

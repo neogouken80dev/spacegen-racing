@@ -112,6 +112,74 @@ function newId(): string {
   return out
 }
 
+/**
+ * ICE SERVERS, MINTED. The one operation that is answered here and not in
+ * src/net/signalProtocol.ts.
+ * ---------------------------------------------------------------------------
+ * Everything else in this endpoint is a pure function of the store, which is
+ * why it lives in a file a unit test can drive over a Map. This is not: it
+ * calls a third party, and it calls it with a credential that must never reach
+ * a browser. `TURN_KEY_API_TOKEN` can spend Vince's account; `TURN_KEY_ID` is
+ * harmless on its own but there is no reason to publish it either. So the
+ * browser asks this endpoint, and this endpoint asks Cloudflare.
+ *
+ * WHAT IT COSTS, verified rather than inherited (September 2026):
+ * Cloudflare Realtime bills TURN at $0.05 per GB of egress from their edge to
+ * the TURN client, with a free tier of 1,000 GB per month shared with their
+ * SFU. Their STUN service at stun.cloudflare.com is free and unlimited, which
+ * is why `DEFAULT_ICE` already points at it.
+ *
+ * TO TURN IT ON: create a TURN key in the Cloudflare dashboard (Realtime ->
+ * TURN), then set two environment variables on the Netlify site and redeploy.
+ *
+ *     TURN_KEY_ID=<the key id>
+ *     TURN_KEY_API_TOKEN=<the token>
+ *
+ * TO TURN IT OFF: remove them. With neither set this returns a refusal, the
+ * client falls back to `DEFAULT_ICE`, and the game behaves exactly as the
+ * build that shipped before any of this existed -- which is the property that
+ * made it safe to add at all.
+ */
+const TURN_TTL_S = 7200
+
+async function mintIce(): Promise<Response | null> {
+  const id = process.env.TURN_KEY_ID
+  const token = process.env.TURN_KEY_API_TOKEN
+  if (!id || !token) return null
+  try {
+    const res = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(id)}`
+      + '/credentials/generate-ice-servers',
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: TURN_TTL_S }),
+      },
+    )
+    if (!res.ok) {
+      // NAMED IN THE LOG AND ANONYMOUS IN THE REPLY. A player does not need to
+      // know that a billing account is suspended; the person reading the
+      // function log does, and the client's own fallback already handles it.
+      console.error('signal: turn credentials refused', res.status)
+      return null
+    }
+    const body = await res.json().catch(() => null) as { iceServers?: unknown } | null
+    // Cloudflare answers with `{ iceServers: [...] }` OR, in some older
+    // responses, one server object. Both are normalised to an array here so
+    // the browser's `cleanIceServers` only has one shape to accept.
+    const raw = body?.iceServers
+    const servers = Array.isArray(raw) ? raw : raw ? [raw] : []
+    if (servers.length === 0) return null
+    return json({ ok: true, op: 'ice', iceServers: servers })
+  } catch (e) {
+    console.error('signal: turn mint failed', e)
+    return null
+  }
+}
+
 export default async (req: Request, ctx: Context): Promise<Response> => {
   try {
     if (req.method !== 'POST') return json({ ok: false, error: 'method' }, 405)
@@ -123,6 +191,13 @@ export default async (req: Request, ctx: Context): Promise<Response> => {
 
     const ip = ctx.ip || req.headers.get('x-nf-client-connection-ip') || ''
     if (await rateLimited(ip)) return json({ ok: false, error: 'rate-limited' }, 429)
+
+    if (body.op === 'ice') {
+      const minted = await mintIce()
+      // A refusal is a normal answer with a reason in it, exactly as every
+      // other rejection here is: the client reads `ok: false` and uses STUN.
+      return minted ?? json({ ok: false, error: 'no-ice' })
+    }
 
     const res = await handleSignal(blobStore(), body, Date.now(), newId)
     // A rejected request is still a WELL-FORMED answer with a reason in it, so

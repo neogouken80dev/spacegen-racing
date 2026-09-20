@@ -60,15 +60,22 @@
  *      the stick feels identical in every seat. Lockstep is fair by
  *      construction; what the host gets is robustness, not reaction time.
  *
- *   2. THE HOST LEAVING ENDS THE RACE. types.ts already calls this the
- *      unavoidable cost of peer-to-peer and accepts it. A star makes it
- *      unavoidable in one more way -- the host is also the relay -- so there
- *      is no host migration here and no pretence of one.
+ *   2. THE HOST LEAVING TAKES THE WHOLE GRAPH WITH IT. Every guest was
+ *      connected only to the host, so when the hub dies nobody holds a link to
+ *      anybody -- there is no partial mesh to fall back through. That used to
+ *      be the end of the race and is not any more: `net/live.ts` rebuilds the
+ *      star around a new hub through the signalling mailbox, which works only
+ *      because deterministic lockstep leaves every survivor stopped at an
+ *      identical known frame. It is a re-handshake through a POLLED endpoint,
+ *      so it takes seconds rather than milliseconds, and `MIGRATION_BUDGET_MS`
+ *      is how long the room will wait.
  *
  *   3. THE HOST'S UPLOAD. Up to 42 small messages per frame. At ~40 bytes each
  *      that is ~100 KB/s up, which is fine on any desktop connection and is
  *      the thing to measure before shipping an eight-player lobby on mobile
- *      data. Two players, which is what the probe runs, is ~3 KB/s.
+ *      data. Two players, which is what the probe runs, is ~3 KB/s. Through a
+ *      TURN relay those are the bytes somebody is billed for -- see
+ *      `IceSource` for the measured rate and what it costs.
  *
  * ===========================================================================
  * WHO OFFERS
@@ -85,18 +92,196 @@ import { Rng } from '../sim/rng'
 // ---------------------------------------------------------------------------
 
 /**
- * STUN only. There is no TURN relay in this project and pretending otherwise
- * would be worse than not having one -- see `PeerFailure` for what the player
- * is told instead.
+ * STUN only, and it is still the DEFAULT rather than the only option.
  *
  * Two servers rather than one because a single unreachable STUN host turns
  * every connection on a restrictive network into a `CONNECT_TIMEOUT_MS` wait
  * instead of a fast local-candidate success, and they cost nothing.
+ *
+ * WHAT THIS ALONE CANNOT DO is the thing `PeerFailure.nat` exists to name: two
+ * peers whose networks will not let them see each other directly. STUN tells
+ * each of them what their public address looks like; it cannot make a path
+ * where there is none. That needs a RELAY, which needs a server that carries
+ * gameplay bytes, which is the one thing this architecture was built to avoid
+ * -- so it is configuration and not a constant. See `resolveIce`.
  */
 export const DEFAULT_ICE: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
 ]
+
+/**
+ * WHERE A RELAY COMES FROM, AND WHY IT IS NOT A CONSTANT IN THIS FILE.
+ * ===========================================================================
+ *
+ * Between a tenth and a fifth of connections cannot traverse NAT (types.ts's
+ * number, and it is the industry's: the honest range quoted by people who
+ * measure it is "anything between 0 and 50 percent depending on your users").
+ * Today every one of those players is told `FAILURE_TEXT.nat` and cannot play.
+ * A TURN relay is the only fix, and a TURN relay has three properties that
+ * decide the shape of this code:
+ *
+ *   IT COSTS MONEY PER BYTE. Cloudflare Realtime charges $0.05 per GB of
+ *   egress with the first 1,000 GB each month free (that free tier is shared
+ *   with their SFU). So the credentials are Vince's, the bill is Vince's, and
+ *   nothing in this repository may hardcode an account.
+ *
+ *   ITS CREDENTIALS ARE SHORT-LIVED. Cloudflare mints a username/credential
+ *   pair with a TTL of at most 48 hours from a long-lived API token. The token
+ *   must never reach a browser -- anybody holding it can spend the account --
+ *   so minting happens in the signalling function and the browser receives
+ *   only the pair. That is why this is an ASYNC resolve and not a constant.
+ *
+ *   IT MUST DEGRADE TO EXACTLY WHAT SHIPS TODAY. With nothing configured,
+ *   `resolveIce` returns `DEFAULT_ICE` and the game behaves byte for byte as
+ *   it does now. A misconfigured relay must not be worse than no relay.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PATH FOR VINCE, in full, because a documented path nobody can follow is
+ * not a documented path:
+ *
+ *   1. Cloudflare dashboard -> Realtime -> TURN -> create a TURN key. It gives
+ *      a key id and an API token.
+ *   2. Set both as environment variables on the Netlify site:
+ *        TURN_KEY_ID=<the key id>
+ *        TURN_KEY_API_TOKEN=<the token>
+ *   3. Nothing else. `netlify/functions/signal.mts` answers `{ op: 'ice' }` by
+ *      POSTing to
+ *        https://rtc.live.cloudflare.com/v1/turn/keys/$TURN_KEY_ID/credentials/generate-ice-servers
+ *      with `{ "ttl": 7200 }` and handing back the `iceServers` array it gets,
+ *      which is already in the exact shape `RTCPeerConnection` wants.
+ *
+ * Any other provider works the same way: the endpoint has to answer with
+ * `{ iceServers: RTCIceServer[] }` and this file does not care who did.
+ *
+ * ---------------------------------------------------------------------------
+ * A SELF-HOSTED OR STATIC ALTERNATIVE, for a coturn box or a fixed
+ * long-credential account: set `VITE_ICE_SERVERS` at build time to the JSON of
+ * an `RTCIceServer[]`. It is read once, it is baked into the bundle, and the
+ * credentials in it are therefore PUBLIC -- which is fine for a coturn with a
+ * shared secret rotated by hand and is not fine for a metered account. The
+ * endpoint is the right answer for anything that bills.
+ */
+export interface IceSource {
+  /** Explicit servers. Wins over everything: the probe and the tests use it,
+   *  and `[]` is a meaningful value there (no STUN at all on a loopback). */
+  servers?: RTCIceServer[] | null
+  /** Where to ask for minted credentials. Null disables the request entirely. */
+  endpoint?: string | null
+  fetchImpl?: typeof fetch
+}
+
+/**
+ * How long a minted ICE answer is reused before it is asked for again.
+ *
+ * Twenty minutes, against a credential minted for two hours. The margin is
+ * deliberate and the failure it prevents is nasty: a credential that expires
+ * DURING a race does not drop the relay (an allocation outlives its
+ * credential) but does stop a new peer joining, so a lobby that has been open
+ * an hour would silently stop accepting the players who need the relay most.
+ * Re-asking is one request per twenty minutes per client, which is less than
+ * the lobby browser costs in a single refresh.
+ */
+export const ICE_TTL_MS = 20 * 60_000
+
+let iceCache: { at: number; servers: RTCIceServer[] } | null = null
+
+/** For tests, and for a client that has just been told its credentials are
+ *  stale. Nothing in a shipped build calls it on a timer. */
+export function forgetIce(): void { iceCache = null }
+
+/**
+ * The ICE servers to build a peer connection with.
+ *
+ * NEVER REJECTS AND NEVER RETURNS NOTHING. Every failure here -- no endpoint,
+ * a 500, a body in the wrong shape, a fetch that throws because the page is
+ * offline -- falls through to `DEFAULT_ICE`, because the alternative is a game
+ * that will not start a lobby when its relay provider has a bad afternoon.
+ * A missing relay costs the ~15% of players who need one; a missing STUN
+ * config costs everybody.
+ */
+export async function resolveIce(src: IceSource = {}, now = Date.now()): Promise<RTCIceServer[]> {
+  if (src.servers) return src.servers
+  // An explicit empty array is a real instruction ("no ICE servers at all"),
+  // which is what the probe wants on a loopback. `?? undefined` would eat it.
+  if (Array.isArray(src.servers)) return src.servers
+
+  const baked = bakedIce()
+  if (baked) return baked
+
+  if (iceCache && now - iceCache.at < ICE_TTL_MS) return iceCache.servers
+  const endpoint = src.endpoint === undefined ? SIGNAL_ENDPOINT : src.endpoint
+  if (!endpoint) return DEFAULT_ICE
+  try {
+    const f = src.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a))
+    const res = await f(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 'ice' }),
+    })
+    const body = await res.json().catch(() => null) as { ok?: boolean; iceServers?: unknown } | null
+    const servers = cleanIceServers(body?.iceServers)
+    if (!servers) return DEFAULT_ICE
+    iceCache = { at: now, servers }
+    return servers
+  } catch {
+    return DEFAULT_ICE
+  }
+}
+
+/** Default only, so this module does not import the protocol for one string. */
+const SIGNAL_ENDPOINT = '/api/signal'
+
+/** `VITE_ICE_SERVERS`, if this bundle was built with one. Wrapped because
+ *  `import.meta.env` does not exist outside a Vite pipeline. */
+function bakedIce(): RTCIceServer[] | null {
+  try {
+    const env = (import.meta as { env?: Record<string, string | undefined> }).env
+    const raw = env?.VITE_ICE_SERVERS
+    if (!raw) return null
+    return cleanIceServers(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Accept only what `RTCPeerConnection` will accept.
+ *
+ * A MALFORMED ENTRY THROWS INSIDE THE CONSTRUCTOR, which would take down the
+ * whole lobby rather than one relay -- so a credential endpoint having a bad
+ * day must not be able to stop a STUN-only game from working. Anything that
+ * is not a `urls` string or array of strings is dropped; an answer with
+ * nothing usable left in it is treated as no answer at all.
+ */
+export function cleanIceServers(raw: unknown): RTCIceServer[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: RTCIceServer[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const e = entry as { urls?: unknown; username?: unknown; credential?: unknown }
+    const urls = typeof e.urls === 'string'
+      ? [e.urls]
+      : Array.isArray(e.urls) ? e.urls.filter((u): u is string => typeof u === 'string') : []
+    const ok = urls.filter((u) => /^(stun|stuns|turn|turns):/.test(u))
+    if (ok.length === 0) continue
+    const server: RTCIceServer = { urls: ok }
+    if (typeof e.username === 'string') server.username = e.username
+    if (typeof e.credential === 'string') server.credential = e.credential
+    out.push(server)
+  }
+  return out.length > 0 ? out : null
+}
+
+/** True when a resolved set actually contains a relay, which is the only
+ *  thing that changes the outcome for a player behind a symmetric NAT. */
+export function hasTurn(servers: readonly RTCIceServer[]): boolean {
+  for (const s of servers) {
+    const urls = typeof s.urls === 'string' ? [s.urls] : s.urls
+    for (const u of urls) if (u.startsWith('turn:') || u.startsWith('turns:')) return true
+  }
+  return false
+}
 
 /**
  * How long a connection may take before we call it dead.
@@ -247,6 +432,39 @@ export class PeerLink {
   failure: PeerFailure | null = null
   /** Smoothed round trip, or null until the first pong lands. */
   pingMs: number | null = null
+  /**
+   * True when this link is going through a TURN relay, null until ICE has
+   * chosen a pair and said so.
+   *
+   * ASKED OF `getStats`, NOT INFERRED FROM THE CONFIGURATION. Handing the
+   * browser a TURN server does not mean the browser used it -- ICE prefers a
+   * direct pair whenever one works, which is most of the time and is the whole
+   * point of offering one at all. The only way to know whether a byte of this
+   * link is being billed is to ask which candidate pair won.
+   *
+   * It is read by the probe's bandwidth accounting and by nothing that
+   * decides anything, deliberately: a relayed link is slower and that shows up
+   * in `pingMs` on its own, which is the number `worstPathMs` already sizes
+   * the input delay from.
+   */
+  relay: boolean | null = null
+  /** The winning pair's candidate types, e.g. `srflx/relay`, for a log line
+   *  that can be argued with. Null until ICE has settled. */
+  candidatePair: string | null = null
+  /**
+   * JSON bytes handed to / taken from the channel, for this link's lifetime.
+   *
+   * PAYLOAD ONLY, and the difference matters when this feeds a relay bill:
+   * every message also pays an SCTP chunk header, a DTLS record, UDP/IP and
+   * -- on a relayed link -- a TURN ChannelData header, which together are
+   * around 85 bytes whatever the payload. The probe reports both this and the
+   * transport's own `bytesSent` from `getStats`, because the ratio between
+   * them is the thing an estimate made from message sizes alone gets wrong.
+   */
+  bytesOut = 0
+  bytesIn = 0
+  msgsOut = 0
+  msgsIn = 0
   /** Wall clock of the last byte received from this peer, of any kind. */
   lastRecvAt = 0
   /** Wall clock of the last ping timer tick, for the blocked-page check. */
@@ -373,6 +591,10 @@ export class PeerLink {
       this.set('open')
       this.pingTimer = setInterval(() => this.ping(), PING_MS)
       this.ping()
+      // ICE has a pair by the time a channel opens, but the STATS entry for it
+      // lands a beat later on some builds, so it is asked once now and again
+      // on the fifth ping rather than only once.
+      void this.readSelectedPair()
     }
     ch.onclose = () => { if (this.state === 'open') this.fail('lost') }
     ch.onerror = () => { if (this.state !== 'open') this.fail('nat') }
@@ -441,7 +663,50 @@ export class PeerLink {
 
   send(msg: unknown): boolean {
     if (this.state !== 'open' || !this.ch || this.ch.readyState !== 'open') return false
-    try { this.ch.send(JSON.stringify(msg)); return true } catch { return false }
+    try {
+      const s = JSON.stringify(msg)
+      this.ch.send(s)
+      this.bytesOut += s.length
+      this.msgsOut++
+      return true
+    } catch { return false }
+  }
+
+  /**
+   * Which candidate pair ICE settled on, and whether either end of it is a
+   * relay.
+   *
+   * WRAPPED IN EVERYTHING, because this is a diagnostic and a diagnostic that
+   * can break a connection is worse than no diagnostic. `getStats` does not
+   * exist on the hand-written `RTCPeerConnection` the unit tests inject, the
+   * selected pair is absent until ICE has finished, and the report's shape has
+   * changed across browsers more than once.
+   */
+  private async readSelectedPair(): Promise<void> {
+    try {
+      const pc = this.pc as unknown as {
+        getStats?: () => Promise<{ forEach?: (fn: (v: unknown) => void) => void }>
+      }
+      if (typeof pc.getStats !== 'function') return
+      const report = await pc.getStats()
+      let pair: { localCandidateId?: string; remoteCandidateId?: string } | null = null
+      const cands = new Map<string, string>()
+      report.forEach?.((v: unknown) => {
+        const r = v as { type?: string; selected?: boolean; state?: string
+          nominated?: boolean; id?: string; candidateType?: string
+          localCandidateId?: string; remoteCandidateId?: string }
+        if (r.type === 'candidate-pair' && (r.selected === true
+          || (r.nominated === true && r.state === 'succeeded'))) pair = r
+        if ((r.type === 'local-candidate' || r.type === 'remote-candidate')
+          && r.id && r.candidateType) cands.set(r.id, r.candidateType)
+      })
+      if (!pair) return
+      const p = pair as { localCandidateId?: string; remoteCandidateId?: string }
+      const a = cands.get(p.localCandidateId ?? '') ?? '?'
+      const b = cands.get(p.remoteCandidateId ?? '') ?? '?'
+      this.candidatePair = `${a}/${b}`
+      this.relay = a === 'relay' || b === 'relay'
+    } catch { /* a diagnostic is never a reason to fail a link */ }
   }
 
   /**
@@ -457,6 +722,8 @@ export class PeerLink {
     // The wire delivered something; that is a fact about liveness and it is
     // recorded before any shaping, which is a fiction about distance.
     this.lastRecvAt = this.now()
+    this.bytesIn += String(raw).length
+    this.msgsIn++
     let msg: unknown
     try { msg = JSON.parse(String(raw)) } catch { return }
 
@@ -518,6 +785,7 @@ export class PeerLink {
     }
     this.lastTickAt = now
     const n = ++this.pingN
+    if (n === 5 || this.relay === null) void this.readSelectedPair()
     this.pingSentAt.set(n, now)
     // Bound the map: a peer that stopped answering must not leak one entry a
     // second for the rest of the race.
@@ -593,13 +861,27 @@ export class PeerLink {
   close(why: PeerFailure = 'bye'): void {
     if (this.disposed) return
     this.disposed = true
-    if (this.state !== 'failed') { this.state = 'closed'; this.failure = why }
+    /**
+     * A STATE CHANGE THAT IS NOT A CHANGE IS NOT ANNOUNCED.
+     *
+     * Closing a link that had ALREADY failed used to re-fire `onStateChange`
+     * with the same `failed` it fired minutes ago, and the owner has no way to
+     * tell that echo from a fresh failure. The probe caught the consequence
+     * and it was ugly: a migration that had run its whole budget and ended
+     * with a written explanation was then torn down, every dead link
+     * re-announced its death, and the generic "could not reach the host"
+     * handler overwrote the explanation with `error` and no detail. The
+     * player got a code instead of a paragraph, for a failure the code had
+     * already described properly.
+     */
+    const changed = this.state !== 'failed'
+    if (changed) { this.state = 'closed'; this.failure = why }
     for (const t of this.timers) clearTimeout(t)
     this.timers.length = 0
     if (this.pingTimer !== null) clearInterval(this.pingTimer)
     try { this.ch?.close() } catch { /* already gone */ }
     try { this.pc.close() } catch { /* already gone */ }
-    this.onStateChange(this.state, this.failure)
+    if (changed) this.onStateChange(this.state, this.failure)
   }
 }
 
@@ -701,6 +983,21 @@ export class StarMesh {
     return this.peers.filter((l) => l.state === 'open')
   }
 
+  /** How many open links ICE put through a relay. The number that is being
+   *  billed, as opposed to the number of relays that were offered. */
+  get relayCount(): number {
+    return this.open.filter((l) => l.relay === true).length
+  }
+
+  /** Payload bytes over every link, for the probe's bandwidth accounting. */
+  get traffic(): { out: number; in: number; msgsOut: number; msgsIn: number } {
+    let out = 0; let inn = 0; let mo = 0; let mi = 0
+    for (const l of this.links.values()) {
+      out += l.bytesOut; inn += l.bytesIn; mo += l.msgsOut; mi += l.msgsIn
+    }
+    return { out, in: inn, msgsOut: mo, msgsIn: mi }
+  }
+
   send(to: string, msg: unknown): boolean {
     return this.links.get(to)?.send(msg) ?? false
   }
@@ -729,20 +1026,26 @@ export class StarMesh {
    * Unmeasured links count as `unknownMs` rather than being skipped, for the
    * same reason mock.ts's `inputDelayFor` does it: a peer whose ping has not
    * landed yet is not a peer with no latency.
+   *
+   * A RELAYED GUEST NEEDS NO SPECIAL CASE HERE, AND THAT IS WORTH SAYING
+   * BECAUSE IT LOOKS LIKE IT SHOULD. The extra hop through TURN is already
+   * inside `pingMs` -- the ping travels the same path the inputs do, relay
+   * included -- so a room with one relayed guest at 300ms and one direct guest
+   * at 30ms produces 330, which is exactly what an input from the first costs
+   * on its way to the second. Adding a relay penalty on top would be counting
+   * the hop twice, and skipping relayed links would be counting it none.
+   *
+   * WHAT DOES NOT SURVIVE IT is the clamp. `inputDelayFor` tops out at 12
+   * frames, which covers a 400ms worst path; a relayed transatlantic pair can
+   * exceed that, and past it the room does not get a bigger buffer, it gets a
+   * race that stalls. That is the right failure -- 200ms of input delay is
+   * already at the edge of drivable -- but it is a real ceiling and it is the
+   * reason a relay is a fallback and not a default.
    */
   worstPathMs(unknownMs = 220): number {
-    const pings = this.peers
-      .filter((l) => l.state === 'open')
-      .map((l) => l.pingMs ?? unknownMs)
-      .sort((a, b) => b - a)
-    if (pings.length === 0) return 0
-    if (!this.isHost) {
-      // A guest can only see the host. Its own two-hop worst is its leg plus
-      // the host's worst other leg, which it does not know -- so the host
-      // publishes the number and this is only a floor.
-      return pings[0]
-    }
-    return pings.length === 1 ? pings[0] : pings[0] + pings[1]
+    return worstPathOf(
+      this.peers.filter((l) => l.state === 'open').map((l) => l.pingMs),
+      this.isHost, unknownMs)
   }
 
   drop(peerId: string, why: PeerFailure = 'bye'): void {
@@ -755,4 +1058,29 @@ export class StarMesh {
     for (const l of this.links.values()) l.close('bye')
     this.links.clear()
   }
+}
+
+/**
+ * The arithmetic behind `StarMesh.worstPathMs`, on its own.
+ *
+ * SEPARATED SO IT CAN BE TESTED WITHOUT A PEER CONNECTION. The rule -- sum the
+ * two worst legs on the host, take the single leg on a guest -- is the one
+ * thing in this file that decides a NUMBER the whole room then has to live
+ * with for a round, because `inputDelayFor` reads it once at `start()` and
+ * `RaceStartPacket.inputDelay` may not change mid-race (every client's
+ * pipeline depth and priming are derived from it, so two clients disagreeing
+ * about it is a desync from frame one). Getting it wrong is a race that stalls
+ * for reasons the host cannot see, which is exactly the class of bug that is
+ * cheapest to pin in a unit test and most expensive to find in the field.
+ */
+export function worstPathOf(
+  pings: readonly (number | null)[], isHost: boolean, unknownMs = 220,
+): number {
+  const sorted = pings.map((p) => p ?? unknownMs).sort((a, b) => b - a)
+  if (sorted.length === 0) return 0
+  // A guest can only see the host. Its own two-hop worst is its leg plus the
+  // host's worst other leg, which it does not know -- so the host publishes
+  // the number and this is only a floor.
+  if (!isHost) return sorted[0]
+  return sorted.length === 1 ? sorted[0] : sorted[0] + sorted[1]
 }

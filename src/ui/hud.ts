@@ -22,6 +22,7 @@ import './styles.css'
 import './series.css'
 import type { ItemId, RaceState, RacerState } from '../sim/types'
 import type { Track } from '../sim/track'
+import type { LinkStatus, MigrationState } from '../net/types'
 import { ITEMS, ITEM_ORDER } from '../content/items'
 import { CHASSIS_BY_ID, getDerived, getLocomotion } from '../content/chassis'
 import { TUNING } from '../content/tuning'
@@ -111,6 +112,30 @@ export interface PodiumInfo {
  * timers with no browser; a HUD that made any of those calls would be a second
  * stall policy with no tests and a worse view of the facts.
  */
+/**
+ * A host migration, as the SCREEN needs it: the wire's own state, plus the two
+ * names that go with its two ids.
+ *
+ * `MigrationState` identifies the old and the new host by `playerId`, which is
+ * exactly right for the netcode and useless to a player: under the live profile
+ * an id is a minted account id with a device salt glued to it, so drawing one
+ * would put `a7f3…-9c21` on screen where a name belongs. Resolving it needs the
+ * round's grid, and the grid belongs to game/main.ts -- which holds the start
+ * packet and already maps slots to people for the name plates.
+ *
+ * So the resolution happens THERE and arrives here already done, and this stays
+ * a projection with nothing to look up. Both names are '' when this client
+ * cannot place the id -- an old host who was never on this round's grid, say --
+ * and `netSentence` has a sentence for that case rather than printing an empty
+ * gap where a name was promised.
+ */
+export interface NetMigration extends MigrationState {
+  /** Display name for `previousHostId`, or '' if it cannot be resolved. */
+  previousHostName: string
+  /** Display name for `newHostId`, or '' if it cannot be resolved. */
+  newHostName: string
+}
+
 export interface NetStatus {
   /**
    * What the runner is doing.
@@ -141,6 +166,44 @@ export interface NetStatus {
    * player two different things about whether to keep waiting.
    */
   loading: boolean
+  /**
+   * The room is repairing itself after losing its host, or null.
+   *
+   * IT OUTRANKS `waitingFor` AND IT IS NOT THE SAME KIND OF FACT. A stall is
+   * the runner's own observation that an input has not arrived; a migration is
+   * the transport telling the screen that the relay itself is being replaced
+   * and that nothing will arrive from anyone until it is. During one, the last
+   * peer whose input went missing is a player who is perfectly fine, and naming
+   * them is the wrong sentence twice over -- it blames the wrong person and it
+   * hides the only fact that matters.
+   *
+   * `remainingMs` IS WHY THIS IS A STATE AND NOT A BOOLEAN. A migration is a
+   * pause of up to `MIGRATION_BUDGET_MS` -- thirty seconds of a race standing
+   * still -- and a wait with no clock on it reads as a hang. The number is the
+   * whole difference between "the game is working on it" and "the game is
+   * dead", which is the same argument the stall policy makes about saying
+   * anything at all.
+   */
+  migration: NetMigration | null
+  /**
+   * What the WIRE is doing, as against what the runner is doing.
+   *
+   * types.ts asks for this in as many words -- "up, migrating, rejoining or
+   * down; the HUD renders all four differently" -- and the one that would
+   * otherwise have no sentence at all is `rejoining`. A migration publishes a
+   * whole `MigrationState`; a rejoin publishes nothing but this word, and it
+   * is the state a player is in when their OWN connection went. The race is
+   * stopped for them exactly as hard as it is during a migration, for a
+   * deadline exactly as long, and with nothing on screen it is the same frozen
+   * track with no explanation.
+   *
+   * `down` gets no branch of its own on purpose. Every route to it also ends
+   * the round for this client -- `failMigration` calls `peer.leave()`, which
+   * is the `ejected` verdict -- and that verdict is already a sentence. A
+   * second one would be two ways of saying the round is over, drawn in
+   * whichever order the fields happened to be read.
+   */
+  link: LinkStatus
 }
 
 export interface Hud {
@@ -460,10 +523,71 @@ function setText(node: HTMLElement, value: string): void {
  * has not yet lasted `STALL_ANNOUNCE_MS`, which is the runner saying "this is
  * still inside the ordinary jitter" -- and 300ms of banner is worse than the
  * 300ms of stall it describes.
+ *
+ * ---------------------------------------------------------------------------
+ * THE MIGRATION LINE, WHICH IS THE ONE A PLAYER ACTUALLY STARES AT
+ *
+ * The other five sentences are up for a moment. This one can be up for thirty
+ * seconds on a frozen race, so it has to survive being READ -- repeatedly, by
+ * somebody deciding whether to close the tab. Three things earn their place:
+ *
+ *   WHO LEFT, first, because it is the only thing that has actually happened.
+ *   "Waiting for a new host" describes the remedy and never mentions the
+ *   event, which leaves the player assembling the story themselves out of a
+ *   race that stopped.
+ *   WHAT IS BEING DONE, second, and it is RECONNECTING rather than "finding".
+ *   The election is instant and local -- every survivor runs the same rule over
+ *   the same grid and needs nobody's agreement (see types.ts) -- so nothing is
+ *   being searched for. What takes the seconds is a full re-handshake through a
+ *   polled mailbox, which is dialling, and saying so is both true and more
+ *   reassuring than a search.
+ *   THE CLOCK, last, where a number belongs when the words in front of it are
+ *   the point.
+ *
+ * `connected` AND `expected` ARE DELIBERATELY NOT DRAWN. "2 of 4 back" is real
+ * progress and it is a SECOND moving number beside a countdown, on one line,
+ * over a stopped race; the two would fight, and the one that answers "is this
+ * hung" is the one that moves every second rather than once per reconnection.
+ * They are in `MigrationState` for the log and for a repair screen that wants
+ * more room than a banner has.
+ *
+ * CEILING, NOT FLOOR, on the seconds: `Math.ceil` so a budget with 200ms left
+ * reads "1S" rather than "0S", and the line never claims to be out of time
+ * while it is still working. Zero appears only when the budget really is spent,
+ * which is a fact and lasts one tick.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE REJOIN LINE, WHICH HAS NO CLOCK AND SHOULD NOT PRETEND TO
+ *
+ * `rejoining` is the other half of the same freeze: not "the host went" but
+ * "YOU went". It is on the same thirty-second deadline and the transport
+ * publishes no countdown for it, so this line says what is happening and stops
+ * -- a number invented on this side would be a number about a wait this client
+ * cannot see the far end of. It earns its place anyway, because the alternative
+ * is the frozen track with no sentence that the whole stall policy exists to
+ * prevent, and because a player whose own wifi blinked can at least be told
+ * their car is still theirs.
  */
 export function netSentence(info: NetStatus): string {
   if (info.verdict === 'desync') return 'ROUND VOID — THE RACE CAME APART'
   if (info.verdict === 'ejected') return 'DROPPED FROM THE ROUND'
+  const m = info.migration
+  if (m || info.link === 'migrating') {
+    // A `migrating` link with no state published yet is a tick wide -- live.ts
+    // calls `tickMigration` on the same turn it sets the status -- but the
+    // generic half-sentence is still better than falling through to the stall
+    // grammar, which would name a peer who is perfectly fine.
+    if (!m) return 'THE HOST LEFT — RECONNECTING'
+    const left = Math.max(0, Math.ceil((Number.isFinite(m.remainingMs) ? m.remainingMs : 0) / 1000))
+    const who = m.previousHostName ? m.previousHostName.toUpperCase() : 'THE HOST'
+    const doing = m.isLocal
+      ? 'YOU ARE TAKING OVER'
+      : m.newHostName
+        ? `RECONNECTING TO ${m.newHostName.toUpperCase()}`
+        : 'RECONNECTING'
+    return `${who} LEFT — ${doing}, ${left}S`
+  }
+  if (info.link === 'rejoining') return 'YOUR CONNECTION DROPPED — GETTING YOU BACK IN'
   if (info.verdict !== 'waiting') return ''
   const who = info.waitingFor
   if (who.length === 0) return ''
