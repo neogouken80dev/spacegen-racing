@@ -65,6 +65,7 @@ import { createLobbyScreens, type LobbyScreenId, type LobbyScreens } from './lob
 import { createProfileScreen, type Loadout, type ProfileScreen } from './profile'
 import { lobbyService } from '../net'
 import type { PlayerProfile, RaceStartPacket } from '../net/types'
+import { cue } from '../audio/cues'
 
 export type QualityTier = 'low' | 'medium' | 'high'
 /**
@@ -1200,7 +1201,7 @@ class FrontEndImpl implements FrontEnd {
     const profileScr = el('div', 'sg-screen sg-screen--profile', root)
 
     this.lobby = createLobbyScreens({
-      onBack: () => this.show('title'),
+      onBack: () => { this.backCue(); this.show('title') },
       onProfile: () => this.show('profile'),
       goto: (which: LobbyScreenId) => {
         this.show(which === 'browser' ? 'lobby' : which === 'create' ? 'lobbyNew' : 'room')
@@ -1222,7 +1223,7 @@ class FrontEndImpl implements FrontEnd {
       // and the lobby browser. Remembered rather than guessed: a player who
       // opened the profile from a lobby list and is returned to the title has
       // lost the lobby they were looking at.
-      onBack: () => this.show(this.profileFrom),
+      onBack: () => { this.backCue(); this.show(this.profileFrom) },
       // ONE SELECTION, TWO DOORS ONTO IT. The profile's Vehicle and Pilot
       // pages are not a second place a chassis id is stored -- they read this
       // field and write it back through the same two methods the garage's
@@ -1252,6 +1253,32 @@ class FrontEndImpl implements FrontEnd {
     // =====================================================================
     // Wiring
     // =====================================================================
+
+    // THE MENU SOUNDS. uiMove / uiSelect / uiBack / uiStart were cut, levelled
+    // and downloaded by every player and never once cued, because nothing in
+    // this file could reach the audio system (see audio/cues.ts for how it can
+    // now). Every control here is a real <button>, so one delegated listener
+    // hears every press from every input -- pointer, touch, Enter and the pad's
+    // A, which dispatches a click -- including the lobby's and the profile's
+    // buttons, which live inside this root.
+    //
+    // A button says which cue it is with `data-sfx`; anything unmarked is a
+    // plain select. The four that launch a race -- Start, Rematch, the Grand
+    // Circuit and Restart -- are `start`, and the four that step back out of
+    // a flow are `back`. Back is ALSO reachable without a button (Escape,
+    // the pad's B, the lobby and profile screens' own handlers), so those call
+    // `backCue()` themselves, and it stamps `cuedAt` so this listener does not
+    // add a select on top of the same press.
+    for (const b of [this.startBtn, this.rematchBtn, this.circuitBtn, restartBtn]) b.dataset.sfx = 'start'
+    for (const b of [tBack, backBtn, pauseTrack, quitBtn]) b.dataset.sfx = 'back'
+    root.addEventListener('click', (e) => {
+      const b = e.target instanceof Element ? e.target.closest('button') : null
+      if (!b || !root.contains(b)) return
+      if (performance.now() - this.cuedAt < 40) return
+      const k = b.dataset.sfx
+      cue(k === 'start' ? 'uiStart' : k === 'back' ? 'uiBack' : 'uiSelect')
+    })
+
     this.playBtn.addEventListener('click', () => this.show('track'))
     this.multiBtn.addEventListener('click', () => this.show('lobby'))
     titleProfileBtn.addEventListener('click', () => this.show('profile'))
@@ -1339,6 +1366,7 @@ class FrontEndImpl implements FrontEnd {
         const back = this.escapeTarget()
         if (back) {
           e.preventDefault()
+          this.backCue()
           this.show(back)
         }
         return
@@ -2241,6 +2269,10 @@ class FrontEndImpl implements FrontEnd {
       ? (active as HTMLButtonElement) : null
     if (!cur) {
       list[0].focus()
+      // The tick of the selection moving. Only for the arrow keys and the pad,
+      // which is everything that calls this: a pointer does not move focus
+      // before it presses, so it hears the press and nothing else.
+      cue('uiMove')
       return true
     }
     const a = cur.getBoundingClientRect()
@@ -2290,6 +2322,7 @@ class FrontEndImpl implements FrontEnd {
     } catch {
       best.focus()
     }
+    cue('uiMove')
     return true
   }
 
@@ -2390,9 +2423,21 @@ class FrontEndImpl implements FrontEnd {
 
   /** B is Escape: the same one step back the keyboard takes. */
   private padBack(): void {
-    if (this.screen === 'paused') { this.onResume(); return }
+    if (this.screen === 'paused') { this.backCue(); this.onResume(); return }
     const back = this.escapeTarget()
-    if (back) this.show(back)
+    if (back) { this.backCue(); this.show(back) }
+  }
+
+  /**
+   * When a handler last played its own cue, so the delegated click listener in
+   * the constructor does not add a select on top of the same press.
+   */
+  private cuedAt = -1
+
+  /** A step back that did not come from a `data-sfx="back"` button. */
+  private backCue(): void {
+    this.cuedAt = performance.now()
+    cue('uiBack')
   }
 
   /**

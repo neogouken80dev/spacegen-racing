@@ -1212,10 +1212,13 @@
   .sg-tools__btn:active { transform: none; }
 }
 
-@media (max-height: 430px) {
-  .sg-tools__btn { width: 38px; height: 38px; border-radius: 10px; }
-  .sg-tools__btn svg { width: 18px; height: 18px; }
-}
+/* NO SHORT-SCREEN SHRINK. These went to 38px under 430px of height, which is
+   every landscape phone -- the one device where Pause is pressed by a thumb
+   mid-race rather than by a cursor, and the one layout where a mis-tap lands
+   on the road instead. --sg-tap is 44px everywhere else in this sheet; the two
+   buttons that are pressed with the most urgency were the exception. The six
+   pixels come back out of the crosswind pill's offset instead (styles.css,
+   `.sg-compact .sg-hud__wind`), which moves down with them. */
 
 /* A row whose control cannot act on this platform -- currently only
    Fullscreen, on iPhone Safari, which has no Fullscreen API for anything that

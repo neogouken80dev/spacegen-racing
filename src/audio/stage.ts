@@ -23,14 +23,17 @@
  * a battery complaint. The core suspends on `visibilitychange`; this exposes
  * the mechanism.
  *
- * WHY OSCILLATORS AND NOT SAMPLES, FOR NOW
+ * SAMPLES, WITH OSCILLATORS WHERE A SAMPLE CANNOT DO THE JOB
  *
- * Every sound in the catalogue currently ships as a synth recipe, so this file
- * builds each one from nodes at trigger time. That is genuinely cheap -- an
- * oscillator, a gain and sometimes a filter, all stopped and collected within a
- * second -- and it means there is no loader, no decode, no cache and no
- * first-play stutter to debug. `playFile` exists alongside it for the moment a
- * recipe becomes a recording, and the two are indistinguishable to callers.
+ * This header used to explain why every sound was built from oscillators "for
+ * now". That stopped being true when the recordings landed: 42 of the
+ * catalogue's 45 entries are files, played by `playFile` from buffers the
+ * AudioSystem preloads on the first gesture. `synth` builds the other three
+ * from nodes at trigger time -- the two sustained scrapes and the lock-on
+ * tone, each synth for a reason given in catalogue.ts -- and the engine keeps
+ * its oscillator pair as the fallback for a loop that has not arrived. To a
+ * caller the two paths are indistinguishable, which is the point of the
+ * SoundSource union.
  */
 import type {
   AudioStage, EngineVoice, PlayRequest, ScrapeId, ScrapeLevel, SoundDef,
@@ -63,6 +66,15 @@ interface Engine {
   noise: AudioBufferSourceNode
   noiseGain: GainNode
   gain: GainNode
+  /**
+   * The sputter stage, between the voice and its output. Unity until the car
+   * is stunned; then `lfo` is summed into its gain and chops the engine on and
+   * off at audio rate. See `EngineVoice.stun`.
+   */
+  chop: GainNode
+  /** Built on the first stun, never before: most voices never need one. */
+  lfo: OscillatorNode | null
+  lfoDepth: GainNode | null
   pan: PannerNode | null
   /**
    * The sampled core, when the engine loop had decoded by the time this car's
@@ -197,13 +209,20 @@ class WebAudioStage implements AudioStage {
   private panner(at: { x: number; y: number; z: number }): PannerNode {
     const p = this.ctx.createPanner()
     p.panningModel = 'equalpower'
-    // `inverse` with a generous rolloff rather than `linear`: the planner has
-    // already applied its own falloff for the gain, and this only has to carry
-    // DIRECTION. Doubling the distance law here would make far cars inaudible
-    // twice over.
+    // DIRECTION ONLY. The planner has already applied its own falloff to the
+    // gain, so the panner must not attenuate at all -- and the comment that
+    // used to sit here said exactly that while the settings below it did the
+    // opposite: `inverse` at refDistance 12 with rolloff 0.6 is a second
+    // distance law on top of the first. Measured, a car 30 m away arrived at
+    // -9.7 dB where the planner meant -4.1, and at 60 m -20.5 where it meant
+    // -9.9 -- every other car was a notch quieter than the mix was built for.
+    //
+    // rolloffFactor 0 makes the inverse model's gain exactly 1 at every
+    // distance (ref / (ref + 0 * (d - ref))), which is the one setting that
+    // leaves the loudness to the planner and the panning to this.
     p.distanceModel = 'inverse'
     p.refDistance = 12
-    p.rolloffFactor = 0.6
+    p.rolloffFactor = 0
     p.maxDistance = 400
     p.positionX ? (p.positionX.value = at.x) : null
     if (p.positionX) {
@@ -414,7 +433,7 @@ class WebAudioStage implements AudioStage {
         const e = live
         this.engines.delete(racerId)
         window.setTimeout(() => {
-          try { e.osc.stop(); e.sub.stop(); e.noise.stop(); e.loopSrc?.stop() } catch { /* gone */ }
+          try { e.osc.stop(); e.sub.stop(); e.noise.stop(); e.loopSrc?.stop(); e.lfo?.stop() } catch { /* gone */ }
         }, 220)
       }
       return
@@ -465,15 +484,45 @@ class WebAudioStage implements AudioStage {
         osc.connect(gain); sub.connect(gain)
       }
       noise.connect(noiseFilt); noiseFilt.connect(noiseGain); noiseGain.connect(gain)
+      const chop = this.ctx.createGain()
+      chop.gain.value = 1
+      gain.connect(chop)
 
       let pan: PannerNode | null = null
-      if (v.at) { pan = this.panner(v.at); gain.connect(pan); pan.connect(this.busSfx) }
-      else gain.connect(this.busSfx)
+      if (v.at) { pan = this.panner(v.at); chop.connect(pan); pan.connect(this.busSfx) }
+      else chop.connect(this.busSfx)
 
       osc.start(); sub.start(); noise.start()
       if (loopSrc) loopSrc.start()
-      e = { osc, sub, noise, noiseGain, gain, pan, loopSrc }
+      e = { osc, sub, noise, noiseGain, gain, chop, lfo: null, lfoDepth: null, pan, loopSrc }
       this.engines.set(racerId, e)
+    }
+
+    // THE SPUTTER. A square LFO summed into the chop stage's gain: with the
+    // base at 1 - 0.5s and the depth at 0.45s, a full stun swings the engine
+    // between 5% and 95% thirteen times a second -- an engine catching and
+    // dying rather than a volume wobble. At audio rate, because the frame rate
+    // is not a clock this can lean on: a gain written once per render frame
+    // and ramped over 60 ms turns a 13 Hz chop into mush at 30 fps. Built
+    // lazily on the first stun and left running at zero depth afterwards,
+    // since a stun is rarely the last one of the race.
+    const s = v.stun > 0.001 ? v.stun : 0
+    if (s > 0 && !e.lfo) {
+      const lfo = this.ctx.createOscillator()
+      lfo.type = 'square'
+      lfo.frequency.value = 13
+      const lfoDepth = this.ctx.createGain()
+      lfoDepth.gain.value = 0.0001
+      lfo.connect(lfoDepth)
+      lfoDepth.connect(e.chop.gain)
+      lfo.start()
+      e.lfo = lfo
+      e.lfoDepth = lfoDepth
+    }
+    if (e.lfoDepth) {
+      const tc = this.ctx.currentTime
+      ramp(e.chop.gain, 1 - 0.5 * s, tc, 0.04)
+      ramp(e.lfoDepth.gain, 0.45 * s, tc, 0.04)
     }
 
     const t = this.ctx.currentTime

@@ -589,18 +589,29 @@ class ScoreHudImpl implements ScoreHud {
    * Each gets a random angle and distance written as custom properties, and its
    * animation restarted by hand -- reassigning the same animation name to an
    * element that never leaves the tree does not replay it, so the name is
-   * cleared and a reflow forced between. That `offsetWidth` read is the one
-   * deliberate layout flush in this file; it is confined to a 6px absolutely
-   * positioned dot inside its own stacking context.
+   * cleared and a reflow forced between.
+   *
+   * ONE REFLOW PER BURST, NOT ONE PER SPARK. The `offsetWidth` read used to sit
+   * inside the loop, and every write before it had just invalidated style, so
+   * each spark forced its own synchronous layout of the whole document: the
+   * hundred-thousand magnitude step alone asks for 12 + 3 x 6 = 30 sparks, so
+   * up to thirty layout passes ran inside one frame mid-drift -- the exact
+   * moment the frame budget is tightest. The loop is split in three now --
+   * clear every animation, read ONCE, restore every animation -- which is the
+   * same restart for every spark and one flush for all of them (measured in
+   * a real browser: 7 / 12 / 30 reads per burst before, 1 / 1 / 1 after). And
+   * a burst is capped at the pool: past SPARKS the loop was only re-aiming
+   * sparks it had already thrown this frame.
    *
    * Silent under reduced motion: this is pure decoration and carries no
    * information the rest of the block does not already give.
    */
   private burst(n: number): void {
     if (this.reduced || !this.visible) return
-    for (let i = 0; i < n; i++) {
-      const el = this.sparks[this.sparkNext]
-      this.sparkNext = (this.sparkNext + 1) % SPARKS
+    const count = n < SPARKS ? n : SPARKS
+    const start = this.sparkNext
+    for (let i = 0; i < count; i++) {
+      const el = this.sparks[(start + i) % SPARKS]
       const ang = Math.random() * Math.PI * 2
       // FAR ENOUGH TO CLEAR THE DIGITS.
       //
@@ -618,9 +629,12 @@ class ScoreHudImpl implements ScoreHud {
       el.style.setProperty('--sd', `${(0.34 + Math.random() * 0.26).toFixed(3)}s`)
       el.hidden = false
       el.style.animation = 'none'
-      void el.offsetWidth
-      el.style.animation = ''
     }
+    // The one read. Any spark will do: it flushes style and layout for all of
+    // them at once, which is what lets each restart below take.
+    void this.sparks[start].offsetWidth
+    for (let i = 0; i < count; i++) this.sparks[(start + i) % SPARKS].style.animation = ''
+    this.sparkNext = (start + count) % SPARKS
   }
 
   /** Show one receipt. Oldest slot is recycled when all are busy. */
