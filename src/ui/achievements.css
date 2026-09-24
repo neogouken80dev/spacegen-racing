@@ -1,0 +1,1058 @@
+/* ==========================================================================
+   SpaceGen Racing — Achievements: the badge wall, its frames, the results
+   strip and the toasts.
+
+   Companion sheet to styles.css, on the terms profile.css and settings.css
+   took: every colour, radius, shadow, size and font is a --sg- token from
+   there, and type comes from the --sg-fs-* ramp, never from a clamp of its
+   own. The only literal colours in this file are the METAL tier highlights,
+   which are the brief's own bronze / silver / gold (content/achievements.ts
+   TIER_COLOR) lit and shaded, and are data about a frame rather than a theme.
+
+   Prefix: .sgach so it cannot collide with .sg-fe / .sg-hud / .sgset / .sgpf.
+   ========================================================================== */
+
+/* Which screen is up. See the note on the same rule in lobby.css. */
+.sg-fe[data-screen='achievements'] .sg-screen--achievements {
+  display: flex;
+}
+
+/* THE TITLE SCREEN'S ACCOUNT ROW: Profile and Achievements side by side under
+   the multiplayer line. A row, not a second stacked button, because the title
+   screen's height is already spoken for on a landscape phone (frontend.ts). */
+.sg-title__acct {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sgach,
+.sgach *,
+.sgach-toasts,
+.sgach-toasts *,
+.sgach-chipToast,
+.sgach-chipToast *,
+.sgach-strip * {
+  box-sizing: border-box;
+}
+
+.sgach [hidden],
+.sgach-toasts [hidden],
+.sgach-strip[hidden],
+.sgach-strip [hidden] {
+  display: none !important;
+}
+
+.sgach {
+  --sgach-gap: clamp(8px, 1.4vmin, 14px);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sgach-gap);
+  min-height: 0;
+  /* MIN-WIDTH: 0, for the reason lobby.css measured: a flex column's automatic
+     minimum is its min-content, so one nowrap label anywhere inside sets a
+     floor the whole screen overflows rather than shrinks past. */
+  min-width: 0;
+  flex: 1 1 auto;
+  font-family: var(--sg-ui);
+  color: var(--sg-ink);
+}
+
+/* --------------------------------------------------------------------------
+   The summary line: "37 of 118 achievements earned" and a bar.
+   -------------------------------------------------------------------------- */
+
+.sgach__summary {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sgach__summaryText {
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
+  text-transform: uppercase;
+  color: var(--sg-dim);
+}
+
+.sgach__summaryBar {
+  flex: 1 1 140px;
+  max-width: 360px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(122, 190, 255, 0.14);
+  overflow: hidden;
+}
+
+.sgach__summaryFill {
+  height: 100%;
+  width: calc(var(--v, 0) * 100%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--sg-t0), var(--sg-t1), var(--sg-t2));
+}
+
+/* ==========================================================================
+   THE TAB STRIP -- what this view changes about the shared one, and why.
+
+   tabs.ts and the .sg-tabs rules in styles.css were written for the results
+   screen, which centres everything; profile.css overrides the same three
+   rules for the same reason, and the argument is written out there. Here the
+   strip is a page switch over a full-width wall, so it reads from the left
+   and the panels stretch.
+   ========================================================================== */
+
+.sgach__pages {
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sgach .sg-tabs {
+  width: 100%;
+  margin: 0;
+  justify-content: flex-start;
+  flex: none;
+}
+
+.sgach .sg-tab {
+  font-size: var(--sg-fs-caption);
+}
+
+.sgach .sg-tabpanels {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: stretch;
+}
+
+/* The panel is the scroll container on the SCREEN, and is not one inside the
+   settings dialog, whose body is "the ONLY thing that scrolls" (settings.css):
+   a scroller inside a scroller is two thumbs' worth of argument on a phone. */
+.sgach .sg-tabpanel {
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+  padding: 2px 2px 8px;
+}
+
+.sgach[data-mode='panel'] .sg-tabpanel {
+  overflow: visible;
+}
+
+.sgach__page {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.8vmin, 18px);
+}
+
+/* --------------------------------------------------------------------------
+   Categories
+   -------------------------------------------------------------------------- */
+
+.sgach__cat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sgach__catHead,
+.sgach__circuitHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--sg-line);
+  padding-bottom: 4px;
+}
+
+.sgach__catTitle,
+.sgach__circuitName {
+  margin: 0;
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-weight: normal;
+  font-size: var(--sg-fs-strong);
+  line-height: var(--sg-lh-tight);
+  letter-spacing: var(--sg-ls-caps);
+  text-transform: uppercase;
+  color: var(--cat, var(--sg-cyan));
+}
+
+.sgach__circuitName {
+  color: var(--sg-ink);
+}
+
+.sgach__catCount {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
+  color: var(--sg-quiet);
+}
+
+/* --------------------------------------------------------------------------
+   The grid. auto-fill rather than a count, as profile.css does it: the same
+   code at 1280 and at 390, and a tile that stays legible at both.
+   -------------------------------------------------------------------------- */
+
+.sgach__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  gap: clamp(6px, 1vmin, 10px);
+  align-content: start;
+}
+
+/* ==========================================================================
+   THE MEDAL -- the art inside the ring the game draws.
+
+   Two layers: the ring paints the whole circle, and the art sits on top of it,
+   inset by the ring's width, so only the band shows. The ring is its own
+   element rather than the medal's background so the PRISM tier can turn it
+   without turning the art.
+   ========================================================================== */
+
+.sgach-medal {
+  --m: 64px;
+  --rw: max(3px, calc(var(--m) * 0.075));
+  /* The unlit ring, and a difficulty arc not yet won. ON THE MEDAL, not on the
+     wall: the results strip and the toasts draw medals outside `.sgach`, and a
+     conic-gradient with one undefined stop is not a dim ring -- it is no ring
+     at all, which is how Front Runner first rendered on the strip. */
+  --sgach-unlit: rgba(122, 190, 255, 0.2);
+  position: relative;
+  display: block;
+  flex: none;
+  width: var(--m);
+  height: var(--m);
+  border-radius: 50%;
+}
+
+.sgach-medal__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--sgach-unlit);
+}
+
+.sgach-medal__art {
+  position: absolute;
+  top: var(--rw);
+  left: var(--rw);
+  width: calc(100% - 2 * var(--rw));
+  height: calc(100% - 2 * var(--rw));
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  background: var(--sg-deep);
+}
+
+/* A LOCKED BADGE IS STILL THE BADGE. Almost fully desaturated and dimmed, as
+   the brief asked -- which is also why every image was checked in greyscale
+   before it was accepted: this is the state most of the wall is in, most of
+   the time, and it has to read by light and dark alone. */
+.sgach-medal[data-state='locked'] .sgach-medal__art {
+  filter: grayscale(0.92) brightness(0.6);
+}
+
+/* --- frames ------------------------------------------------------------- */
+
+/* A circuit's two tones: its ground inside, its signature glow outside. Several
+   circuits glow in near-identical teals, so the INNER band is what tells them
+   apart at a glance -- the reason the brief gave each one a second colour. */
+.sgach-medal[data-frame='track'] .sgach-medal__ring {
+  background: radial-gradient(
+    circle closest-side,
+    var(--ground) calc(100% - var(--rw) * 0.5),
+    var(--glow) calc(100% - var(--rw) * 0.5)
+  );
+  box-shadow: 0 0 calc(var(--m) * 0.16) -2px var(--glow);
+}
+
+.sgach-medal[data-frame='single'] .sgach-medal__ring {
+  background: var(--ring);
+  box-shadow: 0 0 calc(var(--m) * 0.16) -2px var(--ring);
+}
+
+/* The metals are lit, not flat: a conic sweep of highlight and shadow round
+   the ring is what makes three coloured circles read as three medals. */
+.sgach-medal[data-frame='bronze'] .sgach-medal__ring {
+  background: conic-gradient(from 210deg, #cd7f32, #f2b77e, #cd7f32 30%, #7a4a1c 55%, #cd7f32 75%, #f2b77e 90%, #cd7f32);
+}
+
+.sgach-medal[data-frame='silver'] .sgach-medal__ring {
+  background: conic-gradient(from 210deg, #c7d0d9, #ffffff, #c7d0d9 30%, #6f7b87 55%, #c7d0d9 75%, #ffffff 90%, #c7d0d9);
+}
+
+.sgach-medal[data-frame='gold'] .sgach-medal__ring {
+  background: conic-gradient(from 210deg, #ffd23f, #fff1b0, #ffd23f 30%, #a37a12 55%, #ffd23f 75%, #fff1b0 90%, #ffd23f);
+  box-shadow: 0 0 calc(var(--m) * 0.14) -2px var(--sg-gold);
+}
+
+/* PRISM: the drift-tier colours, swept round the ring and turning -- so the
+   top tier of everything looks like a max-tier drift, which is the brief's
+   own description of it. Held still under reduced motion (below). */
+.sgach-medal[data-frame='prism'] .sgach-medal__ring {
+  background: conic-gradient(var(--sg-t0), var(--sg-t1), var(--sg-t2), var(--sg-t3), var(--sg-t0));
+  box-shadow: 0 0 calc(var(--m) * 0.2) -2px var(--sg-t1);
+  animation: sgachPrism 6s linear infinite;
+}
+
+@keyframes sgachPrism {
+  to { transform: rotate(360deg); }
+}
+
+/* Front Runner: four arcs, one per difficulty, lit in that difficulty's colour
+   when it is won. Small gaps between them so four earned arcs still read as
+   four achievements rather than one ring. */
+.sgach-medal[data-frame='difficulty'] .sgach-medal__ring {
+  background: conic-gradient(
+    from -45deg,
+    var(--d0) 0 23%, transparent 0 27%,
+    var(--d1) 0 48%, transparent 0 52%,
+    var(--d2) 0 73%, transparent 0 77%,
+    var(--d3) 0 98%, transparent 0
+  );
+}
+
+/* ==========================================================================
+   THE TILE
+   ========================================================================== */
+
+.sgach-tile {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: var(--sg-tap);
+  padding: 10px 12px;
+  border-radius: var(--sg-r-md);
+  border: 2px solid var(--sg-line);
+  background: rgba(8, 13, 26, 0.72);
+  color: var(--sg-ink);
+  font-family: var(--sg-ui);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color 110ms ease, background 110ms ease;
+}
+
+.sgach-tile:hover {
+  border-color: var(--sg-line-hot);
+  background: rgba(18, 30, 54, 0.85);
+}
+
+.sgach-tile:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+}
+
+.sgach-tile .sgach-medal {
+  --m: clamp(52px, 7vmin, 64px);
+}
+
+.sgach-tile__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The name gets the whole column and two lines: see buildTile for the
+   screenshot that moved the tag off its line. */
+.sgach-tile__name {
+  font-size: var(--sg-fs-body);
+  font-weight: 600;
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The eyebrow: SILVER, EARNED, LOCKED, 2 / 4. Tracked caps in the number
+   face, the same voice the category counts use. */
+.sgach-tile__tag {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps);
+  color: var(--sg-quiet);
+}
+
+.sgach-tile__how {
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-dim);
+  /* Two lines, then an ellipsis: the full sentence is on the detail card,
+     and a tile that grows past its neighbours makes the whole wall ragged. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sgach-tile__bar {
+  display: block;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(122, 190, 255, 0.14);
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.sgach-tile__fill {
+  display: block;
+  height: 100%;
+  width: calc(var(--v, 0) * 100%);
+  border-radius: 999px;
+  background: var(--cat, var(--sg-cyan));
+}
+
+.sgach-tile__prog {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-quiet);
+}
+
+/* --- states --------------------------------------------------------------- */
+
+.sgach-tile[data-state='earned'] {
+  border-color: color-mix(in srgb, var(--cat) 45%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--cat) 10%, transparent), rgba(8, 13, 26, 0.72) 60%);
+}
+
+.sgach-tile[data-state='earned'] .sgach-tile__tag {
+  color: var(--cat);
+}
+
+.sgach-tile[data-state='locked'] .sgach-tile__name {
+  color: var(--sg-dim);
+}
+
+/* ==========================================================================
+   CIRCUITS
+   ========================================================================== */
+
+/* Eight circuits, two rows of four. A count rather than auto-fill: auto-fill
+   at 1280 made nine 131px columns for eight chips and cut every name to
+   "Elkar...", "Frost...". Four across gives Centurion Prime room at 820. */
+.sgach__circuits {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sgach-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--sg-tap);
+  padding: 6px 10px;
+  border-radius: var(--sg-r-sm);
+  border: 2px solid var(--sg-line);
+  background: rgba(8, 13, 26, 0.72);
+  color: var(--sg-dim);
+  font-family: var(--sg-ui);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sgach-chip:hover {
+  border-color: var(--sg-line-hot);
+}
+
+.sgach-chip:focus-visible {
+  outline: 3px solid var(--sg-white);
+  outline-offset: 2px;
+}
+
+.sgach-chip.is-on {
+  border-color: var(--glow);
+  background: color-mix(in srgb, var(--glow) 12%, rgba(8, 13, 26, 0.85));
+  color: var(--sg-ink);
+}
+
+/* The circuit's own ring, small: two tones, the same as its badges wear. */
+.sgach-chip__ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle closest-side, var(--sg-deep) 38%, var(--ground) 40% 64%, var(--glow) 66%);
+  box-shadow: 0 0 6px -1px var(--glow);
+}
+
+/* Two lines rather than an ellipsis: "Centurion Prime" is the longest name
+   and at tablet width it is the one that would lose its second word. */
+.sgach-chip__name {
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sgach-chip__count {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  color: var(--sg-quiet);
+}
+
+.sgach-chip.is-on .sgach-chip__count {
+  color: var(--glow);
+}
+
+/* ==========================================================================
+   THE DETAIL CARD
+
+   Fixed rather than absolute: inside the settings dialog the view sits in a
+   scrolling body and is as tall as its wall, so a card centred on the VIEW
+   could open half a screen below where the player is looking. Fixed centres
+   it on the screen in both hosts. (Neither host puts a transform, filter or
+   backdrop-filter between the view and the viewport at rest, which is what
+   would turn `fixed` back into `absolute`.)
+   ========================================================================== */
+
+.sgach__detail {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: calc(12px + var(--sg-sat)) calc(12px + var(--sg-sar))
+    calc(12px + var(--sg-sab)) calc(12px + var(--sg-sal));
+}
+
+.sgach__detailScrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 6, 14, 0.72);
+}
+
+.sgach__card {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: clamp(14px, 2.4vmin, 22px);
+  background: rgba(9, 15, 30, 0.96);
+}
+
+.sgach__cardHead {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vmin, 20px);
+}
+
+.sgach__cardHead .sgach-medal {
+  --m: clamp(84px, 16vmin, 132px);
+}
+
+.sgach__cardText {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sgach__cardCat {
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
+  text-transform: uppercase;
+  color: var(--cat, var(--sg-cyan));
+}
+
+.sgach__cardName {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: var(--sg-fs-title);
+  line-height: var(--sg-lh-tight);
+  letter-spacing: 0.04em;
+  color: var(--sg-ink);
+}
+
+.sgach__cardHow {
+  font-size: var(--sg-fs-body);
+  line-height: var(--sg-lh-body);
+  color: var(--sg-dim);
+}
+
+.sgach__cardProg {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-caption);
+  color: var(--sg-quiet);
+}
+
+.sgach__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* One grid per row, so the name column is a FIXED width rather than `auto`:
+   with auto every row sized its own, and "Centurion Prime" pushed its sentence
+   further right than every other circuit's. 10.5em holds the longest name
+   with its swatch. */
+.sgach__row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 10.5em) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--sg-r-sm);
+  background: rgba(8, 13, 26, 0.7);
+  border: 1px solid rgba(122, 190, 255, 0.12);
+  font-size: var(--sg-fs-caption);
+  line-height: var(--sg-lh-snug);
+}
+
+/* The circuit's two tones, or a difficulty's colour: a key to the ring. */
+.sgach__rowSwatch {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.45em;
+  vertical-align: -0.08em;
+  border-radius: 50%;
+  background: radial-gradient(circle closest-side, var(--ground) 52%, var(--glow) 56%);
+  box-shadow: 0 0 5px -1px var(--glow);
+}
+
+.sgach__row.is-current {
+  border-color: var(--sg-line-hot);
+}
+
+.sgach__rowMark {
+  color: var(--sg-green);
+  font-weight: 700;
+  text-align: center;
+}
+
+.sgach__rowName {
+  color: var(--sg-ink);
+  font-weight: 600;
+}
+
+.sgach__rowHow {
+  color: var(--sg-quiet);
+  min-width: 0;
+}
+
+/* A circuit's row has no sentence (it would be "Win a race." eight times), so
+   the name takes the middle. A class from the script rather than `:has()`,
+   which a still-supported Firefox does not parse. */
+.sgach__row.is-bare {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.sgach__row.is-bare .sgach__rowHow {
+  display: none;
+}
+
+.sgach__rowState {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  letter-spacing: var(--sg-ls-caps);
+  text-transform: uppercase;
+  color: var(--sg-quiet);
+}
+
+.sgach__row[data-state='earned'] .sgach__rowState {
+  color: var(--sg-green);
+}
+
+.sgach__close {
+  align-self: flex-end;
+}
+
+/* ==========================================================================
+   THE RESULTS STRIP -- "NEW BADGES"
+   ========================================================================== */
+
+.sgach-strip {
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--sg-r-md);
+  border: 2px solid rgba(255, 210, 63, 0.45);
+  background: linear-gradient(90deg, rgba(255, 210, 63, 0.1), rgba(9, 15, 30, 0.72) 70%);
+  flex: none;
+}
+
+.sgach-strip__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sgach-strip__title {
+  font-family: var(--sg-display);
+  font-style: italic;
+  font-size: var(--sg-fs-caption);
+  letter-spacing: var(--sg-ls-caps);
+  color: var(--sg-gold);
+}
+
+.sgach-strip__count {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  color: var(--sg-quiet);
+}
+
+/* WRAPPED AND CENTRED, NOT A SIDEWAYS SCROLLER. The first cut scrolled, and
+   at 720px the seventh badge sat off the right edge with nothing saying it was
+   there -- the one thing a list of what you just earned must not do. Wrapped,
+   every entry is on screen; the row is capped at two lines and scrolls down
+   past that, which a race that earns nine badges at once can afford. */
+.sgach-strip__row {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 8px;
+  max-height: calc(2 * (44px + 2 * 1.3 * var(--sg-fs-micro) + 10px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.sgach-strip__item {
+  flex: none;
+  width: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.sgach-strip__name {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sgach-strip__badge {
+  color: var(--sg-ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sgach-strip__qual {
+  color: var(--sg-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   TOASTS -- the menu-side card, top corner, out of the way
+   ========================================================================== */
+
+.sgach-toasts {
+  position: fixed;
+  top: calc(12px + var(--sg-sat));
+  right: calc(12px + var(--sg-sar));
+  z-index: 55;
+  pointer-events: none;
+  font-family: var(--sg-ui);
+}
+
+.sgach-toasts__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.sgach-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(300px, 64vw);
+  padding: 6px 12px 6px 6px;
+  border-radius: var(--sg-r-md);
+  border: 2px solid rgba(255, 210, 63, 0.55);
+  background: rgba(9, 15, 30, 0.94);
+  box-shadow: var(--sg-shadow-sm);
+  color: var(--sg-ink);
+  animation: sgachToastIn 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sgach-toast__text {
+  min-width: 0;
+}
+
+.sgach-toast__more {
+  font-family: var(--sg-num);
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-dim);
+}
+
+.sgach-toast__eyebrow {
+  font-size: var(--sg-fs-micro);
+  line-height: var(--sg-lh-snug);
+  letter-spacing: var(--sg-ls-caps-wide);
+  color: var(--sg-gold);
+}
+
+.sgach-toast__name {
+  font-size: var(--sg-fs-caption);
+  font-weight: 600;
+  line-height: var(--sg-lh-snug);
+  color: var(--sg-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes sgachToastIn {
+  from { opacity: 0; transform: translate3d(24px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ==========================================================================
+   THE IN-RACE CHIP. Placed by game/main.ts inside the HUD's position block,
+   under the lap splits: the column of lap news, and a band nothing critical
+   shares -- clear of the racing line, the minimap, the items and the gauge.
+   ========================================================================== */
+
+.sgach-chipToast {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 2px 10px 2px 3px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 210, 63, 0.6);
+  background: rgba(8, 14, 28, 0.82);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.4);
+  font-family: var(--sg-display);
+  font-size: clamp(11px, 1.6vmin, 15px);
+  letter-spacing: 0.12em;
+  line-height: 1;
+  color: #fff4cf;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  animation: sgachChipIn 220ms ease-out;
+  pointer-events: none;
+}
+
+.sgach-chipToast__more {
+  font-family: var(--sg-num);
+  color: var(--sg-gold);
+}
+
+@keyframes sgachChipIn {
+  from { opacity: 0; transform: translate3d(-10px, 0, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* THE COMPACT HUD LAYS THE LAP COLUMN OUT AS A ROW -- ordinal, lap chip and
+   splits side by side along a landscape phone's top edge (styles.css,
+   `.sg-compact .sg-hud__pos`). Appended to that row the chip landed at
+   top-centre, under the tool bar: photographed at 844x390 with CLEAN LAP
+   running beneath the settings gear. So there it hangs BELOW the row, out of
+   the flow, under the ordinal -- still the lap column's news, still on the
+   wall side of the frame, and clear of the gear, the minimap and the road.
+   Portrait compact stacks the column again (the same media query styles.css
+   uses), and the chip goes back into the flow under the splits. */
+.sg-compact .sg-hud__pos {
+  position: relative;
+}
+
+.sg-compact .sg-hud__pos > .sgach-chipToast {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 6px;
+}
+
+@media (max-width: 860px) and (orientation: portrait) {
+  .sg-compact .sg-hud__pos > .sgach-chipToast {
+    position: static;
+    margin-top: 4px;
+  }
+}
+
+/* ==========================================================================
+   PHONES AND SHORT SCREENS
+   ========================================================================== */
+
+@media (max-width: 600px) {
+  /* Four circuits a row, each a small stack -- ring, name, count -- so the
+     eight fit in two rows instead of four on a phone held upright. */
+  .sgach__circuits {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .sgach-chip {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    text-align: center;
+    gap: 3px;
+    padding: 6px 4px;
+  }
+
+  .sgach-chip__name {
+    font-size: var(--sg-fs-micro);
+  }
+
+  /* The toast gives the title most of the width back. */
+  .sgach-toast {
+    max-width: min(250px, 66vw);
+    padding: 4px 10px 4px 4px;
+    gap: 8px;
+  }
+
+  /* Four across on a 390px phone rather than three: a race that earns four
+     badges shows them on one line. */
+  .sgach-strip__item {
+    width: 78px;
+  }
+}
+
+/* THE RAIL. The same condition styles.css turns `.sg-fe .sg-tabs` into a
+   vertical rail at, and it has to stay equal to it for the reason profile.css
+   gives: a rail inside a box still stacking it is a strip gone sideways. On a
+   landscape phone height is the scarce thing, so the rail and the page sit
+   side by side and the circuit picker becomes one row of eight. */
+@media (max-height: 560px), (max-width: 860px) and (orientation: landscape) {
+  .sgach[data-mode='screen'] .sgach__pages {
+    flex-direction: row;
+    gap: 0;
+  }
+
+  .sgach[data-mode='screen'] .sg-tabs {
+    width: auto;
+    flex: none;
+    flex-wrap: nowrap;
+    border-bottom: none;
+  }
+
+  .sgach[data-mode='screen'] .sg-tab.is-on::after {
+    left: auto;
+    right: -7px;
+    top: 22%;
+    bottom: 22%;
+    width: 2px;
+    height: auto;
+  }
+
+  .sgach[data-mode='screen'] .sg-tabpanel {
+    padding-left: 10px;
+  }
+
+  .sgach__circuits {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .sgach-chip {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    text-align: center;
+    gap: 2px;
+    padding: 4px 3px;
+  }
+
+  .sgach-chip__name {
+    font-size: var(--sg-fs-micro);
+  }
+
+  .sgach__summary {
+    gap: 8px;
+  }
+
+  /* One line per name on a screen with no height to give: the strip is one
+     row of medals with their names under them, not a second table. */
+  .sgach-strip {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .sgach-strip__badge {
+    -webkit-line-clamp: 1;
+  }
+
+  /* Seven to a row on an 844px phone, so a big race is one row of medals and
+     not two: measured at two rows it was 180px of a 390px screen. */
+  .sgach-strip__row {
+    gap: 4px 6px;
+  }
+
+  .sgach-strip__item {
+    width: 84px;
+  }
+
+  .sgach-toast {
+    max-width: min(260px, 40vw);
+    padding: 4px 10px 4px 4px;
+  }
+}
+
+/* ==========================================================================
+   REDUCED MOTION -- the OS setting and the game's own toggle, both.
+   The prism holds still (its colours still sweep the ring, they just do not
+   turn), and the toasts and the chip appear rather than arrive.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .sgach-medal[data-frame='prism'] .sgach-medal__ring,
+  .sgach-toast,
+  .sgach-chipToast {
+    animation: none;
+  }
+
+  .sgach-tile {
+    transition: none;
+  }
+}
+
+.sgach[data-rm='on'] .sgach-medal__ring,
+.sgach-toasts[data-rm='on'] .sgach-medal__ring,
+.sgach-toasts[data-rm='on'] .sgach-toast,
+.sgach-chipToast[data-rm='on'],
+.sgach-chipToast[data-rm='on'] .sgach-medal__ring,
+.sgach-strip[data-rm='on'] .sgach-medal__ring {
+  animation: none !important;
+}

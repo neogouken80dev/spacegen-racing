@@ -1,9 +1,10 @@
 /**
  * SpaceGen Racing — front end.
  *
- * Nine screens: title, track, garage, results, paused, and the four
- * multiplayer ones — the lobby browser, hosting a lobby, the room, and the
- * player profile. Nothing stands between load and the first race: the title
+ * Ten screens: title, track, garage, results, paused, the four multiplayer
+ * ones — the lobby browser, hosting a lobby, the room, and the player profile
+ * — and the achievements wall (ui/achievements.ts, which owns it the way
+ * ui/profile.ts owns the profile). Nothing stands between load and the first race: the title
  * screen is a logo and one huge PLAY button, and the two setup screens run in
  * the order a player thinks in — pick the planet, then pick the car to take to
  * it.
@@ -63,6 +64,7 @@ import {
 } from '../content/difficulty'
 import { createLobbyScreens, type LobbyScreenId, type LobbyScreens } from './lobby'
 import { createProfileScreen, type Loadout, type ProfileScreen } from './profile'
+import { createAchievementsView, fillUnlockStrip, type AchievementsView } from './achievements'
 import { lobbyService } from '../net'
 import type { PlayerProfile, RaceStartPacket } from '../net/types'
 import { cue } from '../audio/cues'
@@ -77,7 +79,7 @@ export type QualityTier = 'low' | 'medium' | 'high'
  */
 export type ScreenId =
   | 'title' | 'track' | 'garage' | 'results' | 'paused'
-  | 'lobby' | 'lobbyNew' | 'room' | 'profile'
+  | 'lobby' | 'lobbyNew' | 'room' | 'profile' | 'achievements'
 
 export interface StartSelection {
   trackId: string
@@ -193,6 +195,21 @@ export interface FrontEnd {
    * a multiplayer screen, because nothing loads an account until they do.
    */
   onProfileChange: (profile: PlayerProfile) => void
+  /**
+   * What the race on the results screen unlocked, for its NEW BADGES strip.
+   * Empty hides the strip. Separate from showResults for the reason setBoard
+   * is: the host decides it after the round is banked, and a results screen
+   * that waited on it would be a results screen that waited.
+   */
+  setUnlocks(ids: readonly string[]): void
+  /** The achievement store changed: repaint the wall if it is showing. */
+  refreshAchievements(): void
+  /**
+   * The game's own reduced-motion toggle. The OS setting reaches the
+   * stylesheet by itself; this is for the in-game one, which a media query
+   * cannot see -- the badge wall's prism ring is the one thing here it stops.
+   */
+  setReducedMotion(on: boolean): void
   dispose(): void
 }
 
@@ -248,7 +265,7 @@ const MAX_ROWS = 8
  * and to nothing, respectively.
  */
 const ARROW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
-  'track', 'garage', 'lobby', 'lobbyNew', 'room', 'profile',
+  'track', 'garage', 'lobby', 'lobbyNew', 'room', 'profile', 'achievements',
 ])
 
 const LS_CHASSIS = 'sg.chassis'
@@ -732,6 +749,12 @@ class FrontEndImpl implements FrontEnd {
   /** "Discard standings?" state on the New-circuit button. */
   private discardArmed = 0
 
+  // --- achievements -------------------------------------------------------
+  /** The badge wall. The settings dialog mounts a second copy; see its file. */
+  private readonly achView: AchievementsView
+  /** The results screen's NEW BADGES strip. Hidden when the race earned none. */
+  private readonly unlockStrip: HTMLElement
+
   // --- multiplayer --------------------------------------------------------
   private readonly lobby: LobbyScreens
   private readonly profile: ProfileScreen
@@ -824,7 +847,15 @@ class FrontEndImpl implements FrontEnd {
     this.multiBtn = button('sg-btn sg-btn--violet sg-btn--wide', mpBlock, 'Multiplayer')
     this.multiLine = el('div', 'sg-title__cline', mpBlock,
       'Up to 8 players · you host, everyone connects to you')
-    const titleProfileBtn = button('sg-btn sg-btn--ghost sg-btn--small', mpBlock, 'Profile')
+    // THE ACCOUNT'S TWO DOORS, SIDE BY SIDE. Achievements sit beside Profile
+    // rather than in a row of their own because they are the same kind of
+    // place -- somewhere you go on purpose to look at what you have -- and
+    // because a fourth full-width row would push the launch hint off an
+    // 844x390 phone. One row of two quiet buttons costs no height at all.
+    const acctRow = el('div', 'sg-title__acct', mpBlock)
+    const titleProfileBtn = button('sg-btn sg-btn--ghost sg-btn--small', acctRow, 'Profile')
+    const titleAchBtn = button('sg-btn sg-btn--ghost sg-btn--small', acctRow, 'Achievements')
+    titleAchBtn.dataset.open = 'achievements'
     el('div', 'sg-hint', title, 'Enter or Space to launch')
 
     // =====================================================================
@@ -1108,6 +1139,13 @@ class FrontEndImpl implements FrontEnd {
     this.resRank = el('div', 'sg-score-rank', scoreWrap, '')
     this.resRank.hidden = true
 
+    // NEW BADGES, directly under the score: what the race earned, beside
+    // what it scored. On the Results page rather than above the tabs so it
+    // costs the other three pages nothing, and hidden -- not empty -- on the
+    // races that earned none, which is most of them.
+    this.unlockStrip = el('div', 'sgach-strip', tabResults)
+    this.unlockStrip.hidden = true
+
     // Name entry, shown ONLY when the run actually made the board. Asking every
     // player for a name after every race, most of which do not place, is the
     // arcade convention that does not survive contact with a game you can
@@ -1200,6 +1238,18 @@ class FrontEndImpl implements FrontEnd {
     const roomScr = el('div', 'sg-screen sg-screen--room', root)
     const profileScr = el('div', 'sg-screen sg-screen--profile', root)
 
+    // =====================================================================
+    // ACHIEVEMENTS -- a container, and ui/achievements.ts inside it, on the
+    // terms the profile and the lobby take: the module owns its screen and
+    // its stylesheet, and this file owns only the switch.
+    // =====================================================================
+    const achScr = el('div', 'sg-screen sg-screen--achievements', root)
+    this.achView = createAchievementsView({
+      mode: 'screen',
+      onBack: () => { this.backCue(); this.show('title') },
+    })
+    achScr.appendChild(this.achView.root)
+
     this.lobby = createLobbyScreens({
       onBack: () => { this.backCue(); this.show('title') },
       onProfile: () => this.show('profile'),
@@ -1243,11 +1293,16 @@ class FrontEndImpl implements FrontEnd {
       this.multiLine.textContent =
         `Playing as ${p.name} · up to 8 players · you host, everyone connects to you`
       this.onProfileChange(p)
+      // Tycoon and Collector are read off the account, so the wall repaints
+      // whenever one arrives -- AFTER the host has had it, so a store the host
+      // has just folded it into is the store the wall reads.
+      this.achView.setProfile(p)
     }
 
     this.screens = {
       title, track: trackScr, garage, results, paused,
       lobby: lobbyScr, lobbyNew: lobbyNewScr, room: roomScr, profile: profileScr,
+      achievements: achScr,
     }
 
     // =====================================================================
@@ -1282,6 +1337,7 @@ class FrontEndImpl implements FrontEnd {
     this.playBtn.addEventListener('click', () => this.show('track'))
     this.multiBtn.addEventListener('click', () => this.show('lobby'))
     titleProfileBtn.addEventListener('click', () => this.show('profile'))
+    titleAchBtn.addEventListener('click', () => this.show('achievements'))
     tBack.addEventListener('click', () => this.show('title'))
     this.toGarageBtn.addEventListener('click', () => this.show('garage'))
     // Back out of the garage to the track list, not to the title: the two setup
@@ -1363,6 +1419,14 @@ class FrontEndImpl implements FrontEnd {
     this.onKey = (e: KeyboardEvent) => {
       if (this.root.classList.contains('is-hidden')) return
       if (e.key === 'Escape') {
+        // An open badge card is one step deeper than the screen it sits on,
+        // so Escape closes the card and stops there. The card handles its own
+        // Escape while focus is inside it; this is for when it is not.
+        if (this.screen === 'achievements' && this.achView.closeDetail()) {
+          e.preventDefault()
+          this.backCue()
+          return
+        }
         const back = this.escapeTarget()
         if (back) {
           e.preventDefault()
@@ -1426,6 +1490,18 @@ class FrontEndImpl implements FrontEnd {
     else this.preview.hide()
     // Only two screens reach the profile, and Back has to walk the way in.
     if (screen === 'title' || screen === 'lobby') this.profileFrom = screen
+    // THE WALL IS REPAINTED ON EVERY ENTRY, the rule every screen here keeps,
+    // and the account is primed on the way in: Tycoon and Collector are read
+    // off it. That is a load -- and so, on the mock, the world's clock -- which
+    // is the same trade the profile screen makes on its own entry and for the
+    // same reason: this is somewhere the player chose to go, and an account
+    // wall that could not show the account would be the wrong wall.
+    if (screen === 'achievements') {
+      this.achView.refresh()
+      this.profile.prime()
+    } else {
+      this.achView.closeDetail()
+    }
     // The multiplayer screens own a poll and a request, so they are told before
     // the host is -- and they are allowed to redirect: entering the room with
     // no room sends us straight back to the browser, and when that happens the
@@ -1982,8 +2058,26 @@ class FrontEndImpl implements FrontEnd {
     }
   }
 
+  setUnlocks(ids: readonly string[]): void {
+    fillUnlockStrip(this.unlockStrip, ids)
+  }
+
+  refreshAchievements(): void {
+    // Only while it is the screen up: the wall is repainted on every entry
+    // anyway, and a repaint nobody can see is thirty tiles of wasted DOM.
+    if (this.screen === 'achievements' && !this.root.classList.contains('is-hidden')) {
+      this.achView.refresh()
+    }
+  }
+
+  setReducedMotion(on: boolean): void {
+    this.achView.setReducedMotion(on)
+    this.unlockStrip.dataset.rm = on ? 'on' : 'off'
+  }
+
   dispose(): void {
     window.removeEventListener('keydown', this.onKey)
+    this.achView.dispose()
     this.cancelCircuitSwitch()
     if (this.discardArmed) { window.clearTimeout(this.discardArmed); this.discardArmed = 0 }
     if (this.rowsInTimer) { window.clearTimeout(this.rowsInTimer); this.rowsInTimer = 0 }
@@ -2243,7 +2337,11 @@ class FrontEndImpl implements FrontEnd {
 
   /** Every enabled button on the screen that is currently up. */
   private focusables(): HTMLButtonElement[] {
-    const host = this.screens[this.screen]
+    // An open badge card is modal: the walk stays inside it, or a pad's
+    // right-press would carry focus onto a tile behind the scrim.
+    const host = this.screen === 'achievements' && this.achView.detailOpen
+      ? this.achView.focusRoot
+      : this.screens[this.screen]
     const all = host.querySelectorAll<HTMLButtonElement>('button:not([disabled])')
     const out: HTMLButtonElement[] = []
     for (let i = 0; i < all.length; i++) {
@@ -2424,6 +2522,7 @@ class FrontEndImpl implements FrontEnd {
   /** B is Escape: the same one step back the keyboard takes. */
   private padBack(): void {
     if (this.screen === 'paused') { this.backCue(); this.onResume(); return }
+    if (this.screen === 'achievements' && this.achView.closeDetail()) { this.backCue(); return }
     const back = this.escapeTarget()
     if (back) { this.backCue(); this.show(back) }
   }
@@ -2457,6 +2556,7 @@ class FrontEndImpl implements FrontEnd {
       case 'lobbyNew': return 'lobby'
       case 'room': return 'lobby'
       case 'profile': return this.profileFrom
+      case 'achievements': return 'title'
       default: return null
     }
   }

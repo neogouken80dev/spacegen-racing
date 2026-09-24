@@ -179,6 +179,28 @@
   background: rgba(28, 44, 76, 0.9);
 }
 
+/* THREE TABS ON A PHONE HELD UPRIGHT. The head wraps, and with two tabs the
+   pill and the close button shared the second line. The third tab (Badges)
+   made the pill too wide for that, and the close button fell to a THIRD line
+   of its own -- 60px of a 844px screen spent on one button, photographed at
+   390x844. So on a narrow phone the close button moves up beside the title,
+   where the title's `margin-right: auto` already leaves it room, and the pill
+   takes the whole second line with its three tabs sharing it equally. */
+@media (max-width: 560px) {
+  .sgset__close {
+    order: 1;
+  }
+  .sgset__tabs {
+    order: 2;
+    flex: 1 1 100%;
+  }
+  .sgset__tab {
+    flex: 1 1 0;
+    padding-inline: 0.4em;
+    letter-spacing: 0.08em;
+  }
+}
+
 /* --------------------------------------------------------------------------
    Body — the ONLY thing that scrolls
    -------------------------------------------------------------------------- */

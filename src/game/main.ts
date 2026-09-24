@@ -49,7 +49,9 @@ import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types
  * a finished race. The attract loop, the headless harness and every unit test
  * that never opens a lobby still pay nothing.
  */
-import { accountService, liveLobby, lobbyService, raceTransport } from '../net'
+import {
+  accountService, existingAccountService, liveLobby, lobbyService, raceTransport,
+} from '../net'
 import { LockstepRunner } from '../net/lockstep'
 import type {
   AccountService, PlayerProfile, RaceStartPacket, RaceTransport, RoundResume,
@@ -75,7 +77,7 @@ import { createGlobalStore, type GlobalStore } from '../score/global'
 import type { ScoreStore } from '../score/api'
 import { createAudio, type AudioSystem } from '../audio'
 import { createFrontEnd, type FrontEnd } from '../ui/frontend'
-import { createSettingsPanel, type SettingsPanel } from '../ui/settings'
+import { createSettingsPanel, type SettingsPanel, type SettingsTab } from '../ui/settings'
 import { installCompactLayout, type CompactLayout } from '../ui/compact'
 import { createInput, isTouchScheme, type InputManager } from './input'
 import {
@@ -94,6 +96,10 @@ import { setRoomNotice } from '../ui/lobby'
 import { createPodiumStage, pilotName, type PodiumStage } from '../render/podium'
 import { ChaseCamera } from './camera'
 import { EventCarry } from './eventCarry'
+import { AchievementRun, circuitEvidence, seriesSweep } from './achievementRun'
+import type { RaceContext } from '../score/tracker'
+import type { CircuitEvidence } from '../content/avatars'
+import { createBadgeToasts, type BadgeToasts } from '../ui/badgeToast'
 import { themeFor } from '../render/themes'
 import {
   ATTRACT_TRACK, attractPose, attractRacerCount, makeAttractPose, shotFor,
@@ -433,6 +439,18 @@ export class Game {
   /** Per-racer one-shot events, delivered once per render frame whatever
    *  the number of sim steps it ran. See src/game/eventCarry.ts. */
   private readonly eventCarry = new EventCarry()
+  /**
+   * The achievements' half of every race, and the toasts that announce them.
+   * Each hook into this file is one commented line; the work is in
+   * game/achievementRun.ts. Assigned in the constructor, which has the
+   * container the toasts hang off.
+   */
+  private readonly ach: AchievementRun
+  private readonly badgeToasts: BadgeToasts
+  /** The mid-race preview's context, built once so the render path allocates
+   *  nothing for it. See `raceContext`. */
+  private readonly liveContext = (): RaceContext =>
+    this.raceContext(this.scorer.score, this.scorer.bestCombo)
   /** Dense per-racer view of `r.events`, reused each frame. See the audio call. */
   private audioEvents: RacerEvent[][] = []
   private lastTime = 0
@@ -645,6 +663,20 @@ export class Game {
     })
     this.hud.setReducedMotion(this.reduceMotion)
     this.frontEnd = createFrontEnd(container)
+    // ACHIEVEMENTS. The toasts hang off the container, above the menus and
+    // below the settings dialog; the run reaches the account only through
+    // `existingAccountService`, so banking a race never creates one (see the
+    // header of game/achievementRun.ts for why that matters).
+    this.badgeToasts = createBadgeToasts(container)
+    this.badgeToasts.setReducedMotion(this.reduceMotion)
+    this.frontEnd.setReducedMotion(this.reduceMotion)
+    this.ach = new AchievementRun({ account: existingAccountService, news: this.badgeToasts })
+    // News from outside a race -- a sync bringing another device's unlocks
+    // home, a profile crossing Tycoon -- is toasted; a race's own is handled
+    // at the flag. The wall repaints whenever the store moves.
+    this.ach.store.onUnlock = (ids) => this.badgeToasts.show(ids)
+    this.ach.store.onChange = () => this.frontEnd.refreshAchievements()
+    this.frontEnd.onProfileChange = (p) => this.ach.observeProfile(p)
     this.input = createInput(canvas, container)
     // THE HUD LAYOUT FOLLOWS THE HANDS, NOT THE VIEWPORT. See ui/compact.ts:
     // a tablet is too wide for the phone breakpoints and still has thumbs on
@@ -684,6 +716,9 @@ export class Game {
       this.cheer.setReducedMotion(on)
       this.scoreHud.setReducedMotion(on)
       this.hud.setReducedMotion(on)
+      // And the badges: the toasts' entrance and the wall's prism ring.
+      this.badgeToasts.setReducedMotion(on)
+      this.frontEnd.setReducedMotion(on)
     }
     this.settings.onVfxIntensityChange = (glare, screen) => {
       this.vfxGlare = glare
@@ -999,8 +1034,9 @@ export class Game {
     return bar
   }
 
-  /** Opening settings mid-race pauses it; closing resumes. */
-  openSettings(tab: 'settings' | 'controls' = 'settings'): void {
+  /** Opening settings mid-race pauses it; closing resumes. `achievements` is
+   *  the Badges page -- the wall, reachable mid-race. */
+  openSettings(tab: SettingsTab = 'settings'): void {
     if (this.phase === 'racing') { this.pausedBySettings = true; this.pauseSilent() }
     this.tools.hidden = true
     this.settings.open(tab)
@@ -1199,6 +1235,12 @@ export class Game {
     this.applyRenderScale()
     this.buildWorld()
     this.eventCarry.reset()
+    // ACHIEVEMENTS: nobody is credited for the title race. Ended rather than
+    // banked -- every path that leaves a real race banks it on the way out
+    // (finishRace, toMenu, startRace), so anything still watched here is a
+    // round that was voided.
+    this.ach.end()
+    this.badgeToasts.setChipHost(null)
 
     const n = attractRacerCount(this.tier)
     // A varied grid rather than the player's garage selection: this is a shop
@@ -1565,6 +1607,10 @@ export class Game {
     } finally {
       this.resuming = false
     }
+    // ACHIEVEMENTS: the replay below steps the round outside the render loop,
+    // where the tracker cannot see it. Anything proved by an absence is
+    // withheld for this race; see RaceFacts.partial.
+    this.ach.partial()
     const runner = this.net
     if (!runner) {
       console.warn('net: a resync rebuilt no race — the packet does not place this '
@@ -1598,6 +1644,11 @@ export class Game {
 
   // -------------------------------------------------------------------------
   private startRace(): void {
+    // ACHIEVEMENTS: a race still being watched is one being LEFT -- Restart on
+    // the pause menu, a lobby's next round arriving over this one -- and it is
+    // banked as a quit before anything below replaces it. Not on a resync,
+    // which is the same round coming back rather than a new one.
+    if (!this.resuming) this.bankQuit()
     /**
      * THE PACKET, RESOLVED -- AND BEFORE ANYTHING IS TORN DOWN.
      *
@@ -1732,6 +1783,11 @@ export class Game {
 
     this.race = new Race(this.track, config)
     this.localId = config.localRacerIndex
+    // ACHIEVEMENTS: watch this race from its first step. A resync keeps the
+    // watch it already had (see `resync`); its chip goes in the HUD's lap
+    // column, under the splits -- see ui/badgeToast.ts for why there.
+    if (!this.resuming) this.ach.begin(this.localId, this.track.def.id)
+    this.badgeToasts.setChipHost(this.hud.root.querySelector<HTMLElement>('.sg-hud__pos'))
     this.spawnRacerVisuals()
 
     const local = this.race.state.racers[this.localId]
@@ -1833,6 +1889,8 @@ export class Game {
   }
 
   private toMenu(): void {
+    // ACHIEVEMENTS: walking out of a race banks what it counted. See bankQuit.
+    this.bankQuit()
     this.closePodium()
     // QUITTING A LOBBY ROUND IS QUITTING IT. The room carries on without this
     // client -- the slot keeps racing under AI and keeps its place in the
@@ -1990,6 +2048,9 @@ export class Game {
     const wasComplete = this.circuit !== null && isComplete(this.circuit)
     this.scoreCircuitRound()
     if (this.circuitActive && this.circuit && !wasComplete && isComplete(this.circuit)) {
+      // ACHIEVEMENTS, banked AFTER the round: Grand Champion is read off the
+      // table scoreCircuitRound just finished. See bankRace.
+      this.bankRace(true)
       this.beginPodium()
       return
     }
@@ -1999,6 +2060,9 @@ export class Game {
     // no-op outside a lobby race, which is the whole of "single player is
     // unaffected".
     const mpPodium = this.scoreSeriesRound()
+    // ACHIEVEMENTS, after the series table for the same reason: a sweep is
+    // read off it.
+    this.bankRace(false)
     if (mpPodium) { this.beginSeriesPodium(); return }
     this.phase = 'results'
     this.hud.root.style.display = 'none'
@@ -2352,7 +2416,72 @@ export class Game {
   private async forwardAward(paid: Payout): Promise<void> {
     const local = this.race?.state.racers[this.localId] ?? null
     const won = !!local && local.finished && local.position === 1
-    await bankAward(accountService(), sharedWallet(), paid.credits, won)
+    const p = await bankAward(accountService(), sharedWallet(), paid.credits, won)
+    // The banked profile is the one Tycoon reads -- lifetime credits -- so
+    // the wall hears about it the moment the server has said it.
+    if (p) this.ach.observeProfile(p)
+  }
+
+  // -------------------------------------------------------------------------
+  // ACHIEVEMENTS -- the three calls finishRace, toMenu and startRace make.
+  // Everything else is in game/achievementRun.ts.
+  // -------------------------------------------------------------------------
+
+  /**
+   * What this file knows about the race that the sim does not.
+   *
+   * MULTIPLAYER MEANS ANOTHER PERSON ON THE GRID, not merely a lobby: a room
+   * of one against the AI fill is a single race wearing a room's name, and
+   * Online Victor says "multiplayer race".
+   */
+  private raceContext(
+    score: number, bestCombo: number,
+    circuit: CircuitEvidence | null = null, sweep = false,
+  ): RaceContext {
+    const packet = this.multiplayer
+    const multiplayer = packet !== null && packet.grid.some(
+      (s) => s.playerId !== null && s.playerId !== packet.localPlayerId)
+    return { difficulty: this.raceDifficulty(), multiplayer, score, bestCombo, circuit, sweep }
+  }
+
+  /**
+   * Bank the race that just took the flag, and put what it unlocked on the
+   * results strip and in a toast.
+   *
+   * CALLED AFTER THE ROUND IS SCORED, from both of finishRace's exits: Grand
+   * Champion and Iron Run are read off the circuit table and a lobby sweep off
+   * the series table, and both were only just written. The score and combo are
+   * the ones captured at the flag (`lastScore`), not the scorer's running
+   * total, for the reason the capture exists: the ceremony is not the player's.
+   */
+  private bankRace(circuitDone: boolean): void {
+    const race = this.race
+    if (!race) return
+    const ev = circuitDone && this.circuit ? circuitEvidence(this.circuit) : null
+    const packet = this.multiplayer
+    const sweep = ev ? ev.sweep
+      : packet ? seriesSweep(this.seriesTable, packet.round, packet.seriesLength) : false
+    const ids = this.ach.commit(race.state,
+      this.raceContext(this.lastScore, this.lastBestCombo, ev?.circuit ?? null, sweep))
+    this.badgeToasts.setChipHost(null)
+    this.frontEnd.setUnlocks(ids)
+    this.ach.announce(ids)
+  }
+
+  /**
+   * Bank a race the player is walking out of, if one is being watched.
+   *
+   * A QUIT STILL COUNTS WHAT HAPPENED: the drifts released and the rivals
+   * knocked out were real, and a lifetime counter that forgot them because the
+   * player restarted would be the game taking something back. Everything that
+   * needs a result is withheld by the catalogue, because `finished` is false.
+   */
+  private bankQuit(): void {
+    if (!this.ach.tracking || !this.race) return
+    const ids = this.ach.commit(this.race.state,
+      this.raceContext(this.scorer.score, this.scorer.bestCombo))
+    this.badgeToasts.setChipHost(null)
+    this.ach.announce(ids)
   }
 
   /**
@@ -2661,6 +2790,9 @@ export class Game {
         // the top of each step, so with several steps per frame the renderer
         // would only ever see the LAST one's (see eventCarry.ts).
         this.eventCarry.collect(racers)
+        // ACHIEVEMENTS read the same step here, once, for the same reason --
+        // at any display rate. See score/tracker.ts.
+        this.ach.step(this.race.state)
         this.accumulator -= DT
         steps++
       }
@@ -2830,6 +2962,11 @@ export class Game {
    * does not pay for five handshakes and five chances to lose somebody.
    */
   private toRoom(): void {
+    // ACHIEVEMENTS: a round that arrives here unbanked was voided or taken
+    // from us (the results screen's own exit has already banked its race), and
+    // a void round banks nothing -- the same rule the standings keep.
+    this.ach.end()
+    this.badgeToasts.setChipHost(null)
     this.detachNet()
     this.multiplayer = null
     this.setNameplateRoster(null)
@@ -3176,6 +3313,9 @@ export class Game {
           this.scoreHud.settle(this.lastScore)
         }
       }
+      // ACHIEVEMENTS: the mid-race chip. Cheap on the frames where nothing
+      // moved, which is nearly all of them -- see AchievementRun.frame.
+      if (this.phase === 'racing') this.ach.frame(st, this.scorer.bestCombo, this.liveContext)
       this.scoreHud.setVisible(this.phase === 'racing' || this.phase === 'ceremony')
       // The attract screen has no HUD -- it is display:none -- so updating it
       // would be laying out a lap counter and a minimap nobody can see, every
