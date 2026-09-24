@@ -73,6 +73,13 @@ export interface AchievementsView {
   openDetail(badgeId: string, trackId?: string | null): void
   /** Close the detail card if it is open. True when there was one to close. */
   closeDetail(): boolean
+  /**
+   * Scroll the open card's ladder a step up (-1) or down (1); true when it
+   * moved. The card's one control is Close, so up and down have nothing else
+   * to do there, and on a landscape phone the ladder runs past the fold. The
+   * arrow keys reach it on their own; a host's pad walk calls this.
+   */
+  scrollDetail(dir: number): boolean
   setReducedMotion(on: boolean): void
   dispose(): void
 }
@@ -283,6 +290,7 @@ class AchievementsViewImpl implements AchievementsView {
   private readonly dFill: HTMLElement
   private readonly dProg: HTMLElement
   private readonly dList: HTMLElement
+  private listSize: ResizeObserver | null = null
   private readonly dClose: HTMLButtonElement
   private detailFrom: HTMLElement | null = null
   private detailBadge = ''
@@ -388,6 +396,15 @@ class AchievementsViewImpl implements AchievementsView {
     this.dFill = el('span', 'sgach-tile__fill', this.dBar)
     this.dProg = el('div', 'sgach__cardProg', cardText, '')
     this.dList = el('ul', 'sgach__list', card)
+    // Which ends of the ladder have more past them, for the stylesheet's fade:
+    // on a landscape phone the list can stop exactly on a row boundary, and a
+    // clean edge there reads as the end of the ladder (photographed: six
+    // circuits of eight, and nothing to say two more were below).
+    this.dList.addEventListener('scroll', () => this.syncListEdge(), { passive: true })
+    if (typeof ResizeObserver === 'function') {
+      this.listSize = new ResizeObserver(() => this.syncListEdge())
+      this.listSize.observe(this.dList)
+    }
     this.dClose = button('sg-btn sg-btn--ghost sgach__close', card, 'Close')
     this.dClose.dataset.sfx = 'back'
     this.dClose.addEventListener('click', () => this.closeDetail())
@@ -406,10 +423,17 @@ class AchievementsViewImpl implements AchievementsView {
         e.preventDefault()
         e.stopPropagation()
         this.dClose.focus()
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'PageUp' || e.key === 'PageDown') {
+        // Up and down scroll the ladder, the one part of the card that moves.
+        // Focus is on Close, outside the list, so the browser's own arrow
+        // scrolling would never reach it.
+        e.preventDefault()
+        e.stopPropagation()
+        this.scrollDetail(e.key === 'ArrowUp' || e.key === 'PageUp' ? -1 : 1)
       } else if (e.key.startsWith('Arrow')) {
         // The front end walks focus spatially on the arrows, and the tiles
-        // behind the scrim are still laid out. Nothing in the card uses an
-        // arrow, so it simply goes no further.
+        // behind the scrim are still laid out. Nothing in the card uses left
+        // or right, so they simply go no further.
         e.stopPropagation()
       }
     })
@@ -480,7 +504,13 @@ class AchievementsViewImpl implements AchievementsView {
     this.detailFrom = from ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     this.detail.hidden = false
     this.fillDetail(this.store.snapshot, this.profile ?? this.store.knownProfile)
-    this.dClose.focus()
+    // Opened at the top of its ladder, with focus on Close without scrolling
+    // anything to reach it: on a landscape phone a plain focus() scrolled the
+    // card to the button and cut the badge's name off (photographed). The
+    // stylesheet now keeps the head and Close fixed and scrolls the list.
+    this.dList.scrollTop = 0
+    this.syncListEdge()
+    this.dClose.focus({ preventScroll: true })
   }
 
   closeDetail(): boolean {
@@ -490,6 +520,27 @@ class AchievementsViewImpl implements AchievementsView {
     this.detailFrom = null
     if (back && back.isConnected) back.focus()
     return true
+  }
+
+  scrollDetail(dir: number): boolean {
+    if (this.detail.hidden || dir === 0) return false
+    const l = this.dList
+    const before = l.scrollTop
+    // Most of what shows, so every press brings new rows up and keeps one of
+    // the old ones to read them against. Instant, which is also what reduced
+    // motion asks for.
+    l.scrollTop = before + Math.sign(dir) * Math.max(44, Math.round(l.clientHeight * 0.7))
+    return l.scrollTop !== before
+  }
+
+  /** `data-edge` on the ladder: none, down, up or both -- where more rows are. */
+  private syncListEdge(): void {
+    const l = this.dList
+    if (this.detail.hidden) return
+    const more = l.scrollHeight - l.clientHeight - l.scrollTop > 1
+    const less = l.scrollTop > 1
+    const edge = more && less ? 'both' : more ? 'down' : less ? 'up' : 'none'
+    if (l.dataset.edge !== edge) l.dataset.edge = edge
   }
 
   private fillDetail(s: AchievementSnapshot, p: ProfileCounts | null): void {
@@ -513,6 +564,9 @@ class AchievementsViewImpl implements AchievementsView {
     // every difficulty, or every circuit this badge can be earned on -- so the
     // card answers "where have I got this" as well as "what is next".
     this.dList.textContent = ''
+    // The stylesheet sizes the name column by what goes in it: a circuit's
+    // name, or one short tier word.
+    this.dList.dataset.kind = b.kind
     const have = new Set(s.unlocked)
     if (b.kind === 'track') {
       // Each circuit in its own two tones -- the ring the badge wears there --
@@ -538,6 +592,7 @@ class AchievementsViewImpl implements AchievementsView {
       }
     }
     this.dList.hidden = this.dList.childElementCount === 0
+    this.syncListEdge()
   }
 
   private listRow(
@@ -568,6 +623,8 @@ class AchievementsViewImpl implements AchievementsView {
 
   dispose(): void {
     this.tabs.dispose()
+    this.listSize?.disconnect()
+    this.listSize = null
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root)
   }
 }
@@ -608,7 +665,9 @@ export function fillUnlockStrip(host: HTMLElement, ids: readonly string[]): void
     if (!a) continue
     const li = el('li', 'sgach-strip__item', row)
     li.title = a.name
-    const m = medalInto(li, a.badge, 44)
+    // Sized by the stylesheet (44px; smaller on a landscape phone), with art
+    // picked for the larger.
+    const m = medalInto(li, a.badge, 44, true)
     paintMedal(m, frameOfAchievement(a), true)
     // The badge, then what distinguishes this one -- the circuit, the tier,
     // the difficulty -- on a line of its own. As one string it broke at the

@@ -11,12 +11,16 @@
  *
  *   CHIP    mid-race, for the unlocks a race can prove before its flag (a clean
  *           lap, a third SINGULARITY release, a tier crossed). A pill, not a
- *           card, parked by game/main.ts in the band beside the lap chip that
- *           nothing else in the HUD uses -- NEVER over the racing line and
- *           never over the position, the lap, the minimap, the items or the
- *           gauge. It reports something already banked, like PLATING HELD
- *           does, so it is the quietest thing on the screen and it is gone in
- *           under three seconds.
+ *           card, parked by game/main.ts in the HUD's lap column, under the
+ *           splits -- NEVER over the racing line and never over the position,
+ *           the lap, the minimap, the items or the gauge. The stylesheet moves
+ *           it where the compact HUD needs it moved: below the row on a
+ *           landscape phone (in the row it sat under the settings gear), and
+ *           below the callout band on a portrait one (in the column it sat
+ *           under POSITION TAKEN). tools/probe-badges.mjs measures both. It
+ *           reports something already banked, like PLATING HELD does, so it is
+ *           the quietest thing on the screen and it is gone in under three
+ *           seconds.
  *
  * Reduced motion, whichever of the OS setting or the game's own toggle says so,
  * turns every entrance into a plain appearance. The text is in a polite live

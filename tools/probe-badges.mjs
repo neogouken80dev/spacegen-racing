@@ -62,12 +62,15 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, r))
 const URL_ = `http://127.0.0.1:${server.address().port}/`
 
-const SIZES = [
+const ALL_SIZES = [
   { tag: 'desktop', w: 1280, h: 720, dpr: 1, touch: false },
   { tag: 'phone-portrait', w: 390, h: 844, dpr: 3, touch: true },
   { tag: 'phone-landscape', w: 844, h: 390, dpr: 3, touch: true },
   { tag: 'tablet', w: 820, h: 1180, dpr: 2, touch: true },
 ]
+// --only=phone-portrait,tablet re-photographs a subset after a fix.
+const ONLY_SIZES = (process.argv.find((a) => a.startsWith('--only=')) ?? '').slice(7).split(',').filter(Boolean)
+const SIZES = ONLY_SIZES.length ? ALL_SIZES.filter((s) => ONLY_SIZES.includes(s.tag)) : ALL_SIZES
 
 // ---------------------------------------------------------------------------
 // THE SEED. A wall with every frame kind on it, earned and locked side by side,
@@ -252,6 +255,40 @@ const frames = (page, n) => page.evaluate(async (count) => {
   for (let i = 0; i < count; i++) await new Promise((r) => requestAnimationFrame(() => r()))
 }, n)
 
+/**
+ * An open badge card: its name and its way out on screen whatever the
+ * ladder's length (the list scrolls, the card does not), and -- when the
+ * ladder does overflow -- ArrowDown scrolling it with focus left on Close.
+ */
+async function checkCard(page, tag, badge, scope) {
+  const fit = await page.evaluate((sc) => {
+    const d = document.querySelector(`${sc} .sgach__detail`)
+    const box = (s) => {
+      const e = d?.querySelector(s)
+      if (!e) return null
+      const b = e.getBoundingClientRect()
+      return { top: Math.round(b.top), bottom: Math.round(b.bottom) }
+    }
+    const l = d?.querySelector('.sgach__list')
+    return { name: box('.sgach__cardName'), close: box('.sgach__close'), vh: innerHeight,
+      over: l ? l.scrollHeight - l.clientHeight : 0 }
+  }, scope)
+  if (!fit.name || fit.name.top < 0 || !fit.close || fit.close.bottom > fit.vh) {
+    note(tag, `the ${badge} card cuts off its name or its Close: ${JSON.stringify(fit)}`)
+  }
+  if (fit.over <= 1) return
+  await page.keyboard.press('ArrowDown')
+  await frames(page, 1)
+  const moved = await page.evaluate((sc) => ({
+    top: document.querySelector(`${sc} .sgach__list`)?.scrollTop ?? 0,
+    close: document.activeElement?.classList.contains('sgach__close') ?? false,
+  }), scope)
+  console.log(`  ${badge} ladder overflows by ${Math.round(fit.over)}px; ArrowDown scrolled it to ${Math.round(moved.top)}`)
+  if (!(moved.top > 0) || !moved.close) {
+    note(tag, `ArrowDown in the ${badge} card: ladder at ${moved.top}, focus on Close ${moved.close}`)
+  }
+}
+
 // ===========================================================================
 // SCREENS
 // ===========================================================================
@@ -298,6 +335,7 @@ if (ONLY !== 'race') {
         return !!d && !d.hidden && document.activeElement?.classList.contains('sgach__close')
       })
       if (!open) note(S.tag, `detail for ${badge} did not open with focus on Close`)
+      await checkCard(page, S.tag, badge, '.sg-screen--achievements')
       await page.keyboard.press('Escape')
       await page.waitForTimeout(150)
       const after = await page.evaluate(() => ({
@@ -321,6 +359,7 @@ if (ONLY !== 'race') {
     await act('.sg-screen--achievements .sgach-tile[data-badge="track-victory"]')
     await page.waitForTimeout(300)
     await shot(page, `${S.tag}-detail-track`)
+    await checkCard(page, S.tag, 'track-victory', '.sg-screen--achievements')
     await page.keyboard.press('Escape')
     await page.waitForTimeout(150)
 
@@ -350,8 +389,8 @@ if (ONLY !== 'race') {
     // longer than that -- the first run measured an empty HUD after
     // photographing a full one.
     const chipBox = await page.evaluate(async () => {
-      window.__GAME__.badgeToasts.chip(['track-cleanlap:rustfall', 'legendary-drifts:1'])
-      await new Promise((r) => requestAnimationFrame(() => r()))
+      const g = window.__GAME__
+      const raf = () => new Promise((r) => requestAnimationFrame(() => r()))
       const R = (e) => {
         if (!e) return null
         // A callout at rest is laid out at opacity 0: a box, but nothing drawn.
@@ -359,6 +398,24 @@ if (ONLY !== 'race') {
         const b = e.getBoundingClientRect()
         return b.width > 0 && b.height > 0 ? { x: b.x, y: b.y, w: b.width, h: b.height } : null
       }
+      const calloutUp = () => {
+        const e = document.querySelector('.sg-moment .sg-cheer')
+        return e && e.textContent.trim() && R(e) ? { text: e.textContent.trim(), ...R(e) } : null
+      }
+      // A CALLOUT UP AT THE SAME TIME, so an overlap with one is measured
+      // rather than left to whether the race happened to be praising somebody
+      // when the probe looked -- which is how the portrait collision was first
+      // caught, by luck, on the third run. The top rung, LEGENDARY: rungs are
+      // 0..5, and an index past the ladder is silently nothing (the first
+      // version of this line asked for rung 16 and measured no callout at all).
+      // reset() first -- the call finishRace makes -- so no line already up,
+      // no cooldown and no gap between lines can hold it back.
+      g.cheer.reset()
+      g.cheer.comboRung(5)
+      for (let i = 0; i < 3; i++) await raf()
+      const callout = calloutUp()
+      g.badgeToasts.chip(['track-cleanlap:rustfall', 'legendary-drifts:1'])
+      await raf()
       const over = (a, b) => {
         if (!a || !b) return 0
         const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
@@ -385,14 +442,45 @@ if (ONLY !== 'race') {
       // The racing line: the middle half of the screen, from the horizon down.
       const line = { x: innerWidth * 0.25, y: innerHeight * 0.35, w: innerWidth * 0.5, h: innerHeight * 0.55 }
       const fs = chip ? parseFloat(getComputedStyle(document.querySelector('.sgach-chipToast')).fontSize) : 0
-      return { chip, hits, line: over(chip, line), fs }
+      return { chip, callout, hits, line: over(chip, line), fs }
     })
-    // And raised again for the photograph, for the same reason.
-    await page.evaluate(() => {
-      window.__GAME__.badgeToasts.chip(['track-cleanlap:rustfall', 'legendary-drifts:1'])
+    // RAISED AGAIN FOR THE PHOTOGRAPH, both of them: at dpr 3 the measuring
+    // call above takes most of the chip's 2.6 s by itself, and a photograph
+    // taken after it showed an empty HUD (844x390, looked at). Both are also
+    // HELD for the shot -- the chip put back if its timer takes it, the line's
+    // hold (a private field, so the check below says if this stops working)
+    // stretched -- because a SwiftShader frame at dpr 3 can outlast either.
+    // This photograph is of where they sit; their timing is not under test.
+    await page.evaluate(async () => {
+      const g = window.__GAME__
+      const raf = () => new Promise((r) => requestAnimationFrame(() => r()))
+      g.cheer.reset()
+      g.cheer.comboRung(5)
+      g.cheer.holdT = 30
+      await raf()
+      g.badgeToasts.chip(['track-cleanlap:rustfall', 'legendary-drifts:1'])
+      const chip = document.querySelector('.sgach-chipToast')
+      const host = chip?.parentElement
+      if (chip && host) {
+        window.__holdChip = new MutationObserver(() => { if (!chip.isConnected) host.appendChild(chip) })
+        window.__holdChip.observe(host, { childList: true })
+      }
+      await raf()
     })
     await shot(page, `${S.tag}-race-chip`)
+    // Still up once the shot is taken means it is in it. Then both go, so the
+    // dialog photographed next is not over a held line.
+    const inPhoto = await page.evaluate(() => {
+      window.__holdChip?.disconnect()
+      document.querySelector('.sgach-chipToast')?.remove()
+      const c = document.querySelector('.sg-moment .sg-cheer')
+      const up = !!c && !c.hidden && c.textContent.trim() !== ''
+      window.__GAME__.cheer.reset()
+      return { callout: up }
+    })
+    if (!inPhoto.callout) note(S.tag, 'the callout had gone before the race-chip photograph was taken')
     console.log(`  chip ${JSON.stringify(chipBox)}`)
+    if (!chipBox.callout) note(S.tag, 'no callout was up while the chip was measured, so the overlap test against one proved nothing')
     if (!chipBox.chip) note(S.tag, 'the chip did not render in the HUD')
     else {
       for (const [k, v] of Object.entries(chipBox.hits)) note(S.tag, `chip overlaps ${k} by ${v}px^2`)
@@ -407,6 +495,18 @@ if (ONLY !== 'race') {
     await page.waitForTimeout(1500)
     await shot(page, `${S.tag}-panel`)
     report(S.tag, 'settings Badges page', await measure(page, '.sgset__dialog'))
+    // The third tab once wrapped the close button onto a line of its own, at
+    // 390x844 and again at 820x1180: it belongs on the title's line, at the
+    // right-hand edge.
+    const head = await page.evaluate(() => {
+      const r = (s) => document.querySelector(s)?.getBoundingClientRect()
+      const t = r('.sgset__title'), c = r('.sgset__close'), h = r('.sgset__head')
+      return t && c && h ? { titleMid: Math.round((t.top + t.bottom) / 2), closeTop: Math.round(c.top),
+        closeBottom: Math.round(c.bottom), rightGap: Math.round(h.right - c.right) } : null
+    })
+    if (!head || head.titleMid < head.closeTop || head.titleMid > head.closeBottom || head.rightGap > 30) {
+      note(S.tag, `the settings close button is not at the end of the title's line: ${JSON.stringify(head)}`)
+    }
     await page.evaluate(() => {
       const b = document.querySelector('.sgset__body')
       if (b) b.scrollTop = b.scrollHeight * 0.45
@@ -416,6 +516,7 @@ if (ONLY !== 'race') {
     await act('.sgset .sgach-tile[data-badge="knockouts"]')
     await page.waitForTimeout(300)
     await shot(page, `${S.tag}-panel-detail`)
+    await checkCard(page, S.tag, 'knockouts (in the settings dialog)', '.sgset')
     await page.keyboard.press('Escape')
     await page.waitForTimeout(150)
     const panel = await page.evaluate(() => ({
@@ -448,25 +549,42 @@ if (ONLY !== 'race') {
       }
       const cards = [...document.querySelectorAll('.sgach-toast')].map(R).filter(Boolean)
       const hit = (sel) => cards.reduce((s, c) => s + over(c, R(document.querySelector(sel))), 0)
-      const strip = R(document.querySelector('.sg-screen--results .sgach-strip'))
+      const stripEl = document.querySelector('.sg-screen--results .sgach-strip')
+      const strip = R(stripEl)
+      // ON SCREEN MEANS INSIDE EVERY BOX THAT CLIPS IT, not inside the
+      // viewport: on a phone the results body scrolls, and the first version
+      // of this check passed a strip whose names were under the button row.
+      let clipBottom = innerHeight
+      for (let n = stripEl?.parentElement; n && n !== document.body; n = n.parentElement) {
+        if (getComputedStyle(n).overflowY !== 'visible') clipBottom = Math.min(clipBottom, n.getBoundingClientRect().bottom)
+      }
       return {
         cards: cards.length, first: cards[0] ?? null,
         overTitle: hit('.sg-results__title'), overCta: hit('.sg-results__cta'),
         overTabs: hit('.sg-screen--results .sg-tabs'), strip,
-        stripVisible: !!strip && strip.y + strip.h <= innerHeight,
+        stripCut: strip ? Math.max(0, Math.round(strip.y + strip.h - clipBottom)) : 0,
       }
     }, SAMPLE)
+    // Shown under reduced motion for the photograph, so the card APPEARS rather
+    // than arrives: twice the desktop shot caught it a few milliseconds into
+    // its 260 ms entrance, faint, even after a 400 ms wait -- a SwiftShader
+    // frame is older than the clock says. Its resting state is fully opaque
+    // (desktop-results-real shows it so).
     await page.evaluate((ids) => {
       const t = window.__GAME__.badgeToasts
       t.clear()
+      t.setReducedMotion(true)
       t.show(ids.slice(0, 3))
     }, SAMPLE)
+    await page.waitForTimeout(150)
     await shot(page, `${S.tag}-results-staged`)
+    await page.evaluate(() => window.__GAME__.badgeToasts.setReducedMotion(false))
     report(S.tag, 'results screen', await measure(page, '.sg-screen--results'))
     console.log(`  toast ${JSON.stringify(toast)}`)
     if (toast.cards === 0) note(S.tag, 'no toast card on the results screen')
     if (toast.overCta > 0) note(S.tag, `toast covers the results buttons by ${toast.overCta}px^2`)
     if (!toast.strip) note(S.tag, 'NEW BADGES strip missing on the results screen')
+    else if (toast.stripCut > 0) note(S.tag, `NEW BADGES strip is cut off by ${toast.stripCut}px at the foot of the results body`)
 
     if (errors.length) for (const e of errors.slice(0, 6)) note(S.tag, `page error: ${e}`)
     await ctx.close()
@@ -477,7 +595,7 @@ if (ONLY !== 'race') {
 // RACE -- one real one, to a real results screen
 // ===========================================================================
 if (ONLY !== 'screens') {
-  const S = SIZES[0]
+  const S = ALL_SIZES[0]
   console.log(`\n=== REAL RACE, ${S.tag} ===`)
   const { ctx, page, errors } = await openPage(S)
   const before = await page.evaluate(() => window.__GAME__.ach.store.snapshot)

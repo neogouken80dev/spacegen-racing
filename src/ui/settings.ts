@@ -2684,6 +2684,12 @@ class SettingsPanelImpl implements SettingsPanel {
    * horizontal, and it matches what the same presses do on a keyboard.
    */
   private padNudge(dir: number): void {
+    // A badge card open over the Badges page: up and down scroll its ladder,
+    // as the arrow keys do. Tab there only ever lands back on Close.
+    if ((dir === PAD_U || dir === PAD_D) && this.achView.detailOpen) {
+      this.achView.scrollDetail(dir === PAD_U ? -1 : 1)
+      return
+    }
     if (dir === PAD_U) this.padKey('Tab', true)
     else if (dir === PAD_D) this.padKey('Tab', false)
     else if (dir === PAD_L) this.padKey('ArrowLeft')

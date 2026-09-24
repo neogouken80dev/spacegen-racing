@@ -548,17 +548,27 @@
   background: rgba(3, 6, 14, 0.72);
 }
 
+/* THE LADDER SCROLLS, THE CARD DOES NOT. The head (which badge) and Close
+   (the way out) stay on screen whatever the list's length: on an 844x390
+   phone the whole card scrolling put Close below the fold and, focused on
+   open, scrolled the badge's name off the top instead (photographed).
+   600px wide, which is what the longest rung needs to stay on one line:
+   "Release 1,000 drifts at SINGULARITY, the top tier." wrapped at 560. */
 .sgach__card {
   position: relative;
-  width: min(560px, 100%);
+  width: min(600px, 100%);
   max-height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: clamp(14px, 2.4vmin, 22px);
   background: rgba(9, 15, 30, 0.96);
+}
+
+.sgach__cardHead,
+.sgach__close {
+  flex: none;
 }
 
 .sgach__cardHead {
@@ -600,6 +610,8 @@
   font-size: var(--sg-fs-body);
   line-height: var(--sg-lh-body);
   color: var(--sg-dim);
+  /* No one-word last line ("...the top / tier."), where the browser can. */
+  text-wrap: pretty;
 }
 
 .sgach__cardProg {
@@ -615,6 +627,36 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* THE LADDER FADES WHERE THERE IS MORE OF IT. `data-edge` comes from the
+   script (none / down / up / both). Without it a list that happened to stop
+   on a row boundary read as complete: six circuits of eight on an 844x390
+   phone, with nothing to say two more were below (photographed). */
+.sgach__list[data-edge='down'] {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 28px), transparent);
+}
+
+.sgach__list[data-edge='up'] {
+  -webkit-mask-image: linear-gradient(to top, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to top, black calc(100% - 28px), transparent);
+}
+
+.sgach__list[data-edge='both'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+}
+
+/* Rows keep their height in a list that scrolls, rather than telescoping --
+   the rule profile.css writes for its own scrolling card. */
+.sgach__list > .sgach__row {
+  flex: none;
 }
 
 /* One grid per row, so the name column is a FIXED width rather than `auto`:
@@ -664,6 +706,18 @@
 .sgach__rowHow {
   color: var(--sg-quiet);
   min-width: 0;
+  text-wrap: pretty;
+}
+
+/* A TIER'S NAME IS ONE SHORT WORD -- Bronze, Silver, Gold, Prism -- so a
+   tiered ladder hands the sentence the width a circuit's name needs. At
+   844x390 "Release 20 drifts at SINGULARITY, the top tier." then takes one
+   line, not two, and the four tiers fit the card. Side by side only: at 600px
+   and under the sentence has a line of its own already (below). */
+@media (min-width: 601px) {
+  .sgach__list[data-kind='tiered'] .sgach__row:not(.is-bare) {
+    grid-template-columns: 18px minmax(0, 4.4em) minmax(0, 1fr) auto;
+  }
 }
 
 /* A circuit's row has no sentence (it would be "Win a race." eight times), so
@@ -732,8 +786,11 @@
 /* WRAPPED AND CENTRED, NOT A SIDEWAYS SCROLLER. The first cut scrolled, and
    at 720px the seventh badge sat off the right edge with nothing saying it was
    there -- the one thing a list of what you just earned must not do. Wrapped,
-   every entry is on screen; the row is capped at two lines and scrolls down
-   past that, which a race that earns nine badges at once can afford. */
+   every entry is on screen; the list is capped at two rows and scrolls down
+   past that, which a race that earns nine badges at once can afford. A row is
+   sized for its TALLEST entry: the 44px medal, the 4px gap and three lines --
+   a name that wraps to two (Races Finished, at 78px) and its tier. Sized for
+   two lines, the second row's tier was cut in half at 390x844 (photographed). */
 .sgach-strip__row {
   list-style: none;
   margin: 0;
@@ -742,7 +799,7 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px 8px;
-  max-height: calc(2 * (44px + 2 * 1.3 * var(--sg-fs-micro) + 10px));
+  max-height: calc(2 * (48px + 3 * 1.3 * var(--sg-fs-micro)) + 6px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -756,6 +813,10 @@
   align-items: center;
   gap: 4px;
   text-align: center;
+}
+
+.sgach-strip .sgach-medal {
+  --m: 44px;
 }
 
 .sgach-strip__name {
@@ -908,10 +969,24 @@
   margin-top: 6px;
 }
 
+/* ...AND ON A PHONE HELD UPRIGHT IT DROPS BELOW THE CALLOUT BAND. Portrait
+   stacks the lap column again, and in the flow the chip sat at 107-141px --
+   exactly the band the callouts use: photographed at 390x844 with POSITION
+   TAKEN printed straight through CLEAN LAP. Portrait has the height landscape
+   lacks, so the chip hangs against the HUD itself at 27% down the left edge:
+   under the callouts (which end near 18%), over sky rather than road (the
+   road starts near 40%), and clear of the item slot and the score, which sit
+   on the right. */
 @media (max-width: 860px) and (orientation: portrait) {
-  .sg-compact .sg-hud__pos > .sgach-chipToast {
+  .sg-compact .sg-hud__pos {
     position: static;
-    margin-top: 4px;
+  }
+
+  .sg-compact .sg-hud__pos > .sgach-chipToast {
+    position: absolute;
+    top: 27%;
+    left: calc(var(--sg-pad) + var(--sg-sal));
+    margin: 0;
   }
 }
 
@@ -936,6 +1011,19 @@
 
   .sgach-chip__name {
     font-size: var(--sg-fs-micro);
+  }
+
+  /* A ladder row stacks: the tier and its state on one line, the sentence
+     under them across the full width. Side by side at 390px the sentence got
+     a 90px column and ran to four lines a tier (photographed). */
+  .sgach__row {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    row-gap: 2px;
+  }
+
+  .sgach__rowHow {
+    grid-column: 2 / 4;
+    grid-row: 2;
   }
 
   /* The toast gives the title most of the width back. */
@@ -1003,25 +1091,74 @@
     gap: 8px;
   }
 
-  /* One line per name on a screen with no height to give: the strip is one
-     row of medals with their names under them, not a second table. */
+  /* ONE BAND, HEADED FROM THE SIDE. At 844x390 the results body has about
+     70px left under the score, and the strip stacked -- its header, a 44px
+     medal, a name and a tier under it -- was 112px, so every name was below
+     the fold (photographed). Here the header stands at the left, the medals
+     are 34px and each carries its name on one line. The tier or circuit goes
+     to the screen reader only: the ring already says it, and on this screen
+     it is the race just driven. */
   .sgach-strip {
-    padding: 6px 8px;
-    gap: 4px;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 8px;
+  }
+
+  .sgach-strip__head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    flex: none;
+  }
+
+  .sgach-strip .sgach-medal {
+    --m: 34px;
   }
 
   .sgach-strip__badge {
-    -webkit-line-clamp: 1;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  /* Seven to a row on an 844px phone, so a big race is one row of medals and
-     not two: measured at two rows it was 180px of a 390px screen. */
+  .sgach-strip__qual {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The detail card on a 390px-tall screen: a smaller medal and tighter
+     gaps, so the ladder is on screen with the badge's name above it. */
+  .sgach__cardHead .sgach-medal {
+    --m: 72px;
+  }
+
+  .sgach__card {
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  /* Each entry as wide as its name, so seven fit one row on an 844px phone
+     without cutting "Races Finished" short; a race that earns more wraps, and
+     the list scrolls past two rows as it does everywhere. */
   .sgach-strip__row {
-    gap: 4px 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-start;
+    gap: 4px 10px;
+    max-height: calc(2 * (36px + 1.3 * var(--sg-fs-micro)) + 4px);
   }
 
   .sgach-strip__item {
-    width: 84px;
+    width: auto;
+    min-width: 52px;
+    max-width: 128px;
+    gap: 2px;
   }
 
   .sgach-toast {

@@ -2513,6 +2513,11 @@ class FrontEndImpl implements FrontEnd {
   }
 
   private padNudge(dir: number): void {
+    // A badge card open: up and down scroll its ladder, as the arrow keys do.
+    if ((dir === PAD_U || dir === PAD_D) && this.screen === 'achievements' && this.achView.detailOpen) {
+      this.achView.scrollDetail(dir === PAD_U ? -1 : 1)
+      return
+    }
     if (dir === PAD_L) this.moveFocus(-1, 0)
     else if (dir === PAD_R) this.moveFocus(1, 0)
     else if (dir === PAD_U) this.moveFocus(0, -1)
