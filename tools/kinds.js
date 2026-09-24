@@ -86,4 +86,55 @@ for (const [name, kind] of KINDS) {
   scene.remove(pool.mesh)
   pool.dispose()
 }
+
+/**
+ * THE SHAPE PASS: is each kind a DISC, or the quad it is drawn on?
+ *
+ * The burst above answers "does anything reach a pixel". It cannot see this
+ * bug, which is the opposite one: every smoke puff in the game reached a
+ * pixel all the way out to the corners of its quad, because the gaussian was
+ * still at 13.5% of peak on the quad's edge, and additive blending drew the
+ * tile. Sixty particles at random rotations hide that in their own overlap.
+ *
+ * So: ONE particle per kind, about 140 px across, HDR-bright so a faint edge
+ * lights pixels the way it does over a dark road under bloom, and seeded so
+ * the quad is axis-aligned (seed 0.5 puts the shader's spin at exactly pi
+ * with no drift over age, and a square turned by pi is the same square).
+ * Then the lit pixels are compared with their own bounding box: a disc fills
+ * pi/4 = 78.5% of it, an axis-aligned square fills 100%, and an annulus less
+ * than either. probe-kinds.mjs fails anything over 85%.
+ *
+ * K_BEAM is photographed and reported but not judged: it is a light column,
+ * square-ended at the ground by design, and its lower half is buried in the
+ * road in every frame the game actually draws.
+ */
+const shape = []
+const HOT = new Float32Array([3.0, 2.55, 1.5])
+for (const [name, kind] of KINDS) {
+  const scene = new THREE.Scene()
+  const pool = new ParticlePool(8, () => 0.5)
+  scene.add(pool.mesh)
+  const overhead = kind === 3
+  const cam = overhead ? camTop : camSide
+  const cy = overhead ? 30 : 0
+  const cz = overhead ? 0 : 30
+  pool.beginFrame(0, 0, cy, cz)
+  pool.spawn(0, 0, 0, 0, 0, 0, HOT[0], HOT[1], HOT[2], 1.2, 8.0, 0, 0, 0, kind)
+  pool.flush()
+  pool.beginFrame(0.25, 0, cy, cz)
+  renderer.render(scene, cam)
+  const m = measure()
+  const boxArea = m.box[0] * m.box[1]
+  shape.push({
+    name, kind, view: overhead ? 'top' : 'side', ...m,
+    fill: boxArea > 0 ? +(m.lit / boxArea).toFixed(3) : 0,
+    judged: kind !== 6,
+    // The photograph itself, so `--shots` can write it out and a person can
+    // look at the corner the number is about.
+    png: canvas.toDataURL('image/png'),
+  })
+  scene.remove(pool.mesh)
+  pool.dispose()
+}
+window.__SHAPE__ = shape
 window.__KINDS__ = out

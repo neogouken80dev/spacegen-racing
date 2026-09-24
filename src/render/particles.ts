@@ -56,6 +56,15 @@ export const K_BEAD = 7
 export const PARTICLE_VERT = `
 uniform float uTime;
 uniform vec3  uCamPos;
+/**
+ * THE PIXEL FLOOR's two inputs: the height in pixels of whatever this draw is
+ * landing in (set per draw by the mesh's onBeforeRender, so it is the composer
+ * target's height on a tier with post and the canvas's without), and the
+ * smallest visible core a point-like particle may have on it. See the floor
+ * itself below. uViewH = 0 means nobody has told us, and the floor stays off.
+ */
+uniform float uViewH;
+uniform float uMinPx;
 
 attribute vec3 aPos;
 attribute vec3 aVel;
@@ -126,6 +135,15 @@ void main() {
     a = pow(1.0 - u, 1.3) * smoothstep(0.0, 0.05, u);
   } else if (kind < 5.5) {       // smoke
     a = sin(u * 3.14159265) * 0.8;
+    // THE DISC FIX IN PARTICLE_FRAG NARROWED THE PUFF (exp(-2 d^2) -> exp(-3
+    // d^2), then trimmed to a disc), which on the same quad is 67% of the old
+    // light inside a smaller circle. Every plume in the game was tuned against
+    // the old puff, so the quad grows by 1/sqrt(0.666) = 1.226 to hand that
+    // back: same half-max radius (0.589 of the old quad), same integrated
+    // light, the 10% contour where the old square's edge was. What is gone is
+    // only the corners. The cost is 1.5x the fragments per puff, the price of
+    // a round puff the size of the square one.
+    size *= 1.226;
   } else if (kind < 6.5) {       // beam
     a = sin(u * 3.14159265);
   } else {                       // bead
@@ -139,50 +157,85 @@ void main() {
       * (0.88 + 0.12 * sin(vSeed * 61.0 + age * 31.0));
   }
 
-  // Far fade, and a NEAR fade. The chase camera sits nine metres directly
-  // behind the exhaust, so everything the vehicle throws backwards — plume,
-  // drift sparks, wall sparks, dust — flies straight at the lens and, a metre
-  // out, one quad covers a third of the screen. Dissolving them before they
-  // arrive is what keeps the vehicle visible during a boost.
+  // Far fade, and a NEAR fade. The chase camera rides fourteen metres behind
+  // the car and 5.8 m over it (TUNING.camera) -- about thirteen metres from
+  // the exhaust -- so everything the vehicle throws backwards -- plume, drift
+  // sparks, wall sparks, dust -- flies at the lens and, a metre out, one quad
+  // covers a third of the screen. Dissolving them before they arrive is what
+  // keeps the vehicle visible during a boost.
   //
   // SMOKE GETS ITS OWN, MUCH WIDER WINDOW. It is the only kind that is both
   // large (a metre across by the end of its life) and slow (drag-stalled, so
   // it hangs where it was made), which means it is the only kind the camera
   // genuinely flies THROUGH rather than past: at 60 m/s everything the wheels
-  // leave on the road reaches the lens about a sixth of a second later, at
-  // which age a puff is at its brightest and widest. Measured, this was a soft
-  // white disc a third of the frame across passing on the outside of every
-  // corner. Fading from 9.5 m instead of 4.2 m dissolves the plume as the
-  // camera arrives while leaving it at full strength where it is made — the
-  // spray at the wheels is 9 m out, so it loses nothing at all.
+  // leave on the road passes under the lens about a fifth of a second later,
+  // at which age a puff is at its brightest and widest. Measured (on the old
+  // nine-metre rig), this was a soft white disc a third of the frame across
+  // passing on the outside of every corner. Fading from 9.5 m instead of 4.2 m
+  // dissolves the plume as the camera arrives while leaving it at full
+  // strength where it is made -- the spray at the wheels is about thirteen
+  // metres out, so it loses nothing at all.
   //
   // BEADS GET A THIRD WINDOW, and it was MEASURED, not assumed. An impact
   // bead is a FILLED disc up to 0.9 m across thrown backwards down the road,
-  // and the chase camera is nine metres behind the car: solid angle goes as
-  // (size/distance)^2, so the same bead that is 70 px tall where it is made is
-  // 260 px tall at 2.5 m. Photographed at the default 1.1-4.2 window, a slam
-  // put a dozen of those over the lens and the frame went flat magenta --
-  // additive, so it tinted the sky and the horizon too.
+  // and solid angle goes as (size/distance)^2: on the nine-metre rig this was
+  // tuned on, the same bead that is 70 px tall where it is made was 260 px
+  // tall at 2.5 m. Photographed at the default 1.1-4.2 window, a slam put a
+  // dozen of those over the lens and the frame went flat magenta -- additive,
+  // so it tinted the sky and the horizon too.
   //
   // 2.4-8.5, which is very nearly the SMOKE window, and for the same reason
   // smoke has one: a bead is the only other kind that is both large and left
   // BEHIND the car, so it is the only other kind the camera genuinely flies
-  // through rather than past. Every settled marble on the road passes within a
-  // couple of metres of a lens that is nine metres behind the car. Measured at
-  // 1.8-5.6 a slam photographed 0.82% of the frame and 3.52% of the ROAD BAND
-  // blown a quarter-second in -- a boost's numbers, for an impact -- and
-  // almost all of it came from four beads close enough to fill a sixth of the
-  // frame each. At 2.4-8.5 the burst where it is MADE is untouched: the
-  // contact point is eleven metres from the lens.
+  // through rather than past. Every settled marble on the road passes a few
+  // metres under a lens that now rides 5.8 m over it. Measured at 1.8-5.6 a
+  // slam photographed 0.82% of the frame and 3.52% of the ROAD BAND blown a
+  // quarter-second in -- a boost's numbers, for an impact -- and almost all
+  // of it came from four beads close enough to fill a sixth of the frame
+  // each. At 2.4-8.5 the burst where it is MADE is untouched: the contact
+  // point is about fifteen metres from the lens.
   float dcam = distance(wp, uCamPos);
   float near = (kind > 4.5 && kind < 5.5)
     ? smoothstep(2.6, 9.5, dcam)
     : (kind > 6.5)
       ? smoothstep(2.4, 8.5, dcam)
       : smoothstep(1.1, 4.2, dcam);
-  vA = a * near * (1.0 - smoothstep(230.0, 420.0, dcam));
+  float fade = near * (1.0 - smoothstep(230.0, 420.0, dcam));
 
-  vec4 mv;
+  /**
+   * THE PIXEL FLOOR.
+   *
+   * Everything below this line decides how big a particle is ON SCREEN, and
+   * until this existed nothing did: sizes were chosen in metres and the
+   * camera decided the rest. The census found fifteen emitters whose visible
+   * core lands under two pixels -- drift glints and gatling tracers at
+   * 0.4-0.5 px, chip-hit sparks at 0.2-0.4, every impact burst on a car more
+   * than 60 m ahead -- and a quad that narrow covers no pixel centre on most
+   * frames, so it is not dim, it is ABSENT, and then present, and then absent:
+   * a crawl of dropouts rather than a small spark.
+   *
+   * So a point-like kind whose core would land under uMinPx is drawn at
+   * uMinPx, capped at 4x growth, and its alpha is divided by the AREA it
+   * gained. Total light is unchanged -- the far spark is exactly as bright as
+   * it was, it just stops falling between pixels. That division is why alpha
+   * has to be settled AFTER size and not before: the branch above set the
+   * kind's own envelope, this sets how much of it each pixel gets.
+   *
+   * "Core" is the FWHM of each profile in PARTICLE_FRAG, in quad-size units:
+   * sprite 0.261, spark 0.357 (x0.72 across the streak), smoke 0.481 (of the
+   * already-grown quad), bead 0.79 (the body's edge). Rings, shells, beams
+   * and ground fronts are annuli and columns metres across; a floor on their
+   * LINE WIDTH would inflate their radius by the same factor, so they are
+   * left alone.
+   *
+   * ppm is pixels per metre at the particle's own depth: P[1][1] is
+   * 1/tan(fov/2), so a metre at depth z spans P[1][1]/z of NDC's two units.
+   */
+  vec4 mv = modelViewMatrix * vec4(wp, 1.0);
+  float ppm = uViewH > 0.0
+    ? projectionMatrix[1][1] * uViewH * 0.5 / max(0.35, -mv.z)
+    : 0.0;
+
   if (kind > 2.5 && kind < 3.5) {
     // Surface-aligned quad: it lies in the plane perpendicular to aAxis, so a
     // shockwave on a wall spreads ACROSS the wall instead of standing on its
@@ -223,22 +276,44 @@ void main() {
     // pp = (dir.y, -dir.x) puts the determinant at +1 and the quad draws.
     // side: DoubleSide on the material below makes the whole class of
     // mistake harmless for every kind, and this sign correct as well.
-    mv = modelViewMatrix * vec4(wp, 1.0);
     vec3 vv = (modelViewMatrix * vec4(aVel * exp(-k * age), 0.0)).xyz;
     vec2 d = vv.xy;
     float dl = length(d);
     vec2 dir = (dl > 1e-4) ? d / dl : vec2(0.0, 1.0);
     vec2 pp = vec2(dir.y, -dir.x);
     float st = 1.0 + min(dl * 0.085, 6.0);
-    mv.xy += dir * (position.y * size * st) + pp * (position.x * size * 0.72);
+    // The floor, per AXIS: a streak is thin across and long along, and it is
+    // almost always only the width that falls between pixels. Growing the
+    // length with it would turn every distant spark into a 4x-long dash.
+    float wg = 1.0, lg = 1.0;
+    if (ppm > 0.0) {
+      float wPx = 0.357 * 0.72 * size * ppm;
+      float lPx = 0.357 * size * st * ppm;
+      if (wPx < uMinPx) wg = min(4.0, uMinPx / max(wPx, 1e-4));
+      if (lPx < uMinPx) lg = min(4.0, uMinPx / max(lPx, 1e-4));
+    }
+    a /= wg * lg;
+    mv.xy += dir * (position.y * size * st * lg) + pp * (position.x * size * 0.72 * wg);
   } else {
-    mv = modelViewMatrix * vec4(wp, 1.0);
+    float core = (kind < 0.5) ? 0.261
+      : (kind > 4.5 && kind < 5.5) ? 0.481
+      : (kind > 6.5) ? 0.79
+      : 0.0;
+    if (core > 0.0 && ppm > 0.0) {
+      float cPx = core * size * ppm;
+      if (cPx < uMinPx) {
+        float g = min(4.0, uMinPx / max(cPx, 1e-4));
+        size *= g;
+        a /= g * g;
+      }
+    }
     float rot = vSeed * 6.2831853 + age * (vSeed - 0.5) * 3.0;
     float cs = cos(rot), sn = sin(rot);
     vec2 q = vec2(position.x * cs - position.y * sn, position.x * sn + position.y * cs);
     mv.xy += q * size;
   }
 
+  vA = a * fade;
   gl_Position = projectionMatrix * mv;
 }
 `
@@ -254,9 +329,32 @@ void main() {
   vec2 q = vQ * 2.0;
   float d = length(q);
   float a;
+  /**
+   * THE DISC WINDOW. Every smoke puff in the game was a rotated SQUARE.
+   *
+   * q runs -1..1 across the quad, so d = 1 is the edge of the largest disc
+   * the quad can hold and the corners are at d = 1.41 -- and a gaussian
+   * never reaches zero. The smoke profile below was still at 0.074 on that
+   * edge, 13.5% of its own peak, and additive blending draws whatever is left
+   * at the edge of the quad as the edge of the quad: a hard-cornered tile,
+   * turning slowly, in every frame the game renders (tyre dust, the drift
+   * plume, spin-outs, landings). The sprite left 0.035 there, 2.2% of peak,
+   * which is invisible on one puff and a square outline on a white-hot
+   * boost flash; the shell's soft fill left 0.012.
+   *
+   * This takes each of those to exactly zero at d = 1 over the last fifth of
+   * the radius, which is where the profiles are already down to their tails.
+   * The ring and ground annuli are NOT windowed: they are zero by d = 0.96
+   * already (0.0001 at the edge, measured) and the window would only shave 6%
+   * off every shockwave to fix nothing. Spark and bead reach zero on their
+   * own. tools/probe-kinds.mjs photographs one axis-aligned particle per kind
+   * and fails any whose lit pixels fill more than 85% of their bounding box,
+   * which is the difference between a disc (78.5%) and a square (100%).
+   */
+  float disc = 1.0 - smoothstep(0.80, 1.0, d);
 
   if (vKind < 0.5) {             // sprite: wide glow + hot core
-    a = exp(-d * d * 3.0) * 0.70 + exp(-d * d * 20.0) * 0.90;
+    a = (exp(-d * d * 3.0) * 0.70 + exp(-d * d * 20.0) * 0.90) * disc;
   } else if (vKind < 1.5) {      // spark: coloured body, white-hot centre
     float s = 1.0 - smoothstep(0.16, 1.0, d);
     a = s * s * 1.10 + exp(-d * d * 14.0) * 0.80;
@@ -268,9 +366,21 @@ void main() {
   } else if (vKind < 4.5) {      // shell: bright annulus, punched dark core
     a = 1.0 - smoothstep(0.0, 0.34, abs(d - 0.66));
     a *= 1.0 - 0.90 * exp(-d * d * 7.0);
-    a += exp(-d * d * 1.4) * 0.05;
+    // Only the soft fill is windowed: the annulus itself already ends at
+    // d = 1.0 exactly, and trimming it would thin every shell's outer skirt.
+    a += exp(-d * d * 1.4) * 0.05 * disc;
   } else if (vKind < 5.5) {      // smoke
-    a = exp(-d * d * 2.0) * 0.55;
+    // The worst offender (13.5% of peak at the edge), and the one kind where
+    // the window alone was not enough. exp(-2 d^2) is still at 28% of its
+    // peak where the window starts, so trimming it to a disc turned every
+    // puff into a COIN -- a flat interior with a visible rim. So the profile
+    // is narrowed to exp(-3 d^2), which is down to 15% by d = 0.8 and hands the
+    // window only a tail, and the vertex shader grows the quad 1.226x to put
+    // it back: at that scale the half-max radius is the old one to three
+    // places (0.589 of the quad), the 10% contour is where the old quad's
+    // edge was, and the integrated light is the old light. Measured on the
+    // integrated profile, not eyeballed -- see the vertex shader.
+    a = exp(-d * d * 3.0) * 0.55 * disc;
   } else if (vKind < 6.5) {      // beam
     float w = 1.0 - smoothstep(0.0, 1.0, abs(q.x));
     a = w * w * (1.0 - smoothstep(-0.3, 1.0, q.y)) * 0.85;
@@ -350,13 +460,54 @@ export class ParticlePool {
    */
   delay = 0
 
+  /**
+   * VELOCITY EVERY spawn() IS BORN WITH, ON TOP OF ITS OWN.
+   *
+   * A particle used to be born at world rest, whatever threw it. The emitters
+   * that ride a car -- the drift fan, the scrape, the glints -- are thrown off
+   * something doing 45-60 m/s and were left standing in the road the instant
+   * they existed, so the camera overran them: the drift fan spent 64% of its
+   * life off the bottom of the screen. An emitter that should carry some of
+   * its parent's motion sets this, spawns, and puts it back to zero.
+   *
+   * Same current-value idiom as `delay`, for the same reason, and reset by
+   * beginFrame for the same reason: a carried velocity that leaked out of its
+   * emitter would drag some unrelated burst down the road.
+   */
+  inheritX = 0
+  inheritY = 0
+  inheritZ = 0
+
+  /**
+   * WHICH PART OF THE RING THE NEXT spawn() LANDS IN: 0 shared, 1 reserved.
+   *
+   * THE POOL IS A RING, AND A RING IS FIRST-COME. With eight cars holding a
+   * tier-3 slide inside the lod radius, medium's 1,440 slots wrap every 0.14
+   * s and low's 600 every 0.11: 86% and 93% of everything written was
+   * overwritten while it was still alive, and nothing decided WHOSE. The
+   * player's own drift -- the one effect they are steering by -- was cut
+   * short exactly as often as a car forty metres ahead.
+   *
+   * `reserve` in the constructor fences off a slice of the ring that only
+   * lane 1 writes into. vfx.ts points the local racer's emitters at it, so
+   * the player's particles can only ever be overwritten by the player's own.
+   * A pool built without a reserve has one lane and behaves exactly as the
+   * ring always did (the podium builds one).
+   */
+  lane = 0
+
   private axX = 0
   private axY = 1
   private axZ = 0
 
-  private head = 0
-  private spawnStart = 0
+  /** [lo, hi) of each lane's slots. Lane 1 is empty when there is no reserve. */
+  private readonly laneLo: Int32Array
+  private readonly laneHi: Int32Array
+  private readonly laneHead: Int32Array
+  private readonly laneStart: Int32Array
+  private readonly laneCount: Int32Array
   private spawnCount = 0
+  private last = -1
   private time = 0
 
   /**
@@ -390,14 +541,23 @@ export class ParticlePool {
   private readonly rnd: () => number
 
   /**
-   * @param count  instance slots
-   * @param rnd    uniform [0,1). Injected so a caller can keep its own stream;
-   *               vfx.ts passes Math.random, which is what it always used.
+   * @param count    instance slots
+   * @param rnd      uniform [0,1). Injected so a caller can keep its own
+   *                 stream; vfx.ts passes Math.random, which is what it always
+   *                 used.
+   * @param reserve  fraction of the slots fenced off for lane 1 (see `lane`).
+   *                 0, the default, is one shared ring exactly as before.
    */
-  constructor(count: number, rnd: () => number = Math.random) {
+  constructor(count: number, rnd: () => number = Math.random, reserve = 0) {
     this.count = count
     this.frameBudget = Math.max(48, count >> 2)
     this.rnd = rnd
+    const split = count - Math.max(0, Math.min(count >> 1, Math.round(count * reserve)))
+    this.laneLo = new Int32Array([0, split])
+    this.laneHi = new Int32Array([split, count])
+    this.laneHead = new Int32Array([0, split])
+    this.laneStart = new Int32Array(2)
+    this.laneCount = new Int32Array(2)
 
     this.aPos = new Float32Array(count * 3)
     this.aVel = new Float32Array(count * 3)
@@ -442,6 +602,8 @@ export class ParticlePool {
       uniforms: {
         uTime: { value: 0 },
         uCamPos: { value: new THREE.Vector3() },
+        uViewH: { value: 0 },
+        uMinPx: { value: 1.5 },
       },
       vertexShader: PARTICLE_VERT,
       fragmentShader: PARTICLE_FRAG,
@@ -458,6 +620,14 @@ export class ParticlePool {
       // none of them declare a handedness convention, so the next one is a
       // coin flip. DoubleSide takes the coin away at no cost.
       side: THREE.DoubleSide,
+      // ...AND ONE PASS, NOT TWO. three renders a transparent DoubleSide
+      // material as a back-face pass followed by a front-face pass (so a
+      // translucent sphere sorts its own inside behind its outside), which
+      // made "one draw call" in this file's header two, every frame, with a
+      // program switch between them. This pool is ONE/ONE additive, and
+      // addition does not care about order, so a single unculled pass lights
+      // exactly the same pixels for half the vertex work.
+      forceSinglePass: true,
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,
@@ -468,6 +638,30 @@ export class ParticlePool {
     this.mesh.frustumCulled = false
     this.mesh.matrixAutoUpdate = false
     this.mesh.renderOrder = 20
+    // THE PIXEL FLOOR NEEDS THE HEIGHT OF WHATEVER THIS DRAW LANDS IN, and
+    // only the renderer knows it at the moment it matters: a composer target
+    // at the adaptive render scale on medium/high, the canvas itself on low,
+    // and neither is the CSS size. Read per draw rather than pushed on resize,
+    // so there is no resize path to forget. One Vector4 copy per frame.
+    const vp = new THREE.Vector4()
+    const uViewH = this.material.uniforms.uViewH
+    this.mesh.onBeforeRender = (renderer) => {
+      renderer.getCurrentViewport(vp)
+      uViewH.value = vp.w
+    }
+  }
+
+  /**
+   * Smallest visible core, in pixels, a point-like particle may be drawn at.
+   * See THE PIXEL FLOOR in PARTICLE_VERT. vfx.ts sets 2.0 on the low tier,
+   * whose render target is three quarters of the screen and has no bloom to
+   * widen a thin spark back out; 1.5 everywhere else.
+   */
+  get minPx(): number {
+    return this.material.uniforms.uMinPx.value as number
+  }
+  set minPx(px: number) {
+    this.material.uniforms.uMinPx.value = px
   }
 
   /**
@@ -497,13 +691,38 @@ export class ParticlePool {
     return this.spawnCount
   }
 
+  /** Of those, how many went into the reserved lane (0 without a reserve). */
+  get spawnedThisFrameReserved(): number {
+    return this.laneHi[1] > this.laneLo[1] ? this.laneCount[1] : 0
+  }
+
+  /**
+   * The slot the last spawn() wrote, or -1. Diagnostics: the headless census
+   * tags every particle with the call site that made it, and with two lanes
+   * "the slot before the head" no longer names it.
+   */
+  get lastSlot(): number {
+    return this.last
+  }
+
+  /** The time the pool was last opened at: the birth stamp spawn() writes. */
+  get now(): number {
+    return this.time
+  }
+
   /** Open a frame: set the clock and the camera, reset the per-frame budget. */
   beginFrame(time: number, cx: number, cy: number, cz: number): void {
     this.time = time
-    this.spawnStart = this.head
+    this.laneStart[0] = this.laneHead[0]
+    this.laneStart[1] = this.laneHead[1]
+    this.laneCount[0] = 0
+    this.laneCount[1] = 0
     this.spawnCount = 0
-    // A delayed birth must never leak out of the emitter that set it.
+    // A delayed birth must never leak out of the emitter that set it, and
+    // neither may a carried velocity or a lane.
     this.delay = 0
+    this.inheritX = 0; this.inheritY = 0; this.inheritZ = 0
+    this.lane = 0
     this.material.uniforms.uTime.value = time
     ;(this.material.uniforms.uCamPos.value as THREE.Vector3).set(cx, cy, cz)
   }
@@ -516,15 +735,19 @@ export class ParticlePool {
     gravity: number, drag: number, kind: number,
   ): void {
     if (this.spawnCount >= this.frameBudget) return
-    const i = this.head
-    this.head = i + 1 >= this.count ? 0 : i + 1
+    // A lane with no slots (no reserve was asked for) folds into the shared one.
+    const ln = this.lane === 1 && this.laneHi[1] > this.laneLo[1] ? 1 : 0
+    const i = this.laneHead[ln]
+    this.laneHead[ln] = i + 1 >= this.laneHi[ln] ? this.laneLo[ln] : i + 1
+    this.laneCount[ln]++
     this.spawnCount++
+    this.last = i
 
     const i3 = i * 3
     const i4 = i * 4
     const p = this.aPos, v = this.aVel, c = this.aCol, m = this.aMisc, m2 = this.aMisc2
     p[i3] = x; p[i3 + 1] = y; p[i3 + 2] = z
-    v[i3] = vx; v[i3 + 1] = vy; v[i3 + 2] = vz
+    v[i3] = vx + this.inheritX; v[i3 + 1] = vy + this.inheritY; v[i3 + 2] = vz + this.inheritZ
     c[i3] = r; c[i3 + 1] = g; c[i3 + 2] = b
     m[i4] = this.time + this.delay; m[i4 + 1] = life; m[i4 + 2] = size; m[i4 + 3] = growth
     m2[i4] = gravity; m2[i4 + 1] = drag; m2[i4 + 2] = kind; m2[i4 + 3] = this.rnd()
@@ -562,43 +785,32 @@ export class ParticlePool {
   /**
    * Upload only what this frame wrote.
    *
-   * The ring can wrap mid-frame, which is why there are three branches: one
-   * range, two ranges, or the whole buffer when a frame claimed every slot.
+   * Each lane is its own ring and can wrap mid-frame, which is why there are
+   * three cases per lane: one range, two ranges, or the whole lane when a
+   * frame claimed every slot in it.
    */
   flush(): void {
     if (this.spawnCount === 0) return
-    const n = this.spawnCount
-    const start = this.spawnStart
-    const pool = this.count
     this.attrPos.clearUpdateRanges()
     this.attrVel.clearUpdateRanges()
     this.attrCol.clearUpdateRanges()
     this.attrMisc.clearUpdateRanges()
     this.attrMisc2.clearUpdateRanges()
     this.attrAxis.clearUpdateRanges()
-    if (n >= pool) {
-      this.attrPos.addUpdateRange(0, pool * 3)
-      this.attrVel.addUpdateRange(0, pool * 3)
-      this.attrCol.addUpdateRange(0, pool * 3)
-      this.attrMisc.addUpdateRange(0, pool * 4)
-      this.attrMisc2.addUpdateRange(0, pool * 4)
-      this.attrAxis.addUpdateRange(0, pool * 3)
-    } else if (start + n <= pool) {
-      this.attrPos.addUpdateRange(start * 3, n * 3)
-      this.attrVel.addUpdateRange(start * 3, n * 3)
-      this.attrCol.addUpdateRange(start * 3, n * 3)
-      this.attrMisc.addUpdateRange(start * 4, n * 4)
-      this.attrMisc2.addUpdateRange(start * 4, n * 4)
-      this.attrAxis.addUpdateRange(start * 3, n * 3)
-    } else {
-      const head = pool - start
-      const tail = n - head
-      this.attrPos.addUpdateRange(start * 3, head * 3); this.attrPos.addUpdateRange(0, tail * 3)
-      this.attrVel.addUpdateRange(start * 3, head * 3); this.attrVel.addUpdateRange(0, tail * 3)
-      this.attrCol.addUpdateRange(start * 3, head * 3); this.attrCol.addUpdateRange(0, tail * 3)
-      this.attrMisc.addUpdateRange(start * 4, head * 4); this.attrMisc.addUpdateRange(0, tail * 4)
-      this.attrMisc2.addUpdateRange(start * 4, head * 4); this.attrMisc2.addUpdateRange(0, tail * 4)
-      this.attrAxis.addUpdateRange(start * 3, head * 3); this.attrAxis.addUpdateRange(0, tail * 3)
+    for (let ln = 0; ln < 2; ln++) {
+      const n = this.laneCount[ln]
+      if (n === 0) continue
+      const lo = this.laneLo[ln], hi = this.laneHi[ln]
+      const start = this.laneStart[ln]
+      if (n >= hi - lo) {
+        this.addRange(lo, hi - lo)
+      } else if (start + n <= hi) {
+        this.addRange(start, n)
+      } else {
+        const head = hi - start
+        this.addRange(start, head)
+        this.addRange(lo, n - head)
+      }
     }
     this.attrPos.needsUpdate = true
     this.attrVel.needsUpdate = true
@@ -606,6 +818,16 @@ export class ParticlePool {
     this.attrMisc.needsUpdate = true
     this.attrMisc2.needsUpdate = true
     this.attrAxis.needsUpdate = true
+  }
+
+  /** Mark `n` slots from `start` dirty in every attribute. */
+  private addRange(start: number, n: number): void {
+    this.attrPos.addUpdateRange(start * 3, n * 3)
+    this.attrVel.addUpdateRange(start * 3, n * 3)
+    this.attrCol.addUpdateRange(start * 3, n * 3)
+    this.attrMisc.addUpdateRange(start * 4, n * 4)
+    this.attrMisc2.addUpdateRange(start * 4, n * 4)
+    this.attrAxis.addUpdateRange(start * 3, n * 3)
   }
 
   dispose(): void {

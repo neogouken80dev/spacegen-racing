@@ -15,8 +15,9 @@
  *    why an earlier build read as a stack of flat grey planes.
  *
  * THE ONLY ANGLE THAT MATTERS
- *  The chase camera sits 9m behind, 3.6m up, looking 13m ahead at 62-86 deg
- *  FOV -- about 22 degrees above the deck, from directly astern. A player
+ *  The chase camera sits 14m behind, 5.8m up, looking 13m ahead at 62-86 deg
+ *  FOV (TUNING.camera) -- still about 22 degrees above the deck, as it was
+ *  on the old 9m/3.6m rig, from directly astern. A player
  *  stares at the BACK of their own vehicle for an entire race, so every
  *  chassis here is composed rear-first and side-second:
  *    - a defined nose, a cabin/canopy that sits LOWER than the shoulders
@@ -946,7 +947,7 @@ function bakeWheelBoxes(P: Parts, c: THREE.Color, slots: Slot[], r: number, w: n
 }
 
 // --- 1. Solaire GT -- grounded sports coupe --------------------------------
-// Authored REAR FIRST. The chase camera sits 9m back and 3.6m up, looking down
+// Authored REAR FIRST. The chase camera sits 14m back and 5.8m up, looking down
 // on the deck at roughly 22 degrees, and that is the only angle most players
 // ever see. Reading down the frame from there:
 //    pilot dome, sunk to its equator between two raised shoulders

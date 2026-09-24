@@ -3072,7 +3072,18 @@ export class Game {
       // who turned the toggle ON with the OS preference OFF got a calm camera
       // and the full strobing effect set. Pushed every frame because it is one
       // property write and there is then no path by which the two can differ.
-      if (this.vfx) this.vfx.reduceMotion = this.reduceMotion
+      if (this.vfx) {
+        this.vfx.reduceMotion = this.reduceMotion
+        // THE DRAWN FIELD, NOT THE SIMULATED ONE. The VFX read `st` alone, so
+        // every effect bolted to a car was born where the SIM had the car --
+        // up to one whole step ahead of the interpolated view the meshes and
+        // this camera were placed from a few lines up. At 60 m/s that is a
+        // metre (16 px at the exhaust, 13 m from the lens at 720p), different
+        // every frame. The render racers' views are handed over so emitters
+        // spawn on the car on screen; `st` still drives everything else. See
+        // VfxSystem.drawn.
+        this.vfx.drawn = this.renderRacers
+      }
       this.vfx?.update(dt, st, this.chase.camera.position, this.localId)
       /**
        * THE NAME PLATES.

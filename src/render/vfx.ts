@@ -28,6 +28,38 @@ import {
   ParticlePool,
   K_BEAD, K_BEAM, K_GROUND, K_RING, K_SHELL, K_SMOKE, K_SPARK, K_SPRITE,
 } from './particles'
+import { PILOTS_BY_ID } from '../content/pilots'
+
+/**
+ * One racer as it is DRAWN this frame: the interpolated pose the meshes and
+ * the chase camera use. Structural on purpose -- the game hands over its own
+ * render views, which carry this and much more.
+ */
+export interface DrawnPose {
+  readonly id: number
+  readonly pos: Vec3
+  readonly yaw: number
+  readonly fwd: Vec3
+  readonly up: Vec3
+}
+
+/**
+ * THE DRAWN FIELD, declared from here so the contract lives beside the only
+ * code that reads it. (A module augmentation of render/api.ts's interface:
+ * the member is optional, so every other VfxSystem is still one.)
+ */
+declare module './api' {
+  interface VfxSystem {
+    /**
+     * Where each racer is DRAWN this frame, indexed like `state.racers` --
+     * the game passes its render racers, whose `view` is the interpolated
+     * copy the vehicle meshes are handed. Null or absent means "read the live
+     * state", which is what every caller without an interpolator gets.
+     * Reused by reference: read during update(), never retained.
+     */
+    drawn?: readonly { readonly view: DrawnPose }[] | null
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -83,11 +115,35 @@ const D_RAMP_KICK = 5
  * since — the same trick D_DRIFT_BLOW uses to keep a blowout down the pipe.
  */
 const D_DRIFT_SNAP = 6
+/** The drift-entry kick's second ground front, KICK_RING_BEAT behind the first. */
+const D_KICK_RING = 7
 
 const TAU = Math.PI * 2
 
 /** Base pool per tier, then scaled by quality.particleScale and clamped. */
 const POOL_BASE: Record<string, number> = { low: 800, medium: 1800, high: 4000 }
+/**
+ * Share of the pool reserved for the local racer's own emitters. See the pool
+ * constructor below and ParticlePool.lane.
+ *
+ * MEASURED on the real system, eight cars holding tier-3 slides inside the
+ * lod-1 radius for two seconds: the share of the PLAYER'S particles
+ * overwritten while still alive went from 37.7 / 88.9 / 94.8% (high / medium
+ * / low) on the shared ring to 0.0 / 6.5 / 24.5%, and with a boost and a wall
+ * grind on top from 52.5 / 89.6 / 95.8% to 7.9 / 26.0 / 42.9%.
+ *
+ * WHY 35. A held tier-3 slide under a boost occupies at most 11 / 26 / 34% of
+ * the pool (measured the same way, on a reserve too big to wrap), so 35% holds
+ * the worst case on low. Some are still cut short there because the ring is
+ * first-in-first-out: a long-lived puff is overwritten on schedule even while
+ * the short sparks written around it have already died.
+ *
+ * THE PRICE, stated plainly: it is paid when the player is emitting NOTHING.
+ * The reserve then sits idle and the other seven cars share 65% of the ring,
+ * so their cut-short rate goes from 24.6 / 80.4 / 90.7% to 38.5 / 86.1 /
+ * 93.7%. Those are cars the player is not steering by.
+ */
+const LOCAL_RESERVE = 0.35
 
 // ---------------------------------------------------------------------------
 // Colour helpers. Hex literals in content/ are authored in sRGB; the render
@@ -118,17 +174,26 @@ function makeRgb(hex: number, gain: number): Float32Array {
  * peripheral vision while looking at the corner:
  *   HUE:       ice cyan -> magenta -> gold -> white (maximum hue separation;
  *              a pure blue reads as "dark" and a violet as "nearly magenta")
- *   LUMINANCE: 1.13 -> 1.31 -> 1.90 -> 3.18  (a 2.8x climb, before the
+ *   LUMINANCE: 1.17 -> 1.40 -> 1.83 -> 3.17  (a 2.7x climb, before the
  *              per-tier spawn gain adds another 1.9x on top)
  * The old palette put tiers 0-2 UNDER the bloom threshold entirely, so the
  * first three quarters of the charge were invisible in a real frame and only
  * the tier-3 white read at all.
+ *
+ * THE SECOND RUNG USED TO GO DOWN. This comment claimed 1.13 -> 1.31 -> 1.90
+ * -> 3.18 for years; the table under it measured 1.167 -> 1.063 -> 1.834 ->
+ * 3.174, so FLARE was dimmer than the SPARK it replaced and the one step a
+ * player takes most often read as a step backwards in every thin channel
+ * that keeps some of the ladder (the fan, the blades, the motes). Magenta is
+ * scaled up whole, hue untouched, to 1.40 -- which also moves its
+ * DRIFT_BODY_GAIN from 1.10 to 0.83, so every FILLED channel stays exactly as
+ * flat across the ladder as it was; only the streaks got the step back.
  */
 const DRIFT_RGB = new Float32Array([
-  0.30, 1.30, 2.40, // 0 ice cyan
-  2.45, 0.50, 2.55, // 1 magenta
-  3.15, 1.60, 0.28, // 2 gold
-  3.35, 3.15, 2.90, // 3 white-hot
+  0.30, 1.30, 2.40, // 0 ice cyan     lum 1.167
+  3.23, 0.66, 3.36, // 1 magenta      lum 1.400
+  3.15, 1.60, 0.28, // 2 gold         lum 1.834
+  3.35, 3.15, 2.90, // 3 white-hot    lum 3.174
 ])
 /** Per-tier spark size. The scale step is half the tier read: 2.4x from the
  *  first tier to the last, which is legible without looking straight at it. */
@@ -249,15 +314,80 @@ for (const key in ITEMS) {
   ITEM_RGB[id] = makeRgb(ITEMS[id].color, 1.0)
 }
 
+/**
+ * Projectile trails. Read off content/items rather than restated here: the
+ * rail missile's hue moved (it was the HUD's NOVA gold) and a second copy of
+ * the old hex in this file would have kept drawing a NOVA-coloured trail
+ * behind a lime missile.
+ */
 const PROJ_RGB: Record<string, Float32Array> = {
-  rail: makeRgb(0xffd23f, 1.35),
-  seeker: makeRgb(0xff8b2f, 1.25),
-  alpha: makeRgb(0xff2f5e, 1.45),
-  bullet: makeRgb(0x35ff9e, 1.55),
+  rail: makeRgb(ITEMS.railMissile.color, 1.35),
+  seeker: makeRgb(ITEMS.seekerMissile.color, 1.25),
+  alpha: makeRgb(ITEMS.alphaMissile.color, 1.45),
+  bullet: makeRgb(ITEMS.laserGatling.color, 1.55),
 }
 
-const WELL_RGB = makeRgb(0x8f6bff, 1.0)
-const MINE_RGB = makeRgb(0xb44dff, 1.0)
+/**
+ * IMPACT COLOUR, BY POWER NOT BY HUE.
+ *
+ * Every impact used to draw in its item's hex at gain 1, and a hex carries its
+ * own luminance: the Alpha Missile's red measured 0.24 and the Overdrive
+ * Core's pale yellow 0.86. So the strongest weapon in the game, the one that
+ * full-stops the leader, landed with 28% of the light of a contact tap -- the
+ * brightness of a hit was decided by which colour someone picked for the
+ * icon.
+ *
+ * Here the hue stays the item's and the luminance is set by what the item
+ * DOES (spin time, blast radius, full stop -- the same order FIRE_WARP is
+ * ranked in). Every gain in impact() then multiplies a colour that means the
+ * same thing for every weapon. The Alpha is the ceiling; nothing else may
+ * outshine it.
+ */
+const IMPACT_LUM: Partial<Record<ItemId, number>> = {
+  alphaMissile: 1.3,
+  seekerMissile: 1.0,
+  railMissile: 0.9,
+  empBomb: 0.9,
+  voidMine: 0.9,
+  overdriveCore: 0.8,
+  laserGatling: 0.8,
+  gravityWell: 0.7,
+}
+const IMPACT_RGB = {} as Record<ItemId, Float32Array>
+/**
+ * ...AND HALF OF IT FOR ANYTHING THAT FILLS PIXELS.
+ *
+ * IMPACT_LUM is a luminance a SPARK can carry: a streak a few pixels wide
+ * holds scene-linear 2+ and costs the frame nothing. The same number in a
+ * flash two metres across, or a ground front that grows to nine metres
+ * round the car, is a wash. Photographed on the player's own car
+ * (the lockstep rig, 40 m/s, 0.2 s after the hit), the Alpha at full
+ * IMPACT_LUM turned the middle third of the frame pink and bleached the car
+ * it landed on -- road-band mean 48 -> 84 -- which is the exact failure the
+ * impact() note below exists to prevent; the mine's burst did the same in
+ * teal. So the flash, the rings, the ground fronts, the fireball sprites and
+ * the Alpha's lingering rings all draw in IMPACT_FILL: the same hue and the
+ * same ladder at half the luminance, and only the sparks get the whole of it.
+ *
+ * What that leaves, per item, against the hex each one used to draw in: the
+ * Alpha's filled light is 2.7x what its 0.24 red gave it and the mine's 2x
+ * (both had been the dimmest hits in the game); the seeker's 1.25x; the EMP's
+ * and the rail's 0.8x and 0.66x; the Overdrive's 0.46x -- its pale yellow had
+ * been out-drawing the Alpha three and a half times over, and now sits under
+ * it, where its power says it belongs.
+ */
+const IMPACT_FILL_K = 0.5
+const IMPACT_FILL = {} as Record<ItemId, Float32Array>
+for (const key in ITEMS) {
+  const id = key as ItemId
+  IMPACT_RGB[id] = new Float32Array(3)
+  writeHue(IMPACT_RGB[id], ITEMS[id].color, IMPACT_LUM[id] ?? 0.9)
+  IMPACT_FILL[id] = new Float32Array(3)
+  writeHue(IMPACT_FILL[id], ITEMS[id].color, (IMPACT_LUM[id] ?? 0.9) * IMPACT_FILL_K)
+}
+
+const WELL_RGB = makeRgb(ITEMS.gravityWell.color, 1.0)
+const MINE_RGB = makeRgb(ITEMS.voidMine.color, 1.0)
 const EMP_RGB = makeRgb(0x5ad2ff, 1.0)
 const CHARGE_RGB = makeRgb(0xffe066, 1.0)
 const BOX_A_RGB = makeRgb(0x5ad2ff, 1.0)
@@ -314,6 +444,35 @@ const KICK_RING_LIFE = 0.34
 const KICK_RING_TO = 9.0
 /** Seconds behind the first front. Long enough to read as two, not as a blur. */
 const KICK_RING_BEAT = 0.085
+/**
+ * The second front's gain against the first's 1.5: a crack and its echo, not
+ * twice the light on the road on every drift entry in the race.
+ */
+const KICK_ECHO_GAIN = 0.9
+
+/**
+ * How much of the pre-inheritance rate the carried drift channels keep. Each
+ * of them stays on screen about twice as long now that it moves with the car
+ * (see inherit()); these take back 35-40% of the count so the frame holds a
+ * little more than it used to rather than twice as much. Measured with them
+ * in (headless census, 1280x720 chase camera, 45 m/s): a held slide's
+ * on-screen light is 0.99-1.00x what it was at tiers 0-2 and 0.83x at tier 3,
+ * while the tier-2 fan's median spark is visible for 14 frames instead of 7.
+ */
+const FAN_KEEP = 0.65
+const SCRAPE_KEEP = 0.60
+const GLINT_KEEP = 0.60
+
+/**
+ * Where the SINGULARITY core sits, in half-extents of the car: behind the
+ * tail (1.3 half-lengths back, clear of the bodywork so the depth test cannot
+ * eat it) and at 0.9 of the body's half-height, which from a chase camera 22
+ * degrees above the road puts it just over the deck, under the rear wing.
+ */
+const SING_CORE_F = 1.30
+const SING_CORE_U = 0.90
+/** World radius of the tier-3 lens at the rear axle, metres. */
+const SING_LENS_R = 2.7
 
 /**
  * The aura's emission rate per second, at zero charge and at full.
@@ -491,6 +650,37 @@ const setAxis = (x: number, y: number, z: number): void => { _axX = x; _axY = y;
 let _delay = 0
 
 /**
+ * The racer's own velocity, published with the rest of the basis. Read by
+ * `inherit()` and by every deferred beat that has to land where the CAR will
+ * be when it fires rather than where it was when it was queued.
+ */
+let _bVx = 0, _bVy = 0, _bVz = 0
+
+/**
+ * VELOCITY EVERY spawn() INHERITS, on top of its own. See
+ * ParticlePool.inheritX for the whole argument; this is the file-side
+ * current-value that is pushed into the pool on every spawn, exactly as
+ * `_delay` and the axis are.
+ *
+ * THE RULE: set it with inherit(k) immediately before the emitter that
+ * should carry its car's motion, and put it back with inherit(0) straight
+ * after. An inheritance left set drags the next, unrelated emitter down the
+ * road with it -- which is why updateRacer also zeroes it on the way in.
+ */
+let _inhX = 0, _inhY = 0, _inhZ = 0
+const inherit = (k: number): void => { _inhX = _bVx * k; _inhY = _bVy * k; _inhZ = _bVz * k }
+
+/**
+ * The pool lane the next spawn() writes into: 1 while the LOCAL racer's own
+ * emitters are running, 0 for everything else. See ParticlePool.lane.
+ */
+let _lane = 0
+
+/** The chase camera, for the few effects that have to size themselves by
+ *  their distance from it (the gatling hit marker). Set once per update(). */
+let _camX = 0, _camY = 0, _camZ = 0
+
+/**
  * BODY-FRAME EMITTERS. `f` metres forward, `s` metres toward the racer's right,
  * `u` metres along its up.
  *
@@ -529,6 +719,7 @@ let _rbSpeed = 0    // pulse travel, radians per second
 let _rbPhase = 0    // per-ribbon phase, so the pair can be braided
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x)
+const clamp = (x: number, lo: number, hi: number): number => (x < lo ? lo : x > hi ? hi : x)
 const rnd = Math.random
 
 /** Symmetric random in [-1, 1]. */
@@ -938,6 +1129,56 @@ class RacerFx {
    */
   launchGrade = 0
 
+  // --- where the car is DRAWN this frame ---------------------------------
+  /**
+   * THE INTERPOLATED POSE, not the simulated one.
+   *
+   * The sim steps at a fixed rate and the meshes, the chase camera and the
+   * name plates are all drawn between two of its steps; this system used to
+   * read the LIVE state, which is up to one whole step AHEAD of the car on
+   * screen. At 60 m/s that is a metre -- 16 px at the exhaust -- and it
+   * changes every frame with the accumulator, so every effect bolted to the
+   * car was born a varying distance in front of it and the drift fan visibly
+   * crawled over the rear deck. Filled in by update() from `Vfx.drawn`, or
+   * from the live state when nobody hands one over (the tests, the census).
+   */
+  drawX = 0
+  drawY = 0
+  drawZ = 0
+  drawYaw = 0
+  drawFX = 0
+  drawFY = 0
+  drawFZ = 1
+  drawUX = 0
+  drawUY = 1
+  drawUZ = 0
+  /** drawn - live, for points the sim hands over in its own frame (a wall
+   *  contact) that have to land on the car that is actually on screen. */
+  lagX = 0
+  lagY = 0
+  lagZ = 0
+
+  // --- pilot abilities and EMP -----------------------------------------
+  /**
+   * A `guard` arrived and its `wall` has not yet been drawn. The plating
+   * ability fires in the same sim step as a full-force barrier contact, and
+   * that contact used to be drawn at its full force -- sparks, flash, shake --
+   * so the pilot's best moment looked exactly like a crash. See the `wall`
+   * case.
+   */
+  guardPending = false
+  /** True while THIS racer's stun came from an EMP. The jump-start bog uses
+   *  the same stunTime and must not crackle; see the `hit` case. */
+  empStun = false
+  /** EMP crackle carry and the power-flicker cadence. */
+  empAcc = 0
+  empFlick = 0
+
+  // --- SINGULARITY -------------------------------------------------------
+  /** The heartbeat envelope, 1 on a beat and decaying. Drives the local
+   *  racer's tier-3 lens and dark core. */
+  singBeat = 0
+
   // --- booster ramp ----------------------------------------------------
   /** 1 while airborne off a ramp; cleared on landing. */
   rampAir = 0
@@ -976,6 +1217,8 @@ class Vfx implements VfxSystem {
    * mismatch that made every VFX one-shot fire 2-4 times on a 144Hz display.
    */
   dollyRequest = 0
+  /** See VfxSystem.drawn, declared at the top of this file. */
+  drawn: readonly { readonly view: DrawnPose }[] | null = null
 
   private readonly qScale: number
   private readonly lowTier: boolean
@@ -1087,6 +1330,22 @@ class Vfx implements VfxSystem {
   private readonly defKind = new Int32Array(DEFER_MAX)
   private readonly defScale = new Float32Array(DEFER_MAX)
   private readonly defOn = new Uint8Array(DEFER_MAX)
+  /**
+   * THE VELOCITY OF WHATEVER QUEUED THE BEAT, and when it was queued.
+   *
+   * A deferred beat used to fire at the world position it was queued at. For
+   * an explosion that is right: a blast does not follow anyone. For a beat
+   * that belongs to a CAR it is not, because the car has gone: the tier-3
+   * third front is queued 0.20 s ahead and at 45 m/s fired nine metres behind
+   * a car the camera was fourteen metres behind -- measured, on screen for 0
+   * of its 25 frames. The release blowout managed 1-3. Each slot now carries
+   * the owner's velocity and fires at pos + vel * (time since queued); an
+   * explosion queues with zero and fires exactly where it always did.
+   */
+  private readonly defVel = new Float32Array(DEFER_MAX * 3)
+  private readonly defBorn = new Float64Array(DEFER_MAX)
+  /** The pool lane the owner wrote into (1 = the local racer's reserve). */
+  private readonly defLane = new Uint8Array(DEFER_MAX)
 
   // --- gravity wells ---------------------------------------------------
   private readonly wellGroup: THREE.Group[] = []
@@ -1094,6 +1353,9 @@ class Vfx implements VfxSystem {
   private readonly wellCoreMat: THREE.ShaderMaterial[] = []
   private readonly wellFieldId = new Int32Array(MAX_WELLS)
   private readonly wellSpiral = new Float32Array(MAX_WELLS)
+  /** Where each bound well sits and how big it is, for its collapse. */
+  private readonly wellPos = new Float32Array(MAX_WELLS * 3)
+  private readonly wellRad = new Float32Array(MAX_WELLS)
   private readonly wellGeoShell: THREE.SphereGeometry
   private readonly wellGeoCore: THREE.SphereGeometry
 
@@ -1110,6 +1372,23 @@ class Vfx implements VfxSystem {
   private readonly distAge = new Float32Array(MAX_DISTORT)
   private readonly distLife = new Float32Array(MAX_DISTORT)
   private readonly distGeo: THREE.SphereGeometry
+
+  // --- SINGULARITY: the local racer's sustained tier-3 signature ----------
+  /**
+   * A small dark lens sitting just off the tail while the player HOLDS tier
+   * 3. The same material the explosion shells use -- a dark body with a hard
+   * chromatic rim -- because it is the one thing in this file that can take
+   * light OUT of the frame, which is the only honest way to draw "maximum"
+   * behind a car whose every other channel is already additive. Its screen
+   * space half is `singLens`, published through `blasts` below.
+   */
+  private readonly singMesh: THREE.Mesh
+  private readonly singMat: THREE.ShaderMaterial
+  private singOn = false
+  private singX = 0
+  private singY = 0
+  private singZ = 0
+  private singStrength = 0
 
   // --- lights ----------------------------------------------------------
   private readonly lights: THREE.PointLight[] = []
@@ -1157,7 +1436,17 @@ class Vfx implements VfxSystem {
     // Math.random rather than this file's own xorshift, which is what spawn()
     // always used for the per-particle seed; injected so the stream and its
     // ORDER are unchanged by the move into render/particles.ts.
-    this.pp = new ParticlePool(this.pool, Math.random)
+    //
+    // A THIRD OF THE RING IS THE PLAYER'S. See ParticlePool.lane: with eight
+    // tier-3 drifters in range the medium ring wrapped every 0.14 s and cut
+    // 86% of what it held short, the player's own drift included. The local
+    // racer writes into the reserve and nothing else does, so the effect the
+    // player is steering by can only be overwritten by itself.
+    this.pp = new ParticlePool(this.pool, Math.random, LOCAL_RESERVE)
+    // THE PIXEL FLOOR (see PARTICLE_VERT). Two pixels on low: its target is
+    // three quarters of the screen and it has no bloom to widen a thin spark
+    // back out, so a 1.5 px core there is still a flicker.
+    this.pp.minPx = quality.tier === 'low' ? 2.0 : 1.5
     this.group.add(this.pp.mesh)
 
     // ---- trail ribbons -------------------------------------------------
@@ -1206,6 +1495,10 @@ class Vfx implements VfxSystem {
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
+      // One pass: three draws a transparent DoubleSide material twice (back
+      // faces, then front) unless told otherwise, and these ribbons are
+      // ONE/ONE additive, where the order of the two passes changes nothing.
+      forceSinglePass: true,
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,
@@ -1317,6 +1610,39 @@ class Vfx implements VfxSystem {
       this.distMat.push(m)
     }
 
+    // ---- the SINGULARITY core ---------------------------------------------
+    // The gravity well's core shader -- a near-black sphere with a hot
+    // fresnel rim, drawn with NORMAL blending, so it darkens what is behind
+    // it -- in the tier-3 white. See singMesh.
+    this.singMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uOpacity: { value: 0 },
+        uRadius: { value: 0.3 },
+        // The rim, NOT the body: the shader drives the fresnel edge to 2.4x
+        // this. At 0.45 of the tier-3 white that rim was HDR 3.6 on a sphere a
+        // third of a metre across and bloom turned the whole core into a white
+        // ball -- photographed, the "dark core" was the brightest thing on
+        // the car. 0.16 keeps the edge near 1.2, a crisp line round a hole.
+        uColor: { value: new THREE.Color(DRIFT_RGB[9] * 0.16, DRIFT_RGB[10] * 0.16, DRIFT_RGB[11] * 0.16) },
+      },
+      vertexShader: FIELD_VERT,
+      fragmentShader: WELL_CORE_FRAG,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+    })
+    this.singMesh = new THREE.Mesh(this.wellGeoCore, this.singMat)
+    this.singMesh.frustumCulled = false
+    this.singMesh.visible = false
+    // AFTER the particle pool (20), not with the well cores (15). A held
+    // tier-3 slide piles its whole spark fan, the wheel shells and the
+    // heartbeat rings on top of this exact spot, and drawn first the core was
+    // simply painted over: photographed, it was not there. Drawn last it
+    // swallows what is behind it, which is the entire point of a hole.
+    this.singMesh.renderOrder = 21
+    this.group.add(this.singMesh)
+
     // ---- transient lights -------------------------------------------------
     const nLights = quality.tier === 'high' ? 3 : quality.tier === 'medium' ? 1 : 0
     this.lightTtl = new Float32Array(Math.max(1, nLights))
@@ -1344,6 +1670,15 @@ class Vfx implements VfxSystem {
    * undefined, falls back to -1, and passes every comparison it makes.
    */
   get spawnCount(): number { return this.pp.spawnedThisFrame }
+  /**
+   * ...and how many of those were the LOCAL racer's own (its reserved lane,
+   * see LOCAL_RESERVE). The same probe asks "is the player's drift running";
+   * the whole-pool count answers for all eight cars at once, and once the
+   * carried drift channels dropped to 0.60-0.65 of their old rate (FAN_KEEP)
+   * its drifting-against-cruising ratio was down to 1.47 on a 1.4 gate --
+   * measuring the field, not the car.
+   */
+  get localSpawnCount(): number { return this.pp.spawnedThisFrameReserved }
 
   // THE DIAGNOSTIC SURFACE THE PROBES READ.
   //
@@ -1373,11 +1708,13 @@ class Vfx implements VfxSystem {
     life: number, size: number, growth: number,
     gravity: number, drag: number, kind: number,
   ): void {
-    // The two module-level current-values this file has always used. Pushed
-    // rather than held by the pool so `setAxis()` and `_delay` keep working
-    // exactly as they read at every call site.
+    // The module-level current-values this file uses. Pushed rather than held
+    // by the pool so `setAxis()`, `_delay`, `inherit()` and the lane keep
+    // working exactly as they read at every call site.
     this.pp.setAxis(_axX, _axY, _axZ)
     this.pp.delay = _delay
+    this.pp.inheritX = _inhX; this.pp.inheritY = _inhY; this.pp.inheritZ = _inhZ
+    this.pp.lane = _lane
     this.pp.spawn(x, y, z, vx, vy, vz, r, g, b, life, size, growth, gravity, drag, kind)
   }
 
@@ -1392,6 +1729,8 @@ class Vfx implements VfxSystem {
   ): void {
     this.pp.setAxis(_axX, _axY, _axZ)
     this.pp.delay = _delay
+    this.pp.inheritX = _inhX; this.pp.inheritY = _inhY; this.pp.inheritZ = _inhZ
+    this.pp.lane = _lane
     this.pp.burst(x, y, z, dx, dy, dz, count, speed, spread, col, gain, life, size, kind, gravity, drag)
   }
 
@@ -1476,17 +1815,26 @@ class Vfx implements VfxSystem {
     this.lightPow[best] = power
   }
 
+  /**
+   * Queue a beat `delay` seconds out. `vx, vy, vz` is the velocity of what
+   * queued it -- the car's, for a beat that belongs to a car; zero, the
+   * default, for an explosion, which fires where it was queued. See defVel.
+   */
   private defer(
     delay: number, x: number, y: number, z: number,
     col: Float32Array, kind: number, scale: number,
     dx = 0, dy = 0, dz = 0,
+    vx = 0, vy = 0, vz = 0,
   ): void {
     for (let i = 0; i < DEFER_MAX; i++) {
       if (this.defOn[i]) continue
       this.defOn[i] = 1
       this.defTime[i] = this.time + delay
+      this.defBorn[i] = this.time
+      this.defLane[i] = _lane
       const i3 = i * 3
       this.defPos[i3] = x; this.defPos[i3 + 1] = y; this.defPos[i3 + 2] = z
+      this.defVel[i3] = vx; this.defVel[i3 + 1] = vy; this.defVel[i3 + 2] = vz
       this.defDir[i3] = dx; this.defDir[i3 + 1] = dy; this.defDir[i3 + 2] = dz
       this.defAxis[i3] = _axX; this.defAxis[i3 + 1] = _axY; this.defAxis[i3 + 2] = _axZ
       this.defCol[i3] = col[0]; this.defCol[i3 + 1] = col[1]; this.defCol[i3 + 2] = col[2]
@@ -1510,8 +1858,11 @@ class Vfx implements VfxSystem {
     this.reduced = this.reduceMotion !== null
       ? this.reduceMotion
       : this.motionQ !== null && this.motionQ.matches
-    // A delayed birth must never leak out of the emitter that set it.
+    // A delayed birth, a carried velocity and a lane must never leak out of
+    // the emitter that set them.
     _delay = 0
+    _inhX = 0; _inhY = 0; _inhZ = 0
+    _lane = 0
     this.slotTokens = Math.min(this.slotBucket, this.slotTokens + this.slotRefill * dt)
 
     // Screen-space intensities decay exponentially.
@@ -1519,6 +1870,7 @@ class Vfx implements VfxSystem {
     this.hitFlash *= Math.pow(0.004, dt)
 
     const cx = cameraPos.x, cy = cameraPos.y, cz = cameraPos.z
+    _camX = cx; _camY = cy; _camZ = cz
     this.pp.beginFrame(this.time, cx, cy, cz)
 
     // Only consume each sim step's events once; see prevSimFrame. Continuous
@@ -1532,25 +1884,52 @@ class Vfx implements VfxSystem {
 
     // Resolve the local racer by id, falling back to index.
     let local: RacerState | null = null
+    let li = -1
     for (let i = 0; i < n; i++) {
-      if (racers[i].id === localId) { local = racers[i]; break }
+      if (racers[i].id === localId) { local = racers[i]; li = i; break }
     }
-    if (local === null && localId >= 0 && localId < n) local = racers[localId]
+    if (local === null && localId >= 0 && localId < n) { local = racers[localId]; li = localId }
 
+    // WHERE EVERY CAR IS DRAWN, before any of them emits: the gatling hit on
+    // a victim is drawn from the SHOOTER's update, so the victim's pose has
+    // to be known before the victim's own turn comes round.
+    const drawn = this.drawn
     for (let i = 0; i < n; i++) {
       const r = racers[i]
       const fx = this.rfx[i]
-      const dx = r.pos.x - cx, dy = r.pos.y - cy, dz = r.pos.z - cz
+      const v = drawn !== null && i < drawn.length ? drawn[i].view : null
+      const p = v !== null && v.id === r.id ? v : r
+      fx.drawX = p.pos.x; fx.drawY = p.pos.y; fx.drawZ = p.pos.z
+      fx.drawYaw = p.yaw
+      fx.drawFX = p.fwd.x; fx.drawFY = p.fwd.y; fx.drawFZ = p.fwd.z
+      fx.drawUX = p.up.x; fx.drawUY = p.up.y; fx.drawUZ = p.up.z
+      fx.lagX = fx.drawX - r.pos.x; fx.lagY = fx.drawY - r.pos.y; fx.lagZ = fx.drawZ - r.pos.z
+    }
+
+    // THE PLAYER GOES FIRST. The per-frame budget is first-come, and it used
+    // to be handed out in grid order, so in a pack the local racer's drift
+    // could be the emitter that found the budget spent. k = -1 is the local
+    // racer; the loop then walks everyone else in order and skips it.
+    for (let k = -1; k < n; k++) {
+      const i = k < 0 ? li : k
+      if (i < 0 || (k >= 0 && i === li)) continue
+      const r = racers[i]
+      const fx = this.rfx[i]
+      const dx = fx.drawX - cx, dy = fx.drawY - cy, dz = fx.drawZ - cz
       const d2 = dx * dx + dy * dy + dz * dz
       const isLocal = r === local
       let lod = isLocal ? 1 : d2 < 900 ? 1 : d2 < 6400 ? 0.6 : d2 < 40000 ? 0.28 : 0
       if (r.finished && !isLocal) lod *= 0.5
+      _lane = isLocal ? 1 : 0
       this.updateRacer(dt, state, r, fx, lod, isLocal, stepped)
+      _inhX = 0; _inhY = 0; _inhZ = 0
       this.updateTrail(dt, r, fx, i, lod, cx, cy, cz)
     }
+    _lane = 0
     // Ribbons for unused racer slots stay collapsed. All three of them: the
     // chassis trail and both arc lines.
     for (let i = n * RIB_PER_RACER; i < this.ribbons; i++) this.clearRibbon(i)
+    this.updateSingularity(dt, li >= 0 ? racers[li] : null, li >= 0 ? this.rfx[li] : null)
 
     // Everything past the racer loop belongs to the WORLD, not to a car, so it
     // is born world-up again. Missiles, wells and item boxes carry their own
@@ -1583,21 +1962,25 @@ class Vfx implements VfxSystem {
     // The racer's frame. Flat, it is a compass yaw and world +Y, exactly as it
     // was. On a gravity track it is the sim's own (fwd, up) -- a car on a wall
     // has an attitude no bearing can express, and every effect below is placed
-    // relative to it.
-    let fwdX = Math.sin(r.yaw), fwdY = 0, fwdZ = Math.cos(r.yaw)
+    // relative to it. Both read off the DRAWN pose (see RacerFx.drawX), so
+    // everything below is born on the car that is on screen.
+    const yaw = fx.drawYaw
+    let fwdX = Math.sin(yaw), fwdY = 0, fwdZ = Math.cos(yaw)
     // right = forward x up, matching Track, the sim and the chase camera.
-    let rgtX = -Math.cos(r.yaw), rgtY = 0, rgtZ = Math.sin(r.yaw)
+    let rgtX = -Math.cos(yaw), rgtY = 0, rgtZ = Math.sin(yaw)
     let upX = 0, upY = 1, upZ = 0
     if (this.gravity) {
-      upX = r.up.x; upY = r.up.y; upZ = r.up.z
-      fwdX = r.fwd.x; fwdY = r.fwd.y; fwdZ = r.fwd.z
+      upX = fx.drawUX; upY = fx.drawUY; upZ = fx.drawUZ
+      fwdX = fx.drawFX; fwdY = fx.drawFY; fwdZ = fx.drawFZ
       rgtX = fwdY * upZ - fwdZ * upY
       rgtY = fwdZ * upX - fwdX * upZ
       rgtZ = fwdX * upY - fwdY * upX
       const rl = Math.hypot(rgtX, rgtY, rgtZ) || 1
       rgtX /= rl; rgtY /= rl; rgtZ /= rl
     }
-    const px = r.pos.x, py = r.pos.y, pz = r.pos.z
+    const px = fx.drawX, py = fx.drawY, pz = fx.drawZ
+    _bVx = r.vel.x; _bVy = r.vel.y; _bVz = r.vel.z
+    _inhX = 0; _inhY = 0; _inhZ = 0
     const speed = this.gravity
       ? Math.sqrt(r.vel.x * r.vel.x + r.vel.y * r.vel.y + r.vel.z * r.vel.z)
       : Math.sqrt(r.vel.x * r.vel.x + r.vel.z * r.vel.z)
@@ -1671,7 +2054,11 @@ class Vfx implements VfxSystem {
           if (it.tier >= 0) {
             const ti = Math.min(3, it.tier) * 3
             _rgb[0] = DRIFT_RGB[ti]; _rgb[1] = DRIFT_RGB[ti + 1]; _rgb[2] = DRIFT_RGB[ti + 2]
+            // Thrown off a car doing 45 m/s, so they carry most of it (see
+            // inherit()); at rest they were behind the camera inside a tenth.
+            inherit(0.7)
             this.burst(pX(0, 0, 0.3), pY(0, 0, 0.3), pZ(0, 0, 0.3), _bUpX * 0.25, _bUpY * 0.25, _bUpZ * 0.25, Math.round(12 * q), 7, 0.9, _rgb, 0.7, 0.30, 0.16, K_SPARK, -12, 2.2)
+            inherit(0)
           }
           // The last of the surface, let go of as the wheels hook back up. One
           // puff, off the outside of the arc the car has just left. This rides
@@ -1693,6 +2080,19 @@ class Vfx implements VfxSystem {
         }
         case 'hit':
           this.impact(it.item, hy, q, isLocal)
+          // The EMP's stun is the only stun that should crackle. The bogged
+          // start writes the same stunTime and already has its own look; see
+          // empCrackle().
+          if (it.item === 'empBomb') fx.empStun = true
+          break
+        case 'ward':
+          this.ward(r, it.item, hx, hy, hz, q)
+          break
+        case 'guard':
+          // No position of its own: the plating is drawn on the flank the
+          // same step's `wall` event names, which the sim always pushes AFTER
+          // this one (vehicle.ts: the ability, then the contact).
+          fx.guardPending = true
           break
         case 'fire':
           this.muzzle(it.item, hz, hy, q)
@@ -1707,8 +2107,8 @@ class Vfx implements VfxSystem {
           break
         }
         case 'beamHit': {
-          const tgt = this.racerById(state, it.targetId)
-          if (tgt !== null) this.gatlingImpact(tgt, it.lethal)
+          const ti = this.racerIndexById(state, it.targetId)
+          if (ti >= 0) this.gatlingImpact(state.racers[ti], this.rfx[ti], it.lethal)
           break
         }
         case 'ramp':
@@ -1741,12 +2141,32 @@ class Vfx implements VfxSystem {
           // flank height rather than at the chassis origin. `n` is the wall's
           // INWARD normal, which is also the direction the sparks fly — and,
           // usefully, the direction that keeps them over the road.
+          //
+          // `p` is the LIVE position, so it is moved by the same drawn-minus-
+          // live offset as the car: the contact lands on the flank on screen.
           const cu = _bDrop * 0.5
+          const wx = it.px + fx.lagX - it.nx * hx - _bUpX * cu
+          const wy = it.py + fx.lagY - it.ny * hx - _bUpY * cu
+          const wz = it.pz + fx.lagZ - it.nz * hx - _bUpZ * cu
+          if (fx.guardPending) {
+            // IMPACT PLATING ATE THIS ONE. The sim still reports the contact
+            // at its full force -- it is the same barrier -- but the pilot's
+            // ability means it cost nothing, and drawing it as a crash (the
+            // full burst, the flash, the shake) made the best thing the Aegis
+            // does look exactly like the worst thing that can happen to it.
+            // The plating flares on the struck flank instead, and the contact
+            // underneath is drawn as the graze it effectively was.
+            fx.guardPending = false
+            this.guardFlare(r, wx, wy, wz, it.nx, it.ny, it.nz)
+            this.contactSparks(
+              r, fx, it.force * 0.2, TUNING.sparks.wallForceFull,
+              wx, wy, wz, it.nx, it.ny, it.nz, isLocal, 0,
+            )
+            break
+          }
           this.contactSparks(
             r, fx, it.force, TUNING.sparks.wallForceFull,
-            it.px - it.nx * hx - _bUpX * cu,
-            it.py - it.ny * hx - _bUpY * cu,
-            it.pz - it.nz * hx - _bUpZ * cu,
+            wx, wy, wz,
             it.nx, it.ny, it.nz, isLocal, 1,
           )
           break
@@ -1767,9 +2187,9 @@ class Vfx implements VfxSystem {
           // it is worth half the screen kick of the same force into a wall.
           this.contactSparks(
             r, fx, it.force, TUNING.sparks.bumpForceFull,
-            it.px + nx * hx * 0.35 - _bUpX * (_bDrop * 0.35),
-            it.py + ny * hx * 0.35 - _bUpY * (_bDrop * 0.35),
-            it.pz + nz * hx * 0.35 - _bUpZ * (_bDrop * 0.35),
+            it.px + fx.lagX + nx * hx * 0.35 - _bUpX * (_bDrop * 0.35),
+            it.py + fx.lagY + ny * hx * 0.35 - _bUpY * (_bDrop * 0.35),
+            it.pz + fx.lagZ + nz * hx * 0.35 - _bUpZ * (_bDrop * 0.35),
             nx, ny, nz, isLocal, 0.5,
           )
           break
@@ -1789,8 +2209,16 @@ class Vfx implements VfxSystem {
       }
     }
 
+    // A guard is only ever paired with the wall contact of its own step, so
+    // one that found none must not wait around to swallow the next crash.
+    fx.guardPending = false
+
     // One impact flash for however many contact events arrived this frame.
     this.contactFlash(fx)
+
+    // ---- 0. EMP STUN ---------------------------------------------------
+    if (r.stunTime > 0 && fx.empStun) this.empCrackle(dt, r, fx)
+    else { fx.empStun = false; fx.empAcc = 0; fx.empFlick = 0 }
 
     // ---- 1. DRIFT: GATHER -> TIER -> RELEASE ---------------------------
     if (r.driftSide !== 0) {
@@ -1910,6 +2338,9 @@ class Vfx implements VfxSystem {
         fx.pulseAcc = 0
         const hg = tier < 0 ? 2.6 * bodyWash : (0.42 + charge01 * 0.40) * body
         this.shockRing(gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05), _dcol, hg, 0.34, 0.5, 4.0 + charge01 * 3.0 + tc * 1.0, true)
+        // The SINGULARITY lens and core pulse on this same beat; see
+        // updateSingularity().
+        if (tc >= 3) fx.singBeat = 1
       }
 
       // ---- SPARK FAN ---------------------------------------------------
@@ -1926,7 +2357,13 @@ class Vfx implements VfxSystem {
       const fan = 0.30 + inward * 1.60     // lateral throw
       const rise = 1.4 + inward * 2.6      // vertical throw
       const jit = 0.4 + inward * 2.4       // angular scatter
-      const rate = (tier < 0 ? 34 : 92 + tier * 62)
+      // FAN_KEEP: the coloured fan now carries the car's motion (see the
+      // spawn below), which keeps each spark on screen twice as long -- a
+      // median of 14 visible frames against 7, measured on a tier-2 hold --
+      // so the same rate would have put twice the sparks on screen at once.
+      // 0.65 hands most of that back as a fan that stays beside the car
+      // rather than as a denser one.
+      const rate = (tier < 0 ? 34 : (92 + tier * 62) * FAN_KEEP)
         * (0.55 + charge01 * 0.75) * (0.55 + inward * 0.70) * q
       fx.driftAcc += dt * rate
       let guard = 0
@@ -1978,6 +2415,14 @@ class Vfx implements VfxSystem {
           // that hugs the ground behind the chassis is occluded by the
           // chassis. Rising sparks clear the roofline and read in the mirror
           // strip of the frame where the player's attention already is.
+          //
+          // AND THEY CARRY 70% OF THE CAR'S OWN MOTION. Born at world rest,
+          // a spark off a car doing 45 m/s was overrun by the camera almost
+          // at once: measured, the fan spent 64% of its life off the bottom
+          // of the frame and was visible for 7 of its 21 frames. Real sparks
+          // leave the wheel at the wheel's speed and then drag slows them,
+          // which is exactly what the shader's drag term does to this.
+          inherit(0.7)
           this.spawn(
             ex, ey, ez,
             _bUpX * (rise + rnd() * (2.2 + tier * 1.4) * (0.55 + inward * 0.75))
@@ -1998,7 +2443,10 @@ class Vfx implements VfxSystem {
           // Rate-normalised against the spark rate so the glow count stays
           // bounded (5 alive at tier 0, 11 at tier 3) instead of scaling with
           // the stream and burning the rear of the frame out at tier 3.
-          if (rnd() * rate < 24 + tier * 6) {
+          // (24 + 6t) per second whatever the fan's rate, times 0.65: riding
+          // the patch at 0.85 of the car's speed, a glow stays in frame for
+          // its whole life instead of half of it (16 visible frames against 8).
+          if (rnd() * rate < (24 + tier * 6) * 0.65) {
             // WHEEL GLOW — the single largest sustained shape, and so the one
             // held hardest to the no-occlusion rule. Three separate things
             // used to climb here at once: the count (2.2x), the tier colour's
@@ -2009,7 +2457,11 @@ class Vfx implements VfxSystem {
             // area climb is flattened. From tier 2 it also becomes a SHELL,
             // whose punched-out dark core lets the chassis silhouette straight
             // through the brightest part of the effect.
+            // The glow rides the contact patch, so it keeps more of the car's
+            // motion than the thrown sparks do (0.85 against 0.7): it should
+            // read as ON the wheel, trailing a little, not as a trail of it.
             const wg = (0.60 + charge01 * 0.35) * body
+            inherit(0.85)
             this.spawn(
               ex + _bUpX * 0.04, ey + _bUpY * 0.04, ez + _bUpZ * 0.04,
               dX(-1.2, 0, 1.1 + tier * 0.2), dY(-1.2, 0, 1.1 + tier * 0.2), dZ(-1.2, 0, 1.1 + tier * 0.2),
@@ -2018,6 +2470,7 @@ class Vfx implements VfxSystem {
               0, 1.3, tier >= 2 ? K_SHELL : K_SPRITE,
             )
           }
+          inherit(0)
           if (tier >= 2 && rnd() < 0.12) {
             this.spawn(
               ex, ey, ez, dX(-1.0, 0, 0.9), dY(-1.0, 0, 0.9), dZ(-1.0, 0, 0.9),
@@ -2270,14 +2723,143 @@ class Vfx implements VfxSystem {
   }
 
   /**
-   * Linear scan for a racer id. The field is at most MAX_RACERS and a beamHit
-   * arrives at most fireRate times a second per shooter, so an id->index map
-   * would be state to keep in sync for nothing.
+   * Linear scan for a racer id, returning its INDEX -- which is also its
+   * RacerFx, and so where it is drawn. The field is at most MAX_RACERS and a
+   * beamHit arrives at most fireRate times a second per shooter, so an
+   * id->index map would be state to keep in sync for nothing.
    */
-  private racerById(state: RaceState, id: number): RacerState | null {
+  private racerIndexById(state: RaceState, id: number): number {
     const list = state.racers
-    for (let i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
-    return null
+    const n = Math.min(list.length, MAX_RACERS)
+    for (let i = 0; i < n; i++) if (list[i].id === id) return i
+    return -1
+  }
+
+  // -------------------------------------------------------------------------
+  // Pilot abilities and the EMP stun: the three states that used to draw
+  // nothing, or the wrong thing.
+  // -------------------------------------------------------------------------
+
+  /**
+   * FIELD REPAIR ATE A WEAPON. The health pilot's ward drew nothing at all:
+   * the weapon simply failed to arrive, which from the driver's seat is
+   * indistinguishable from the weapon missing. A 30-second ability has to be
+   * SEEN firing or it is not an ability.
+   *
+   * So the weapon's own colour is pulled INTO the car (the item was eaten,
+   * and you can see what it was), a bubble of the pilot's own light opens
+   * round the chassis from a snug 1.1 m to 2.2 m -- a SHELL, whose punched
+   * core leaves the car readable through it -- and a front runs out along the
+   * road under it. No hit flash, no shake: this is the reward grammar, and
+   * the punishment grammar is exactly what it prevented.
+   *
+   * Every piece carries the car's whole velocity: an implosion that converges
+   * where the car was 0.3 s ago converges fifteen metres behind it.
+   */
+  private ward(r: RacerState, item: ItemId, hx: number, hy: number, hz: number, q: number): void {
+    if (q <= 0) return
+    const pilot = PILOTS_BY_ID[r.pilotId]
+    writeHue(_rgb2, pilot ? pilot.face : 0xffffff, 1.25 * this.hdr)
+    const u = hy * 0.55
+    const x = pX(0, 0, u), y = pY(0, 0, u), z = pZ(0, 0, u)
+    inherit(1)
+    this.implode(x, y, z, IMPACT_RGB[item], Math.round(26 * q), 0.26)
+    // The shell's bright annulus sits at 0.33 of its quad, so a 1.1 -> 2.2 m
+    // radius is a 3.3 -> 6.7 m quad over 0.35 s.
+    this.shockShell(x, y, z, _rgb2, 0.80, 0.35, 1.1 / 0.33, 2.2 / 0.33)
+    this.shockRing(gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05),
+      _rgb2, 0.70, 0.42, hx * 1.6, Math.max(hz, hx) * 3.6, true)
+    inherit(0)
+  }
+
+  /**
+   * IMPACT PLATING ATE A CRASH. Drawn on the struck flank in the plating's
+   * own hue -- the Aegis accent, the colour the pilot wears -- as a tight
+   * shell standing off the panel with a little contact ring, both riding the
+   * car. The `wall` case that calls this draws the contact underneath as a
+   * graze, and throws no hit flash; see there.
+   */
+  private guardFlare(
+    r: RacerState, x: number, y: number, z: number,
+    nx: number, ny: number, nz: number,
+  ): void {
+    const q = _bQ
+    if (q <= 0) return
+    const pilot = PILOTS_BY_ID[r.pilotId]
+    writeHue(_rgb2, pilot ? pilot.accent : 0x24d3ff, 1.45 * this.hdr)
+    // A hand's width off the panel, toward the road, so the shell is not
+    // born inside the bodywork the depth test would hide it behind.
+    const sx = x + nx * 0.25, sy = y + ny * 0.25, sz = z + nz * 0.25
+    inherit(1)
+    this.shockShell(sx, sy, sz, _rgb2, 0.95, 0.30, 1.4, 4.2)
+    this.ring(sx, sy, sz, _rgb2, 0.85, 0.18, 0.5, 11, false)
+    this.flash(sx, sy, sz, _rgb2, 0.55, 0.10, 0.55)
+    // A few hard chips of the plating's colour skittering off it.
+    this.burst(sx, sy, sz, nx, ny, nz, Math.round(10 * q), 9, 0.9, _rgb2, 1.0, 0.22, 0.09, K_SPARK, -10, 2.2)
+    inherit(0)
+  }
+
+  /**
+   * THE EMP STUN, WHICH USED TO BE 1.1 SECONDS OF NOTHING.
+   *
+   * The blast is drawn where it lands (impact(), empBomb); then the car sat
+   * there disabled with no sign of why. Blue arcs skitter over the hull --
+   * the same crawl the gatling overload uses, in the EMP's own colour -- and
+   * a shell wraps the chassis on a STUTTER rather than a beat: power
+   * dropping out and catching, which is the one thing an EMP does that no
+   * other hit does.
+   *
+   * Under reduced motion the stutter becomes a slow even pulse and the arcs
+   * halve: still plainly "this car is disabled", with nothing strobing.
+   */
+  private empCrackle(dt: number, r: RacerState, fx: RacerFx): void {
+    const q = _bQ
+    if (q <= 0) return
+    const rm = this.reduced
+    const hx = _bHx, hy = _bHy, hz = _bHz
+    const left = clamp01(r.stunTime / ITEM_PARAMS.empBomb.stunTime)
+    inherit(1)
+    // The arcs are sized to be SEEN from the chase camera: at the gatling
+    // overload's 0.06 m they photographed at the 1.5 px floor, a haze of
+    // dots nobody reads as electricity.
+    fx.empAcc += dt * (70 + 50 * left) * q * (rm ? 0.5 : 1)
+    let guard = 0
+    while (fx.empAcc >= 1 && guard < 14) {
+      fx.empAcc -= 1
+      guard++
+      const a = rnd() * TAU
+      const ca = Math.cos(a), sa = Math.sin(a)
+      const aF = rnd2() * hz * 0.85
+      const aS = ca * hx * (1.0 + rnd() * 0.3)
+      const aU = hy * (0.2 + rnd() * 1.1)
+      const g = 1.6 + rnd() * 1.4
+      this.spawn(
+        pX(aF, aS, aU), pY(aF, aS, aU), pZ(aF, aS, aU),
+        dX(rnd2() * 3.0, -sa * 6.0, sa * 4.0 + rnd2() * 2.0),
+        dY(rnd2() * 3.0, -sa * 6.0, sa * 4.0 + rnd2() * 2.0),
+        dZ(rnd2() * 3.0, -sa * 6.0, sa * 4.0 + rnd2() * 2.0),
+        EMP_RGB[0] * g, EMP_RGB[1] * g, EMP_RGB[2] * g,
+        0.06 + rnd() * 0.08, 0.11 + rnd() * 0.05, 0, 0, 1.2, K_SPARK,
+      )
+    }
+    // The power flicker. A shell every 50-150 ms at a random interval, which
+    // is what reads as failing rather than pulsing; an even 0.35 s under
+    // reduced motion.
+    fx.empFlick -= dt
+    if (fx.empFlick <= 0) {
+      fx.empFlick = rm ? 0.35 : 0.05 + rnd() * 0.10
+      const g = (0.40 + 0.60 * left) * (rm ? 0.7 : 0.6 + rnd() * 0.6)
+      this.spawn(
+        pX(0, 0, hy * 0.5), pY(0, 0, hy * 0.5), pZ(0, 0, hy * 0.5), 0, 0, 0,
+        EMP_RGB[0] * g, EMP_RGB[1] * g, EMP_RGB[2] * g,
+        rm ? 0.30 : 0.12, hz * 1.9, 1.2, 0, 0, K_SHELL,
+      )
+      // ...and the deck under it taking the discharge: a small front on the
+      // road on the same stutter, so the stun reads from above as well as
+      // from behind.
+      this.ring(gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05), EMP_RGB, 0.9 * g, rm ? 0.30 : 0.14, hx * 1.2, 9, true)
+    }
+    inherit(0)
   }
 
   // -------------------------------------------------------------------------
@@ -2379,8 +2961,10 @@ class Vfx implements VfxSystem {
       _dcol2, (0.85 + t * 0.16) * front, 0.26 + t * 0.05, 0.7, 3.0 + t * 1.6, false)
     this.shockRing(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06),
       _dcol2, (0.70 + t * 0.14) * front, 0.32 + t * 0.04, 0.9, 5.5 + t * 3.2, true)
+    // Queued with the car's velocity, so it fires where the car IS in 90 ms
+    // rather than four metres behind it (see defVel).
     this.defer(0.085 + t * 0.012, pX(0, 0, 0.28), pY(0, 0, 0.28), pZ(0, 0, 0.28),
-      _dcol2, D_DRIFT_SHOCK, t)
+      _dcol2, D_DRIFT_SHOCK, t, 0, 0, 0, _bVx, _bVy, _bVz)
 
     // 3. EJECTION. A full sphere, not a cone: at the instant of a tier the
     //    energy is not going anywhere in particular yet.
@@ -2425,7 +3009,11 @@ class Vfx implements VfxSystem {
       const sF = hz * 1.5
       this.spawnDistortion(pX(0, 0, hy), pY(0, 0, hy), pZ(0, 0, hy), 1.6, 7.0, 0.34)
       this.shockShell(pX(sF, 0, hy), pY(sF, 0, hy), pZ(sF, 0, hy), WHITE_RGB, 0.55, 0.30, 0.9, 2.6)
-      this.defer(0.20, pX(0, 0, 0.28), pY(0, 0, 0.28), pZ(0, 0, 0.28), WHITE_RGB, D_DRIFT_SHOCK, 3)
+      // The third front. Queued at rest it fired nine metres behind a 45 m/s
+      // car and was on screen for 0 of its 25 frames; with the car's velocity
+      // it lands on the car it belongs to.
+      this.defer(0.20, pX(0, 0, 0.28), pY(0, 0, 0.28), pZ(0, 0, 0.28), WHITE_RGB, D_DRIFT_SHOCK, 3,
+        0, 0, 0, _bVx, _bVy, _bVz)
     }
     // Also feeds the composite's zoom, chromatic aberration and vignette, all
     // of which compound the whiteout, so it is cut alongside the particles.
@@ -2535,10 +3123,18 @@ class Vfx implements VfxSystem {
     // The second front, dropped entirely under reduced motion -- two rings
     // 85ms apart is exactly the flicker the RM path exists to suppress, and
     // the first one has already announced the event.
+    //
+    // It was queued as D_DRIFT_SNAP, the drift crack's echo, with no direction
+    // -- so the second RING this promises never drew. A blade with no outward
+    // direction falls back to world X, and what fired 85 ms after every drift
+    // entry was a 2.2 m row of sparks (eleven on high) laid along world X:
+    // across the road on a north-south straight, down it on an east-west one,
+    // whichever way the car was going. Its own kind now, drawing the ring the
+    // comment always said.
     if (!rm) {
       this.defer(
         KICK_RING_BEAT, gX(0, 0, 0.05), gY(0, 0, 0.05), gZ(0, 0, 0.05),
-        _acol, D_DRIFT_SNAP, 0,
+        _acol, D_KICK_RING, 0, 0, 0, 0, _bVx, _bVy, _bVz,
       )
     }
   }
@@ -2742,7 +3338,7 @@ class Vfx implements VfxSystem {
       const fm = (f0 + f1) * 0.5
       this.defer(
         D.beat, gX(fm, eS, 0.08), gY(fm, eS, 0.08), gZ(fm, eS, 0.08),
-        _scol, D_DRIFT_SNAP, t, oX, oY, oZ,
+        _scol, D_DRIFT_SNAP, t, oX, oY, oZ, _bVx, _bVy, _bVz,
       )
     }
 
@@ -2836,6 +3432,10 @@ class Vfx implements VfxSystem {
   ): void {
     const q = _bQ
     if (q <= 0) return
+    // SINGULARITY DOES NOT GATHER, IT ORBITS. In a held tier-3 slide every
+    // gather channel used to be tier 2's turned white and scaled up a third,
+    // which is a colour, not a state. See singOrbit().
+    if (tc >= 3) { this.singOrbit(dt, fx, charge01, inward, sparkWash); return }
     // Convergence point: under the rear axle, in the racer's own frame.
     const cF = -_bHz * 0.62, cU = _bHy * 0.60
     const cx = gX(cF, 0, cU), cy = gY(cF, 0, cU), cz = gZ(cF, 0, cU)
@@ -2920,6 +3520,123 @@ class Vfx implements VfxSystem {
   }
 
   /**
+   * THE SINGULARITY ORBIT: what tier 3 does instead of gathering.
+   *
+   * Tiers 0-2 wind something up -- motes spiral IN onto a point under the
+   * rear axle, faster and tighter as the next rung approaches. At tier 3
+   * there is no next rung, and drawing the same spiral in white said so only
+   * by colour. So the motes stop falling in and start going ROUND: short
+   * tangential streaks on a ring standing just off the tail, facing the chase
+   * camera, circling a core. For the player's own car that core is the dark
+   * lens drawn by updateSingularity(); for everyone else the ring alone is
+   * the tell, and it is visible from a car length away.
+   *
+   * The shader can only integrate straight lines, so an orbit is drawn the
+   * way the gather draws a spiral: each mote is born on the ring with a
+   * tangential velocity and a little infall, lives about a radian of sweep,
+   * and dies before its chord leaves the circle. The whole ring carries the
+   * car's velocity -- a core that orbits a point the car left 0.2 s ago is
+   * nine metres behind it.
+   *
+   * Under reduced motion it turns at less than half the speed at half the
+   * density: still a ring, with nothing whirling.
+   */
+  private singOrbit(
+    dt: number, fx: RacerFx, charge01: number, inward: number, sparkWash: number,
+  ): void {
+    const q = _bQ
+    const rm = this.reduced
+    const kF = -_bHz * SING_CORE_F, kU = _bHy * SING_CORE_U
+    const kx = pX(kF, 0, kU), ky = pY(kF, 0, kU), kz = pZ(kF, 0, kU)
+    const spin = rm ? 3.2 : 7.0
+    const rate = (46 + charge01 * 44) * (0.70 + inward * 0.45) * q * (rm ? 0.5 : 1)
+    const g = (0.55 + charge01 * 1.10) * sparkWash
+    fx.gatherAcc += dt * rate
+    inherit(1)
+    let guard = 0
+    while (fx.gatherAcc >= 1 && guard < 26) {
+      fx.gatherAcc -= 1
+      guard++
+      const a = rnd() * TAU
+      const ca = Math.cos(a), sa = Math.sin(a)
+      const R = (0.60 + rnd() * 0.50) * (1.0 + charge01 * 0.25)
+      // The ring stands in the (right, up) plane -- the one the chase camera
+      // looks straight at -- squashed vertically so it does not dip into
+      // the road under the tail.
+      const oS = ca * R, oU = sa * R * 0.55
+      const life = 0.10 + rnd() * 0.09
+      // Tangent at `a`, plus infall: about a radian of sweep per life.
+      const tS = -sa * R * spin - ca * R * 0.9
+      const tU = (ca * R * spin - sa * R * 0.9) * 0.55
+      // 0.15 m, not the gather's 0.085: measured at the gather's size these
+      // landed at the 1.5 px floor and the ring they draw was invisible under
+      // the fan. They are the tier's signature; they have to be seen.
+      this.spawn(
+        kx + dX(0, oS, oU), ky + dY(0, oS, oU), kz + dZ(0, oS, oU),
+        dX(0, tS, tU), dY(0, tS, tU), dZ(0, tS, tU),
+        _dcol[0] * g, _dcol[1] * g, _dcol[2] * g,
+        life, 0.15, 0, 0, 0, K_SPARK,
+      )
+    }
+    inherit(0)
+  }
+
+  /**
+   * THE LOCAL RACER'S SINGULARITY: a dark core off the tail and a lens at the
+   * rear axle, both pulsing on the charge heartbeat, for as long as the
+   * player HOLDS tier 3.
+   *
+   * The lens is the composite's shockfront refraction (see `blasts`), held
+   * open instead of fired once -- it bends the picture round the back of the
+   * car and adds no light at all, which is the only kind of escalation left
+   * at the top of a ladder whose every other channel was normalised flat. The
+   * core is the gravity well's own dark-sphere shader at a quarter metre:
+   * the one thing in this file that takes light OUT of the frame.
+   *
+   * Local only: the lens is screen space and there is one screen. Reduced
+   * motion drops the lens (main.ts drops every lens then anyway) and holds the
+   * core still.
+   */
+  private updateSingularity(dt: number, r: RacerState | null, fx: RacerFx | null): void {
+    if (fx !== null) fx.singBeat *= Math.exp(-dt * 5.5)
+    const on = r !== null && fx !== null && r.driftSide !== 0 && r.driftTier >= 3
+      && r.respawnTime <= 0 && !r.finished
+    if (!on || r === null || fx === null) {
+      if (this.singOn) { this.singMesh.visible = false; this.singOn = false }
+      this.singStrength = 0
+      return
+    }
+    const chassis = CHASSIS_BY_ID[r.chassisId]
+    const hz = chassis ? chassis.halfExtents.z : 2.3
+    const hy = chassis ? chassis.halfExtents.y : 0.6
+    let fX = Math.sin(fx.drawYaw), fY = 0, fZ = Math.cos(fx.drawYaw)
+    let uX = 0, uY = 1, uZ = 0
+    if (this.gravity) {
+      fX = fx.drawFX; fY = fx.drawFY; fZ = fx.drawFZ
+      uX = fx.drawUX; uY = fx.drawUY; uZ = fx.drawUZ
+    }
+    const beat = this.reduced ? 0.35 : fx.singBeat
+    const kF = -hz * SING_CORE_F, kU = hy * SING_CORE_U
+    const m = this.singMesh
+    m.position.set(
+      fx.drawX + fX * kF + uX * kU, fx.drawY + fY * kF + uY * kU, fx.drawZ + fZ * kF + uZ * kU,
+    )
+    m.visible = true
+    m.updateMatrix()
+    m.updateMatrixWorld(true)
+    this.singMat.uniforms.uTime.value = this.time
+    this.singMat.uniforms.uRadius.value = 0.34 + 0.14 * beat
+    this.singMat.uniforms.uOpacity.value = 0.92
+    this.singOn = true
+    // The lens rides the rear axle, a third of a body-height up.
+    const aF = -hz * 1.0, aU = hy * 0.35
+    this.singX = fx.drawX + fX * aF + uX * aU
+    this.singY = fx.drawY + fY * aF + uY * aU
+    this.singZ = fx.drawZ + fZ * aF + uZ * aU
+    this.singStrength = this.reduced ? 0 : 0.30 + 0.55 * beat
+  }
+
+  /**
    * Thruster strain. A continuous exhaust that thickens with the tier, plus a
    * rhythmic hard pulse out of both nozzles whose cadence runs from about one
    * a second at the bottom of a band to five a second at the top. Rhythm is
@@ -2937,8 +3654,9 @@ class Vfx implements VfxSystem {
     const off = _bHx * 0.52
 
     // Heavily damped, for exactly the reason the boost plume is: emitted at
-    // 8 m/s into a chase camera nine metres back, an undamped cone reaches the
-    // lens and erases the vehicle it is supposed to be attached to.
+    // 8 m/s toward a chase camera about thirteen metres back (fourteen behind
+    // the car, 5.8 up), an undamped cone reaches the lens and erases the
+    // vehicle it is supposed to be attached to.
     fx.thrustAcc += dt * (tier < 0 ? 11 : 28 + tc * 26) * (0.45 + charge01 * 1.05) * q
     let guard = 0
     while (fx.thrustAcc >= 1 && guard < 22) {
@@ -3047,8 +3765,20 @@ class Vfx implements VfxSystem {
         // A crystal, a stone chip, a fleck of grit. Thin and short-lived, so
         // it is allowed the HDR headroom the bulk is not, and it is the only
         // part of the spray that ever sparkles.
+        //
+        // GLINT_KEEP of them, and the rest are simply not spawned (NOT handed
+        // to the bulk, which would move the plume): carried with the car a
+        // glint is on screen 1.7x as long as it was at rest (7.6 frames
+        // against 4.5), and off the bottom of the frame 15% of its life
+        // instead of 60%.
+        if (rnd() >= GLINT_KEEP) continue
+        // Carries 70% of the car, like the spark fan and for the same
+        // reason: a chip born at rest behind a 45 m/s car is under the
+        // camera before it has sparkled once. The bulk below does NOT -- a
+        // plume is supposed to hang where the wheels threw it.
         const g = 0.55 + charge01 * 0.45
         const gu = up * 1.5 + 0.55
+        inherit(0.7)
         this.spawn(
           ex, ey, ez,
           vx * 1.25 + _bUpX * gu, vy * 1.25 + _bUpY * gu, vz * 1.25 + _bUpZ * gu,
@@ -3056,15 +3786,17 @@ class Vfx implements VfxSystem {
           0.20 + rnd() * 0.22, 0.060 + tc * 0.011, 0,
           -4 - sp.weight * 13, 1.9, K_SPARK,
         )
+        inherit(0)
       } else {
         // SIZE AND LIFE ARE BOUNDED BY THE CHASE CAMERA, not by taste. The
-        // camera sits nine metres behind the car at 60 m/s, so everything the
-        // wheels leave on the road sweeps through the lens about a sixth of a
-        // second later, at which age a puff is at its brightest. At a 1.5 m
-        // final size that measured as a white disc a third of the frame across
-        // passing on the outside of every corner; at 1.0 m, with the smoke
-        // kind's own 2.6-9.5 m fade dissolving it as the camera arrives, it is
-        // the translucent veil driving through your own spray should be.
+        // camera sits fourteen metres behind the car and 5.8 up, so at 60 m/s
+        // everything the wheels leave on the road sweeps under the lens about
+        // a fifth of a second later, at which age a puff is at its brightest.
+        // At a 1.5 m final size that measured (on the old nine-metre rig) as a
+        // white disc a third of the frame across passing on the outside of
+        // every corner; at 1.0 m, with the smoke kind's own 2.6-9.5 m fade
+        // dissolving it as the camera arrives, it is the translucent veil
+        // driving through your own spray should be.
         this.spawn(
           ex + rnd2() * 0.16, ey, ez + rnd2() * 0.16,
           vx + _bUpX * up, vy + _bUpY * up, vz + _bUpZ * up,
@@ -3133,8 +3865,11 @@ class Vfx implements VfxSystem {
     const eU = 0.07
     const eF = -hz * 0.92
 
+    // SCRAPE_KEEP: carried with the car these stay on screen twice as long
+    // (10.2 visible frames against 4.9, tier-2 hold), so 40% of the count
+    // comes back out.
     const rate = (7 + tc * 15) * (0.40 + charge01 * 1.00) * (0.50 + inward * 1.00)
-      * sp.spark * q
+      * sp.spark * q * SCRAPE_KEEP
     fx.scrapeAcc += dt * rate
     let guard = 0
     while (fx.scrapeAcc >= 1 && guard < 20) {
@@ -3147,6 +3882,9 @@ class Vfx implements VfxSystem {
       const lat = 1.4 + rnd() * (2.8 + inward * 4.8)
       const su = 1.5 + rnd() * (2.1 + tc * 1.1)
       const g = 0.62 + charge01 * 0.40
+      // 70% of the car's motion, the fan's number and its reason: struck at
+      // rest they spent three quarters of their life behind the camera.
+      inherit(0.7)
       this.spawn(
         ex, ey, ez,
         dX(-v, side * lat, su) + rnd2() * 1.6,
@@ -3155,6 +3893,7 @@ class Vfx implements VfxSystem {
         _spSpark[0] * g, _spSpark[1] * g, _spSpark[2] * g,
         0.28 + rnd() * 0.30, 0.150 + tc * 0.035, 0, -20, 1.35, K_SPARK,
       )
+      inherit(0)
     }
 
     // THE STRIKE. A rhythm on top of the stream, walking from one contact
@@ -3173,6 +3912,7 @@ class Vfx implements VfxSystem {
     const bS = side * hx * 1.02
     const ex = gX(eF, bS, eU), ey = gY(eF, bS, eU), ez = gZ(eF, bS, eU)
     const n = Math.round((3 + tc * 3) * q * (this.reduced ? 0.5 : 1))
+    inherit(0.7)
     this.burst(
       ex, ey, ez, dX(-0.7, 0, 0.30), dY(-0.7, 0, 0.30), dZ(-0.7, 0, 0.30),
       n, 15 + tc * 7, 0.55, _spSpark, 0.72,
@@ -3181,8 +3921,11 @@ class Vfx implements VfxSystem {
     // The point of contact itself. A K_SPRITE is a solid gaussian, so this one
     // is held tiny and dim on purpose and only its RADIUS moves with the tier;
     // the last time a drift transition scaled a filled flash with the ladder it
-    // erased the car, the road and the horizon for a third of a second.
+    // erased the car, the road and the horizon for a third of a second. It
+    // rides the patch at the burst's 0.7, so the strike and its sparks leave
+    // from the same place instead of the flash smearing backwards off them.
     this.flash(ex, ey, ez, _spSpark, 0.24, 0.08, 0.150 + tc * 0.055)
+    inherit(0)
   }
 
   /**
@@ -3324,11 +4067,13 @@ class Vfx implements VfxSystem {
       col[0] * 1.2, col[1] * 1.2, col[2] * 1.2,
       rl, r0, -(r0 * 0.95) / rl, 0, 0, K_RING,
     )
-    // ...and out of the exhaust one collapse later, aimed down the pipe.
+    // ...and out of the exhaust one collapse later, aimed down the pipe --
+    // and out of the exhaust where it WILL be, not where it was (see defVel).
     const bF = cF - _bHz * 0.45
     this.defer(
       0.10, gX(bF, 0, cU), gY(bF, 0, cU), gZ(bF, 0, cU),
       col, D_DRIFT_BLOW, t, dX(-1, 0, 0.10), dY(-1, 0, 0.10), dZ(-1, 0, 0.10),
+      _bVx, _bVy, _bVz,
     )
   }
 
@@ -3447,7 +4192,7 @@ class Vfx implements VfxSystem {
     // That was the "it shoots into the ground" report.
   }
 
-  private gatlingImpact(t: RacerState, lethal: boolean): void {
+  private gatlingImpact(t: RacerState, tfx: RacerFx, lethal: boolean): void {
     const chassis = CHASSIS_BY_ID[t.chassisId]
     const hy = chassis ? chassis.halfExtents.y : 0.6
     const hz = chassis ? chassis.halfExtents.z : 2.3
@@ -3456,17 +4201,23 @@ class Vfx implements VfxSystem {
     // a corkscrew the two cars do not share an up. The spawn axis moves with
     // it, so the ground front lands on the victim's deck, and is put back
     // before returning -- the caller is mid-way through the shooter's frame.
-    const tu = this.gravity ? t.up : UP_Y
-    setAxis(tu.x, tu.y, tu.z)
-    const px = t.pos.x + tu.x * hy * 0.8
-    const py = t.pos.y + tu.y * hy * 0.8
-    const pz = t.pos.z + tu.z * hy * 0.8
+    //
+    // Position and up are the victim's DRAWN pose (see RacerFx.drawX), so the
+    // hit lands on the car the shooter can see.
+    const tux = this.gravity ? tfx.drawUX : UP_Y.x
+    const tuy = this.gravity ? tfx.drawUY : UP_Y.y
+    const tuz = this.gravity ? tfx.drawUZ : UP_Y.z
+    setAxis(tux, tuy, tuz)
+    const tX = tfx.drawX, tY = tfx.drawY, tZ = tfx.drawZ
+    const px = tX + tux * hy * 0.8
+    const py = tY + tuy * hy * 0.8
+    const pz = tZ + tuz * hy * 0.8
     const q = this.qScale
     // Sprayed back down the SHOOTER's line of fire, lifted along the victim's
     // own up: two frames, and each term belongs to the one it came from.
-    const bx = -_bFwdX + tu.x * 0.35
-    const by = -_bFwdY + tu.y * 0.35
-    const bz = -_bFwdZ + tu.z * 0.35
+    const bx = -_bFwdX + tux * 0.35
+    const by = -_bFwdY + tuy * 0.35
+    const bz = -_bFwdZ + tuz * 0.35
 
     if (!lethal) {
       /**
@@ -3481,7 +4232,18 @@ class Vfx implements VfxSystem {
       // Hit marker: a small hard ring that snaps open and dies inside an
       // eighth of a second, so the shooter can tell a connecting burst from a
       // missing one at a hundred metres without any HUD.
-      this.ring(px, py, pz, BEAM_HOT, 0.90, 0.11, 0.30, 9, false)
+      //
+      // ...which it could not, at a hundred metres: a ring 1.3 m across at
+      // that range is five pixels, and a ring five pixels across is a dot.
+      // It now GROWS WITH ITS DISTANCE FROM THE LENS past 25 m, up to 4x, so
+      // it holds roughly the same screen size from point blank to the end of
+      // the round's 149 m reach -- the marker is information for the SHOOTER,
+      // and its size is only meaningful in the shooter's pixels. The gain is
+      // divided by the same factor so a far marker is not four times the
+      // light of a near one.
+      const mdx = px - _camX, mdy = py - _camY, mdz = pz - _camZ
+      const mk = clamp(Math.sqrt(mdx * mdx + mdy * mdy + mdz * mdz) / 25, 1, 4)
+      this.ring(px, py, pz, BEAM_HOT, 0.90 / Math.sqrt(mk), 0.11, 0.30 * mk, 9 * mk, false)
       setAxis(_bUpX, _bUpY, _bUpZ)
       return
     }
@@ -3502,11 +4264,11 @@ class Vfx implements VfxSystem {
     // by its own altitude along its own up, which on a wall is sideways.
     const gd = 0.06 - drop
     this.ring(
-      t.pos.x + tu.x * gd, t.pos.y + tu.y * gd, t.pos.z + tu.z * gd,
+      tX + tux * gd, tY + tuy * gd, tZ + tuz * gd,
       BEAM_RGB, 0.85, 0.55, 1.0, 22, true,
     )
-    this.burst(px, py, pz, tu.x * 0.25, tu.y * 0.25, tu.z * 0.25, Math.round(56 * q), 26, 1.0, BEAM_RGB, 1.10, 0.55, 0.15, K_SPARK, -12, 1.3)
-    this.burst(px, py, pz, tu.x * 0.35, tu.y * 0.35, tu.z * 0.35, Math.round(18 * q), 5, 1.0, SMOKE_RGB, 1.5, 1.1, 0.9, K_SMOKE, 1.2, 1.0)
+    this.burst(px, py, pz, tux * 0.25, tuy * 0.25, tuz * 0.25, Math.round(56 * q), 26, 1.0, BEAM_RGB, 1.10, 0.55, 0.15, K_SPARK, -12, 1.3)
+    this.burst(px, py, pz, tux * 0.35, tuy * 0.35, tuz * 0.35, Math.round(18 * q), 5, 1.0, SMOKE_RGB, 1.5, 1.1, 0.9, K_SMOKE, 1.2, 1.0)
     this.claimLight(px, py, pz, BEAM_RGB, 9, 0.34)
     setAxis(_bUpX, _bUpY, _bUpZ)
   }
@@ -3839,11 +4601,18 @@ class Vfx implements VfxSystem {
        * THE BOG. A cough, not a burst.
        *
        * Smoke first and most of it, because smoke is what an engine that did
-       * not catch produces and because it is the one particle kind in this
-       * file that is DARK -- it subtracts from the frame where every reward
-       * adds to it. The handful of sparks are there to make it an event rather
-       * than a fade, and they fall (gravity -7) instead of flying, which is
-       * the opposite read from the rising fan a boost throws.
+       * not catch produces. The handful of sparks are there to make it an
+       * event rather than a fade, and they fall (gravity -7) instead of
+       * flying, which is the opposite read from the rising fan a boost throws.
+       *
+       * THE SMOKE IS DIM, AND THAT IS THE WHOLE POINT. This used to say smoke
+       * was "the one particle kind in this file that is DARK -- it subtracts
+       * from the frame". It is not: the pool is ONE/ONE additive, every kind
+       * in it adds light, and at gain 3.4 this puff was scene-linear 0.7 of
+       * pale grey -- the PENALTY out-drew the good launch it sits beside on
+       * the grid. Nothing in this pool can darken, so "dark" has to mean
+       * "barely there": SMOKE_RGB at 0.9 is a dull 0.19 haze that reads as
+       * exhaust that did not light, under anything a reward throws.
        *
        * No ring, no flash, no light claimed. Every one of those is a reward
        * gesture in this file and the jump start gets none of them.
@@ -3851,7 +4620,7 @@ class Vfx implements VfxSystem {
       this.burst(
         ex, ey, ez, dX(-1, 0, 0.55), dY(-1, 0, 0.55), dZ(-1, 0, 0.55),
         Math.round(11 * q), 4.5, 0.9,
-        SMOKE_RGB, 3.4, 0.80, 0.34, K_SMOKE, 0.9, 1.6,
+        SMOKE_RGB, 0.9, 0.80, 0.34, K_SMOKE, 0.9, 1.6,
       )
       this.burst(
         ex, ey, ez, dX(-1, 0, 0.2), dY(-1, 0, 0.2), dZ(-1, 0, 0.2),
@@ -3935,17 +4704,62 @@ class Vfx implements VfxSystem {
     // normalised so tier 3 is not four times brighter than tier 0 purely
     // because its colour is.
     const front = DRIFT_BODY_GAIN[tier]
-    this.shockRing(pX(0, 0, 0.35), pY(0, 0, 0.35), pZ(0, 0, 0.35), _rgb, (0.48 + tier * 0.14) * front, 0.34 + tier * 0.06, 0.9, 4.0 + tier * 1.8, false)
+    // THE BOTTOM OF THE LADDER WAS NOT AN EVENT. Measured in the census, a
+    // tier-0 release carried 1/34 of the screen energy of a drift ENTRY --
+    // the thing a player does forty times a race, paid out, drew less than
+    // the moment the slide began. Tier 3 was already right (and bounded, see
+    // above), so the ladder is lifted from the BOTTOM: the census puts the
+    // four rungs at 1.56 / 1.41 / 1.26 / 1.11x their old screen energy, so
+    // every rung still out-draws the one below it and tier 3 is about a tenth
+    // over where it was. The
+    // extra goes where it cannot fill the frame: spark count (thin, and now
+    // carried with the car so they stay beside it), the starburst below
+    // (thin, and pointed away from the car), and a little on the air ring.
+    this.shockRing(pX(0, 0, 0.35), pY(0, 0, 0.35), pZ(0, 0, 0.35), _rgb, (0.62 + tier * 0.09) * front, 0.34 + tier * 0.06, 0.9, 4.4 + tier * 1.7, false)
+    // The GROUND front is deliberately NOT part of the lift. It was, first:
+    // 13 m and double the gain at tier 0, which the census scored as the
+    // biggest single gain on the ladder -- and which photographed, 0.17 s
+    // after a release, as a blue ellipse of light over the whole road behind
+    // the car (road band mean 146/255 against 75 before, 24% of it over 200).
+    // A front lying on the road is exactly as wide as the road it covers from
+    // a camera 22 degrees up. The shipped values stand.
     this.shockRing(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06), _rgb, (0.36 + tier * 0.12) * front, 0.42 + tier * 0.06, 1.2, 7.0 + tier * 3.3, true)
-    this.flash(pX(0, 0, hy), pY(0, 0, hy), pZ(0, 0, hy), _rgb, (0.55 + tier * 0.22) * front, 0.20 + tier * 0.05, 0.55 + tier * 0.22)
+    this.flash(pX(0, 0, hy), pY(0, 0, hy), pZ(0, 0, hy), _rgb, (0.72 + tier * 0.16) * front, 0.20 + tier * 0.05, 0.62 + tier * 0.20)
+    inherit(0.7)
     this.burst(
       ex, ey, ez, dX(-1, 0, 0.25), dY(-1, 0, 0.25), dZ(-1, 0, 0.25),
-      Math.round((16 + tier * 24) * q), 16 + tier * 12, 0.55,
-      _rgb, 0.42, 0.36 + tier * 0.08, 0.14 + tier * 0.04, K_SPARK, -6, 1.8,
+      Math.round((34 + tier * 20) * q), 17 + tier * 11, 0.55,
+      _rgb, 0.50 - tier * 0.027, 0.40 + tier * 0.07, 0.15 + tier * 0.035, K_SPARK, -6, 1.8,
     )
+    // THE STARBURST. A fan of hard streaks thrown straight OUT from the tail
+    // in the plane the chase camera looks at -- the car's (right, up) plane
+    // -- so from behind the release is a star with the car at its centre.
+    // It is the boost's own shape (the drift snap owns the lateral comb, the
+    // tier-up the sphere) and it is the part that makes a tier-0 release an
+    // event: thin, so it may run hot, and pointed AWAY from the car, so none
+    // of it covers the car. Rides the car at 0.85 so the star stays centred
+    // on it for the fifth of a second it lives. The upper 230 degrees only:
+    // the rest would be buried in the road inside two frames.
+    inherit(0.85)
+    const ns = Math.min(Math.round((18 + tier * 4) * q), this.pp.budgetLeft)
+    const sg = (2.0 + tier * 0.10) * (0.45 + 0.55 * front)
+    const sU = hy * 0.6
+    for (let i = 0; i < ns; i++) {
+      const a = -0.44 + (i + rnd() * 0.6) / Math.max(1, ns) * 4.0
+      const ca = Math.cos(a), sa = Math.sin(a)
+      const v = 18 + tier * 4 + rnd() * 6
+      this.spawn(
+        pX(-hz * 0.9, ca * 0.45, sU + sa * 0.45), pY(-hz * 0.9, ca * 0.45, sU + sa * 0.45), pZ(-hz * 0.9, ca * 0.45, sU + sa * 0.45),
+        dX(-2.0, ca * v, sa * v * 0.8), dY(-2.0, ca * v, sa * v * 0.8), dZ(-2.0, ca * v, sa * v * 0.8),
+        _rgb[0] * sg, _rgb[1] * sg, _rgb[2] * sg,
+        0.20 + rnd() * 0.10, 0.24 + tier * 0.03, 0, -4, 2.4, K_SPARK,
+      )
+    }
+    inherit(0)
     // Soft body behind the exhaust. These are filled sprites reaching ~0.9m
-    // each, thirty of them, a metre from a camera that sits nine metres back —
-    // so they are held to the same budget: fewer pixels, more sparks.
+    // each, thirty of them, a metre from a camera that sits about thirteen
+    // metres back -- so they are held to the same budget: fewer pixels, more
+    // sparks.
     this.burst(
       ex, ey, ez, dX(-1, 0, 0.3), dY(-1, 0, 0.3), dZ(-1, 0, 0.3),
       Math.round((6 + tier * 8) * q), 7 + tier * 5, 0.8,
@@ -3969,9 +4783,9 @@ class Vfx implements VfxSystem {
     if (tier >= 3) {
       // Singularity. White-hot core, dark lensed rim, brief space distortion.
       // Placed AHEAD of the vehicle: a flash centred on the car is, from a
-      // chase camera nine metres behind it, a white card over the one thing
-      // the player is steering. Ahead, the car silhouettes against it and the
-      // road stays readable.
+      // chase camera fourteen metres behind it, a white card over the one
+      // thing the player is steering. Ahead, the car silhouettes against it
+      // and the road stays readable.
       const sF = hz * 1.6
       const sx = pX(sF, 0, hy), sy = pY(sF, 0, hy), sz = pZ(sF, 0, hy)
       const bx = pX(0, 0, hy), by = pY(0, 0, hy), bz = pZ(0, 0, hy)
@@ -3980,7 +4794,9 @@ class Vfx implements VfxSystem {
       this.shockShell(sx, sy, sz, WHITE_RGB, 0.60, 0.62, 2.6, 8.4)
       this.shockRing(gX(0, 0, 0.08), gY(0, 0, 0.08), gZ(0, 0, 0.08), WHITE_RGB, 0.90, 0.62, 1.4, 13.0, true)
       // (the lens for this release was already fired above, scaled by tier)
+      inherit(0.7)
       this.burst(bx, by, bz, _bUpX * 0.1, _bUpY * 0.1, _bUpZ * 0.1, Math.round(40 * q), 26, 1.0, WHITE_RGB, 0.55, 0.42, 0.15, K_SPARK, -10, 1.4)
+      inherit(0)
       if (isLocal) this.boostIntensity = 1.0
     } else if (isLocal) {
       this.boostIntensity = Math.max(this.boostIntensity, 0.45 + tier * 0.18)
@@ -3990,8 +4806,8 @@ class Vfx implements VfxSystem {
   /**
    * Per-item impact signature.
    *
-   * Every one of these can land on the LOCAL racer, which is nine metres from
-   * the camera and dead centre of frame — so a flash sized for a spectacular
+   * Every one of these can land on the LOCAL racer, which is fourteen metres
+   * from the camera and dead centre of frame — so a flash sized for a spectacular
    * third-person explosion is, from the receiving end, a full-screen white
    * card. That is how the alpha missile and the EMP ended up looking
    * identical: both erased the frame, and the colour that identifies the item
@@ -4006,46 +4822,53 @@ class Vfx implements VfxSystem {
     // racer's frame is already published by updateRacer, so the fwd/right
     // parameters this used to take were a second, flattened copy of it.
     const px = pX(0, 0, hy), py = pY(0, 0, hy), pz = pZ(0, 0, hy)
-    const col = ITEM_RGB[item]
+    // Luminance set by the weapon's power, not by its hue -- see IMPACT_LUM.
+    // `col` is for what is thin (sparks, motes, the rail's chips); `fill` for
+    // everything that covers pixels (see IMPACT_FILL); `lit` for the point
+    // light, which clamps its colour to 1 and takes its level from `power`,
+    // so it is handed the hue exactly as authored.
+    const col = IMPACT_RGB[item]
+    const fill = IMPACT_FILL[item]
+    const lit = ITEM_RGB[item]
 
     switch (item) {
       case 'railMissile': {
-        // Sharp yellow spark cone, thrown forward along the shot's travel.
-        this.flash(px, py, pz, col, 1.4, 0.16, 1.1)
+        // Sharp spark cone, thrown forward along the shot's travel.
+        this.flash(px, py, pz, fill, 1.4, 0.16, 1.1)
         this.burst(px, py, pz, dX(1, 0, 0.18), dY(1, 0, 0.18), dZ(1, 0, 0.18), Math.round(50 * q), 34, 0.32, col, 1.10, 0.30, 0.13, K_SPARK, -14, 1.6)
         this.burst(px, py, pz, dX(1, 0, 0.1), dY(1, 0, 0.1), dZ(1, 0, 0.1), Math.round(10 * q), 12, 0.9, col, 0.60, 0.5, 0.20, K_SPRITE, -2, 2.4)
-        this.ring(px, py, pz, col, 1.1, 0.26, 0.5, 22, false)
+        this.ring(px, py, pz, fill, 1.1, 0.26, 0.5, 22, false)
         // Small and quick: a rail hit is a spark cone, not a fireball, so the
         // lens is a snap rather than a swell.
         this.spawnDistortion(px, py, pz, 1.0, 9.0, 0.20)
-        this.claimLight(px, py, pz, col, 5, 0.18)
+        this.claimLight(px, py, pz, lit, 5, 0.18)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.34)
         break
       }
       case 'seekerMissile': {
         // Orange explosion: fireball plus fast debris.
-        this.flash(px, py, pz, col, 1.5, 0.30, 1.6)
-        this.burst(px, py, pz, _bUpX * 0.25, _bUpY * 0.25, _bUpZ * 0.25, Math.round(16 * q), 7, 1.0, col, 0.75, 0.62, 0.62, K_SPRITE, 1.6, 1.5)
+        this.flash(px, py, pz, fill, 1.5, 0.30, 1.6)
+        this.burst(px, py, pz, _bUpX * 0.25, _bUpY * 0.25, _bUpZ * 0.25, Math.round(16 * q), 7, 1.0, fill, 0.75, 0.62, 0.62, K_SPRITE, 1.6, 1.5)
         this.burst(px, py, pz, _bUpX * 0.2, _bUpY * 0.2, _bUpZ * 0.2, Math.round(44 * q), 22, 1.0, col, 1.15, 0.42, 0.14, K_SPARK, -12, 1.5)
         this.burst(px, py, pz, _bUpX * 0.4, _bUpY * 0.4, _bUpZ * 0.4, Math.round(16 * q), 4, 1.0, SMOKE_RGB, 1.4, 1.1, 0.9, K_SMOKE, 1.2, 1.0)
-        this.ring(px, py, pz, col, 1.15, 0.42, 0.7, 26, false)
+        this.ring(px, py, pz, fill, 1.15, 0.42, 0.7, 26, false)
         this.spawnDistortion(px, py, pz, 1.8, 10.0, 0.34)
-        this.claimLight(px, py, pz, col, 7, 0.3)
+        this.claimLight(px, py, pz, lit, 7, 0.3)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.42)
         break
       }
       case 'alphaMissile': {
         // Big red shockwave with a lingering second ring.
-        this.flash(px, py, pz, col, 1.7, 0.42, 2.0)
+        this.flash(px, py, pz, fill, 1.7, 0.42, 2.0)
         this.spawn(px, py, pz, 0, 0, 0, 1.5, 0.38, 0.55, 0.55, 2.0, 8.0, 0, 0, K_SHELL)
-        this.ring(px, py, pz, col, 1.25, 0.55, 1.0, 34, false)
-        this.ring(pX(0, 0, 0.06), pY(0, 0, 0.06), pZ(0, 0, 0.06), col, 1.05, 0.75, 1.2, 30, true)
+        this.ring(px, py, pz, fill, 1.25, 0.55, 1.0, 34, false)
+        this.ring(pX(0, 0, 0.06), pY(0, 0, 0.06), pZ(0, 0, 0.06), fill, 1.05, 0.75, 1.2, 30, true)
         this.burst(px, py, pz, _bUpX * 0.25, _bUpY * 0.25, _bUpZ * 0.25, Math.round(78 * q), 34, 1.0, col, 1.20, 0.65, 0.18, K_SPARK, -14, 1.1)
         this.burst(px, py, pz, _bUpX * 0.35, _bUpY * 0.35, _bUpZ * 0.35, Math.round(30 * q), 6, 1.0, SMOKE_RGB, 1.6, 1.5, 1.2, K_SMOKE, 1.4, 0.9)
         this.spawnDistortion(px, py, pz, 3.0, 11.0, 0.42)
-        this.defer(0.22, px, py, pz, col, D_ALPHA_RING, 1.0)
-        this.defer(0.48, px, py, pz, col, D_ALPHA_RING, 1.6)
-        this.claimLight(px, py, pz, col, 12, 0.45)
+        this.defer(0.22, px, py, pz, fill, D_ALPHA_RING, 1.0)
+        this.defer(0.48, px, py, pz, fill, D_ALPHA_RING, 1.6)
+        this.claimLight(px, py, pz, lit, 12, 0.45)
         if (isLocal) this.hitFlash = 0.55
         break
       }
@@ -4054,7 +4877,9 @@ class Vfx implements VfxSystem {
         this.implode(px, py, pz, col, Math.round(34 * q), 0.30)
         // The mine pulls IN first: a lens on the implosion would fight the
         // burst that follows it 0.30s later, so this one is deferred with it.
-        this.spawn(px, py, pz, 0, 0, 0, col[0] * 2.0, col[1] * 2.0, col[2] * 2.0, 0.32, 3.0, -7.0, 0, 0, K_RING)
+        this.spawn(px, py, pz, 0, 0, 0, fill[0] * 2.0, fill[1] * 2.0, fill[2] * 2.0, 0.32, 3.0, -7.0, 0, 0, K_RING)
+        // Queued in the SPARK colour: the burst is sparks and fills both, and
+        // it takes IMPACT_FILL_K off its filled parts itself.
         this.defer(0.30, px, py, pz, col, D_VOID_BURST, q)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.48)
         break
@@ -4062,32 +4887,32 @@ class Vfx implements VfxSystem {
       case 'empBomb': {
         // Blue wireframe sphere plus a full-screen static spike.
         this.spawnEmp(px, py, pz, 34, 0.85)
-        this.flash(px, py, pz, EMP_RGB, 1.4, 0.32, 1.8)
-        this.burst(px, py, pz, _bUpX * 0.2, _bUpY * 0.2, _bUpZ * 0.2, Math.round(46 * q), 16, 1.0, EMP_RGB, 1.20, 0.55, 0.14, K_SPARK, -4, 1.4)
-        this.defer(0.16, px, py, pz, EMP_RGB, D_EMP_PULSE, 1.0)
+        this.flash(px, py, pz, fill, 1.4, 0.32, 1.8)
+        this.burst(px, py, pz, _bUpX * 0.2, _bUpY * 0.2, _bUpZ * 0.2, Math.round(46 * q), 16, 1.0, col, 1.20, 0.55, 0.14, K_SPARK, -4, 1.4)
+        this.defer(0.16, px, py, pz, fill, D_EMP_PULSE, 1.0)
         this.spawnDistortion(px, py, pz, 2.4, 13.0, 0.45)
-        this.claimLight(px, py, pz, EMP_RGB, 9, 0.4)
+        this.claimLight(px, py, pz, lit, 9, 0.4)
         if (isLocal) this.hitFlash = 0.58
         break
       }
       case 'overdriveCore': {
         // Contact damage: golden flash.
-        this.flash(px, py, pz, col, 1.7, 0.34, 2.1)
-        this.ring(px, py, pz, col, 1.2, 0.42, 0.8, 32, false)
+        this.flash(px, py, pz, fill, 1.7, 0.34, 2.1)
+        this.ring(px, py, pz, fill, 1.2, 0.42, 0.8, 32, false)
         this.burst(px, py, pz, _bUpX * 0.3, _bUpY * 0.3, _bUpZ * 0.3, Math.round(50 * q), 24, 1.0, col, 1.2, 0.5, 0.16, K_SPARK, -10, 1.4)
         this.spawnDistortion(px, py, pz, 2.0, 11.0, 0.38)
-        this.claimLight(px, py, pz, col, 10, 0.35)
+        this.claimLight(px, py, pz, lit, 10, 0.35)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.5)
         break
       }
       case 'gravityWell': {
-        this.implode(px, py, pz, WELL_RGB, Math.round(18 * q), 0.45)
-        this.ring(px, py, pz, WELL_RGB, 1.8, 0.5, 2.2, -3.0, false)
+        this.implode(px, py, pz, col, Math.round(18 * q), 0.45)
+        this.ring(px, py, pz, fill, 1.8, 0.5, 2.2, -3.0, false)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.28)
         break
       }
       default: {
-        this.flash(px, py, pz, col, 1.3, 0.24, 1.5)
+        this.flash(px, py, pz, fill, 1.3, 0.24, 1.5)
         this.burst(px, py, pz, _bUpX * 0.25, _bUpY * 0.25, _bUpZ * 0.25, Math.round(24 * q), 14, 1.0, col, 1.0, 0.4, 0.14, K_SPARK, -10, 1.6)
         if (isLocal) this.hitFlash = Math.max(this.hitFlash, 0.34)
       }
@@ -4172,20 +4997,72 @@ class Vfx implements VfxSystem {
         this.ring(mx, my, mz, col, 1.1, 0.20, 0.3, 20, false)
         break
       case 'seekerMissile':
-      case 'alphaMissile':
         this.burst(mx, my, mz, dX(1, 0, 0.1), dY(1, 0, 0.1), dZ(1, 0, 0.1), Math.round(18 * q), 16, 0.5, col, 1.5, 0.34, 0.16, K_SPRITE, 0.6, 2.0)
         this.burst(mx, my, mz, dX(-1, 0, 0.2), dY(-1, 0, 0.2), dZ(-1, 0, 0.2), Math.round(14 * q), 9, 0.8, SMOKE_RGB, 1.6, 0.8, 0.5, K_SMOKE, 1.0, 1.2)
         this.flash(mx, my, mz, col, 1.8, 0.16, 1.7)
         break
+      case 'alphaMissile': {
+        /**
+         * THE ALPHA LEAVING. It used to share the seeker's launch outright --
+         * the leader-killer, the rarest and heaviest thing in the item table,
+         * went out of the car looking like the one that homes on whoever is in
+         * front. It gets its own now, and it is built to read as WEIGHT:
+         *
+         *   a back-blast    heavy smoke thrown out of the tail, because
+         *                   something that big has to push back on the car
+         *   a ground front  the road taking the recoil, flat so it hides
+         *                   nothing
+         *   a hot shell     red, at the nose, punched so the car shows through
+         *   a crackle       a short cone of red sparks chasing the missile
+         *
+         * Held to the no-occlusion rules everything else here obeys: the
+         * filled pieces sit at the nose or lie on the road, in IMPACT_FILL,
+         * and only the sparks carry the Alpha's full IMPACT_LUM.
+         *
+         * AND THEY LEAVE WITH THE CAR. The launch the camera cares about is
+         * the player's own, fourteen metres behind their nose: left at rest,
+         * the recoil front was a nine-metre red ring on the road right under
+         * the lens 0.2 s later (photographed: the biggest thing in the frame),
+         * and the nose shell had slid back over the car. Everything but the
+         * back-blast carries the car's whole velocity, so the ring spreads
+         * round the car that fired and the crackle leads it after the
+         * missile. The smoke stays behind, where a back-blast belongs.
+         */
+        const ac = IMPACT_RGB.alphaMissile
+        const af = IMPACT_FILL.alphaMissile
+        inherit(1)
+        this.flash(mx, my, mz, af, 1.15, 0.16, 1.5)
+        this.shockShell(mx, my, mz, af, 0.85, 0.30, 1.0, 5.0)
+        this.burst(mx, my, mz, dX(1, 0, 0.06), dY(1, 0, 0.06), dZ(1, 0, 0.06), Math.round(26 * q), 30, 0.30, ac, 1.05, 0.26, 0.12, K_SPARK, -4, 1.4)
+        this.shockRing(gX(0, 0, 0.06), gY(0, 0, 0.06), gZ(0, 0, 0.06), af, 0.55, 0.40, 1.4, 12, true)
+        inherit(0)
+        this.burst(dx, dy, dz, dX(-1, 0, 0.25), dY(-1, 0, 0.25), dZ(-1, 0, 0.25), Math.round(20 * q), 11, 0.9, SMOKE_RGB, 1.4, 0.95, 0.62, K_SMOKE, 0.9, 1.3)
+        break
+      }
       case 'empBomb':
         this.flash(mx, my, mz, EMP_RGB, 1.5, 0.2, 1.9)
         this.ring(mx, my, mz, EMP_RGB, 1.2, 0.3, 0.6, 24, false)
         break
       case 'voidMine':
-      case 'gravityWell':
         this.flash(dx, dy, dz, col, 2.0, 0.22, 1.6)
         this.burst(dx, dy, dz, dX(-1, 0, 0.2), dY(-1, 0, 0.2), dZ(-1, 0, 0.2), Math.round(10 * q), 6, 0.9, col, 1.2, 0.4, 0.14, K_SPARK, -6, 1.6)
         break
+      case 'gravityWell': {
+        /**
+         * THE WELL GOING DOWN. It shared the mine's drop -- a flash and a
+         * spray of sparks off the tail -- which is a trap's grammar, and a
+         * well is not a trap, it is a FIELD: it pulls. So the drop pulls too.
+         * Violet motes fall in onto the drop point from a ring round it, a
+         * front on the road contracts onto the same point, and the only light
+         * that goes OUT is a dim one. The well's own deployment pop (see
+         * updateFields) follows a moment later when the field binds, so the
+         * pair reads as inhale-then-open.
+         */
+        this.implode(dx, dy, dz, WELL_RGB, Math.round(16 * q), 0.28)
+        this.flash(dx, dy, dz, WELL_RGB, 1.1, 0.18, 1.0)
+        this.ring(gX(-hz, 0, 0.06), gY(-hz, 0, 0.06), gZ(-hz, 0, 0.06), WELL_RGB, 1.4, 0.34, 6.0, -15, true)
+        break
+      }
       default:
         this.flash(mx, my, mz, col, 2.0, 0.14, 1.2)
         this.burst(mx, my, mz, dX(1, 0, 0.15), dY(1, 0, 0.15), dZ(1, 0, 0.15), Math.round(12 * q), 12, 0.7, col, 1.3, 0.26, 0.12, K_SPARK, -6, 1.6)
@@ -4320,7 +5197,11 @@ class Vfx implements VfxSystem {
     const rm = this.reduced
 
     // ---- how many sparks this event is worth ---------------------------
-    let want = (S.countBase + S.countLin * f + S.countQuad * f * f) * q
+    // x0.7: the beads now carry the car's motion (see below) and stay on
+    // screen twice as long -- 7.9 visible frames against 3.9 at 55 m/s -- so
+    // 30% of the count comes back out and a slam holds about 1.4x the beads
+    // it did at once, not 2x.
+    let want = (S.countBase + S.countLin * f + S.countQuad * f * f) * q * 0.7
     if (rm) want *= S.rmCount
     if (want > S.countPerEvent) want = S.countPerEvent
     fx.contactAcc += want
@@ -4380,6 +5261,21 @@ class Vfx implements VfxSystem {
     const tgL = Math.sqrt(tgX * tgX + tgY * tgY + tgZ * tgZ)
     if (tgL > 1e-4) { tgX /= tgL; tgY /= tgL; tgZ /= tgL } else { tgX = _bFwdX; tgY = _bFwdY; tgZ = _bFwdZ }
 
+    // 70% OF THE CAR'S MOTION, IN THE ROAD'S PLANE, ADDED BEFORE THE SOLVE.
+    // A bead struck off a car doing 55 m/s was born at rest and the camera
+    // overran it inside a third of a second (measured: visible for 3.9 of its
+    // 56 frames; a bead that has landed and settled is behind the camera for
+    // the rest). Carrying the car's motion keeps the burst beside the car that
+    // made it. Only the in-plane part, so the normal component the landing
+    // solve below is built on is exactly what it was -- the flight time, the
+    // bounce and the settle are unchanged, they just happen further down the
+    // road. The plane's own limits (see the header) now span further too:
+    // `flightMax` is what keeps that honest.
+    const cvn = _bVx * upX + _bVy * upY + _bVz * upZ
+    const ivx = (_bVx - upX * cvn) * 0.7
+    const ivy = (_bVy - upY * cvn) * 0.7
+    const ivz = (_bVz - upZ * cvn) * 0.7
+
     for (let i = 0; i < n; i++) {
       // THE TRIAD. One base hue per impact, three fixed offsets drawn from per
       // bead, a micro-jitter on top. See TUNING.sparks.hueSpread for the whole
@@ -4411,9 +5307,9 @@ class Vfx implements VfxSystem {
       // failure -- it looks like fewer marbles on the road, not like a bug.
       const rise = 0.10 + sparkRnd() * 0.85
       const tang = sparkRnd2() * S.spread
-      let vx = (ox * out - _bFwdX * back + upX * rise + tgX * tang) * sp
-      let vy = (oy * out - _bFwdY * back + upY * rise + tgY * tang) * sp
-      let vz = (oz * out - _bFwdZ * back + upZ * rise + tgZ * tang) * sp
+      let vx = (ox * out - _bFwdX * back + upX * rise + tgX * tang) * sp + ivx
+      let vy = (oy * out - _bFwdY * back + upY * rise + tgY * tang) * sp + ivy
+      let vz = (oz * out - _bFwdZ * back + upZ * rise + tgZ * tang) * sp + ivz
       // Born a little off the struck surface so the bead is not inside it.
       let px = cx + ox * 0.06, py = cy + oy * 0.06, pz = cz + oz * 0.06
 
@@ -4588,8 +5484,11 @@ class Vfx implements VfxSystem {
       const ux = p.vel.x / vl, uy = p.vel.y / vl, uz = p.vel.z / vl
 
       // Head glow. Always present so the projectile reads even without a body.
+      // The gatling round's rides the round, like its tracer below -- at 240
+      // m/s a head left at rest is a string of four dots 16 m long.
       const headSize = p.kind === 'alpha' ? 1.6 : p.kind === 'bullet' ? 0.42 : 1.15
-      this.spawn(sx, sy, sz, 0, 0, 0, col[0] * 2.4, col[1] * 2.4, col[2] * 2.4, 0.07, headSize, 0, 0, 0, K_SPRITE)
+      const hv = p.kind === 'bullet' ? 1 : 0
+      this.spawn(sx, sy, sz, p.vel.x * hv, p.vel.y * hv, p.vel.z * hv, col[0] * 2.4, col[1] * 2.4, col[2] * 2.4, 0.07, headSize, 0, 0, 0, K_SPRITE)
 
       if (p.kind === 'bullet') {
         /**
@@ -4606,6 +5505,17 @@ class Vfx implements VfxSystem {
          * No smoke, no spark shower, no drag: it is thin and it is gone. The
          * whole identity of this weapon against the missiles is that you see a
          * line, not an object.
+         *
+         * AND THE LINE NOW POINTS WHERE THE ROUND IS GOING. The dashes used to
+         * be written at rest, and a K_SPARK stretches along its own velocity
+         * -- with none, the shader's fallback is SCREEN-UP, so every tracer in
+         * the game was a column of little vertical ticks whatever direction
+         * the round flew, which from anywhere but directly behind the shooter
+         * is visibly wrong. Each dash now carries the round's own velocity:
+         * it rides the round for its 55 ms and the shader streaks it along
+         * the flight path. Consecutive frames' dashes now overlap on the same
+         * stretch of path instead of trailing out behind it, so the gain is
+         * cut to 0.7 of what it was to hold the line's light where it was.
          */
         const cnt = Math.max(2, Math.round(5 * q))
         const span = vl * dt
@@ -4614,8 +5524,8 @@ class Vfx implements VfxSystem {
           const fade = 1 - (k / cnt) * 0.72
           this.spawn(
             sx - ux * t, sy - uy * t, sz - uz * t,
-            0, 0, 0,
-            col[0] * 2.0 * fade, col[1] * 2.0 * fade, col[2] * 2.0 * fade,
+            p.vel.x, p.vel.y, p.vel.z,
+            col[0] * 1.4 * fade, col[1] * 1.4 * fade, col[2] * 1.4 * fade,
             0.055, 0.30 * fade + 0.06, 0, 0, 0, K_SPARK,
           )
         }
@@ -4689,13 +5599,25 @@ class Vfx implements VfxSystem {
       const id = this.wellFieldId[s]
       if (id < 0) continue
       let stillAlive = false
+      let absorbed = false
       for (let i = 0; i < fields.length; i++) {
         const f = fields[i]
-        if (f.id === id && f.alive && f.kind === 'well') { stillAlive = true; break }
+        if (f.id !== id || f.kind !== 'well') continue
+        if (f.alive) stillAlive = true
+        else absorbed = f.absorbed
+        break
       }
       if (!stillAlive) {
         this.wellFieldId[s] = -1
         this.wellGroup[s].visible = false
+        // THE WELL THAT CAUGHT A MISSILE. The sim kills a well in the same
+        // step it absorbs one (race.ts: `absorbed = true; alive = false`), so
+        // the fade this code used to apply to an absorbed well -- 0.6x, below
+        // -- could never run: the field was dead before anything read the
+        // flag, and a well that had just eaten an Alpha Missile simply
+        // vanished between two frames. It gets its collapse here instead,
+        // from where the slot last saw it: the field folds in on itself.
+        if (absorbed) this.wellCollapse(s)
       }
     }
 
@@ -4727,7 +5649,13 @@ class Vfx implements VfxSystem {
           g.position.set(f.pos.x, f.pos.y + f.radius * 0.35, f.pos.z)
           g.updateMatrix()
           g.updateMatrixWorld(true)
-          const fade = clamp01(f.life * 0.5) * clamp01(1 - (f.absorbed ? 0.4 : 0))
+          this.wellPos[slot * 3] = g.position.x
+          this.wellPos[slot * 3 + 1] = g.position.y
+          this.wellPos[slot * 3 + 2] = g.position.z
+          this.wellRad[slot] = f.radius
+          // The last two seconds of a well's life fade it out. (An absorbed
+          // well is never seen alive -- see wellCollapse.)
+          const fade = clamp01(f.life * 0.5)
           const sm = this.wellShellMat[slot]
           const cm = this.wellCoreMat[slot]
           sm.uniforms.uTime.value = this.time
@@ -4786,6 +5714,26 @@ class Vfx implements VfxSystem {
         }
       }
     }
+  }
+
+  /**
+   * A gravity well that has just swallowed a missile, folding shut: the field
+   * pulled into its core, a ring slammed closed on it, and a single dim flash
+   * at the moment it goes. The well's reward is that the missile never
+   * arrived; this is the only frame in which a player can SEE that it did its
+   * job.
+   */
+  private wellCollapse(s: number): void {
+    const x = this.wellPos[s * 3], y = this.wellPos[s * 3 + 1], z = this.wellPos[s * 3 + 2]
+    const rad = this.wellRad[s]
+    this.implode(x, y, z, WELL_RGB, Math.round(30 * this.qScale), 0.32)
+    this.spawn(
+      x, y, z, 0, 0, 0,
+      WELL_RGB[0] * 1.8, WELL_RGB[1] * 1.8, WELL_RGB[2] * 1.8,
+      0.32, rad * 2.2, -(rad * 2.0) / 0.32, 0, 0, K_RING,
+    )
+    this.flash(x, y, z, WELL_RGB, 2.2, 0.20, 1.6)
+    this.claimLight(x, y, z, WELL_RGB, 5, 0.24)
   }
 
   // -------------------------------------------------------------------------
@@ -4985,27 +5933,48 @@ class Vfx implements VfxSystem {
       if (this.time < this.defTime[i]) continue
       this.defOn[i] = 0
       const i3 = i * 3
-      const x = this.defPos[i3], y = this.defPos[i3 + 1], z = this.defPos[i3 + 2]
+      // Carried forward by the owner's velocity for however long it actually
+      // waited (a frame boundary makes that a little more than its delay).
+      const el = this.time - this.defBorn[i]
+      const x = this.defPos[i3] + this.defVel[i3] * el
+      const y = this.defPos[i3 + 1] + this.defVel[i3 + 1] * el
+      const z = this.defPos[i3 + 2] + this.defVel[i3 + 2] * el
+      _lane = this.defLane[i]
       setAxis(this.defAxis[i3], this.defAxis[i3 + 1], this.defAxis[i3 + 2])
       _rgb2[0] = this.defCol[i3]; _rgb2[1] = this.defCol[i3 + 1]; _rgb2[2] = this.defCol[i3 + 2]
       const s = this.defScale[i]
       switch (this.defKind[i]) {
-        case D_VOID_BURST:
-          this.flash(x, y, z, _rgb2, 1.6, 0.30, 2.0)
+        case D_VOID_BURST: {
+          // Queued in the mine's SPARK colour (see impact()); everything here
+          // that fills pixels takes IMPACT_FILL_K back off it, and the light
+          // gets the hue as authored, as every impact light does.
+          const fk = IMPACT_FILL_K
+          this.flash(x, y, z, _rgb2, 1.6 * fk, 0.30, 2.0)
           // The mine's lens rides the BURST rather than the implosion 0.30s
           // earlier: a void mine's whole read is suck-then-blow, and bending
           // the picture on the inhale muddies the one beat that sells it.
           this.spawnDistortion(x, y, z, 2.0, 10.0, 0.40)
-          this.spawn(x, y, z, 0, 0, 0, _rgb2[0] * 1.3, _rgb2[1] * 1.3, _rgb2[2] * 1.3, 0.44, 0.9, 9.0, 0, 0, K_SHELL)
-          this.ring(x, y, z, _rgb2, 1.0, 0.45, 0.6, 26, false)
+          this.spawn(x, y, z, 0, 0, 0, _rgb2[0] * 1.3 * fk, _rgb2[1] * 1.3 * fk, _rgb2[2] * 1.3 * fk, 0.44, 0.9, 9.0, 0, 0, K_SHELL)
+          this.ring(x, y, z, _rgb2, 1.0 * fk, 0.45, 0.6, 26, false)
           this.burst(x, y, z, _axX * 0.2, _axY * 0.2, _axZ * 0.2, Math.round(48 * s), 26, 1.0, _rgb2, 1.15, 0.5, 0.14, K_SPARK, -12, 1.3)
-          this.claimLight(x, y, z, _rgb2, 8, 0.3)
+          this.claimLight(x, y, z, MINE_RGB, 8, 0.3)
           break
+        }
         case D_ALPHA_RING:
           // Growth and gain are both cut hard here. A shockwave grown to forty
           // metres is, from inside it, a flat wall of light across the whole
           // frame for half a second after the hit — the player is blind long
           // after the moment has passed.
+          //
+          // ...and then they were cut so hard that the heaviest weapon in the
+          // game left rings whose crest (1.1 x gain x colour) peaked at a
+          // luminance of 0.07-0.16, in the item hex's 0.24-luminance red:
+          // photographed a quarter and three quarters of a second after the
+          // hit, there was nothing there to find. The gains stand; the colour
+          // is now the Alpha's IMPACT_FILL (luminance 0.65), which puts the
+          // crests at 0.20-0.43 -- 2.7x their old light: plainly there, and
+          // not a red wall for the car that drives through them a second
+          // later.
           this.ring(x, y, z, _rgb2, 0.60 / s, 0.7 * s, 1.2 * s, 10 * s, false)
           this.ring(x + _axX * 0.05, y + _axY * 0.05, z + _axZ * 0.05, _rgb2, 0.45 / s, 0.8 * s, 1.4 * s, 9 * s, true)
           break
@@ -5065,6 +6034,11 @@ class Vfx implements VfxSystem {
           )
           break
         }
+        case D_KICK_RING:
+          // The entry kick's echo: the same ground front as the first, on the
+          // deck the car is on now (the stored axis), at KICK_ECHO_GAIN.
+          this.shockRing(x, y, z, _rgb2, KICK_ECHO_GAIN, KICK_RING_LIFE, 0.9, KICK_RING_TO, true)
+          break
         case D_RAMP_KICK:
           // `s` is normalised launch power. A second column and ground front,
           // so the launch lands as a beat rather than as one frame of light.
@@ -5081,15 +6055,23 @@ class Vfx implements VfxSystem {
           break
       }
     }
+    _lane = 0
   }
 
+  /**
+   * EVICTS THE MOST FADED, NOT THE FRESHEST -- the fix spawnDistortion got,
+   * applied to the sphere that needed it first. This kept the slot with the
+   * LARGEST remaining life and overwrote it, so with all three spheres live
+   * (an EMP is two of them: the blast and its deferred pulse) the next one
+   * landed on the newest sphere and the two oldest sat there running out.
+   */
   private spawnEmp(x: number, y: number, z: number, radius: number, life: number): void {
     let slot = 0
-    let worst = -1
+    let worst = Infinity
     for (let i = 0; i < MAX_EMP; i++) {
-      if (this.empLife[i] <= 0) { slot = i; worst = -1; break }
+      if (this.empLife[i] <= 0) { slot = i; break }
       const rem = 1 - this.empAge[i] / this.empLife[i]
-      if (rem > worst) { worst = rem; slot = i }
+      if (rem < worst) { worst = rem; slot = i }
     }
     this.empAge[slot] = 0
     this.empLife[slot] = life
@@ -5131,6 +6113,15 @@ class Vfx implements VfxSystem {
         // well before the mesh has finished fading. A lens that outlived its
         // explosion read as a smear sitting on the road.
         strength: (1 - u) * (1 - u) * (1 - u),
+      })
+    }
+    // The held SINGULARITY lens goes LAST, after every explosion: postfx has a
+    // slot for it on top of MAX_DISTORT, so a pile-up of blasts never loses a
+    // lens to it, and it never loses its own to a pile-up.
+    if (this.singOn && this.singStrength > 0.004) {
+      this.blasts.push({
+        x: this.singX, y: this.singY, z: this.singZ,
+        radius: SING_LENS_R, strength: this.singStrength,
       })
     }
   }
@@ -5314,15 +6305,16 @@ class Vfx implements VfxSystem {
       // NEAR-CAMERA FADE, the same idea the particle shader uses and for the
       // same reason -- except a ribbon needs it MORE, not less. A ribbon is
       // twenty-five metres of geometry laid along the exact path the car has
-      // just driven, the chase camera sits nine metres back on that path, and
-      // the strip is built to face the camera at every sample: so the camera
-      // does not merely pass the ribbon, it passes THROUGH it, and the sample
-      // it is standing on degenerates into a metre-wide sheet across the lens.
-      // Measured on a held tier-3 slide, that was a soft white disc a fifth of
-      // the frame across sitting on the road on the outside of every corner,
-      // plus a band of it over the sky where the tail had already gone by. The
-      // head of the ribbon is 9 m out, so nothing anyone is looking at loses
-      // anything at all.
+      // just driven, the chase camera rides fourteen metres back over that
+      // path (it was nine when this was measured), and the strip is built to
+      // face the camera at every sample: so the camera does not merely pass
+      // the ribbon, it passes over and through it, and the sample under it
+      // degenerates into a metre-wide sheet across the lens. Measured on a
+      // held tier-3 slide, that was a soft white disc a fifth of the frame
+      // across sitting on the road on the outside of every corner, plus a band
+      // of it over the sky where the tail had already gone by. The head of
+      // the ribbon is about thirteen metres out, so nothing anyone is looking
+      // at loses anything at all.
       const dcam = Math.sqrt(vx * vx + vy * vy + vz * vz)
       const nf = dcam <= 2.4 ? 0 : dcam >= 8.0 ? 1 : (dcam - 2.4) * 0.1786
       const t = j / (N - 1)
@@ -5366,23 +6358,28 @@ class Vfx implements VfxSystem {
     // The racer's frame, same rule as updateRacer: a compass yaw and world +Y
     // on a flat track, the sim's own (fwd, up) on a gravity one. The two arc
     // ribbons STRADDLE the car, so on a wall a world-+Y basis stands them on
-    // end and draws one vertical line where there should be a pair.
-    let fwdX = Math.sin(r.yaw), fwdY = 0, fwdZ = Math.cos(r.yaw)
-    let rgtX = -Math.cos(r.yaw), rgtY = 0, rgtZ = Math.sin(r.yaw)
+    // end and draws one vertical line where there should be a pair. And the
+    // DRAWN pose, as in updateRacer: the ribbon heads are nailed to the tail
+    // on screen, and read off the live state they rode up to a metre ahead of
+    // it, jittering with the accumulator.
+    const yaw = fx.drawYaw
+    let fwdX = Math.sin(yaw), fwdY = 0, fwdZ = Math.cos(yaw)
+    let rgtX = -Math.cos(yaw), rgtY = 0, rgtZ = Math.sin(yaw)
     let upX = 0, upY = 1, upZ = 0
     if (this.gravity) {
-      upX = r.up.x; upY = r.up.y; upZ = r.up.z
-      fwdX = r.fwd.x; fwdY = r.fwd.y; fwdZ = r.fwd.z
+      upX = fx.drawUX; upY = fx.drawUY; upZ = fx.drawUZ
+      fwdX = fx.drawFX; fwdY = fx.drawFY; fwdZ = fx.drawFZ
       rgtX = fwdY * upZ - fwdZ * upY
       rgtY = fwdZ * upX - fwdX * upZ
       rgtZ = fwdX * upY - fwdY * upX
       const rl = Math.hypot(rgtX, rgtY, rgtZ) || 1
       rgtX /= rl; rgtY /= rl; rgtZ /= rl
     }
+    const rpx = fx.drawX, rpy = fx.drawY, rpz = fx.drawZ
     const tF = -hz * 1.02, tU = hy * 0.35
-    const tx = r.pos.x + fwdX * tF + upX * tU
-    const ty = r.pos.y + fwdY * tF + upY * tU
-    const tz = r.pos.z + fwdZ * tF + upZ * tU
+    const tx = rpx + fwdX * tF + upX * tU
+    const ty = rpy + fwdY * tF + upY * tU
+    const tz = rpz + fwdZ * tF + upZ * tU
     const rib0 = slot * RIB_PER_RACER
 
     // THE TWO ANCHORS. Rear corners of the silhouette, at the height the class
@@ -5398,9 +6395,9 @@ class Vfx implements VfxSystem {
     // `drop` is taken along the racer's up for the same reason the contact
     // point is -- on a wall, "down toward the road" is sideways.
     const bF = -hz * 0.90, bU = hy * 0.30 - drop * 0.45
-    const bx = r.pos.x + fwdX * bF + upX * bU
-    const ay = r.pos.y + fwdY * bF + upY * bU
-    const bz = r.pos.z + fwdZ * bF + upZ * bU
+    const bx = rpx + fwdX * bF + upX * bU
+    const ay = rpy + fwdY * bF + upY * bU
+    const bz = rpz + fwdZ * bF + upZ * bU
 
     if (!fx.trailReady) {
       for (let i = 0; i < N; i++) {
@@ -5448,8 +6445,8 @@ class Vfx implements VfxSystem {
     if (lod <= 0 || r.respawnTime > 0) {
       this.clearRibbon(rib0)
       if (fx.ribOn) {
-        this.collapseRibbon(rib0 + RIB_LEFT, r.pos.x, r.pos.y, r.pos.z)
-        this.collapseRibbon(rib0 + RIB_RIGHT, r.pos.x, r.pos.y, r.pos.z)
+        this.collapseRibbon(rib0 + RIB_LEFT, rpx, rpy, rpz)
+        this.collapseRibbon(rib0 + RIB_RIGHT, rpx, rpy, rpz)
         fx.ribOn = false
       }
       fx.ribEnv = 0
@@ -5613,6 +6610,7 @@ class Vfx implements VfxSystem {
     for (let i = 0; i < this.wellCoreMat.length; i++) this.wellCoreMat[i].dispose()
     for (let i = 0; i < this.empMat.length; i++) this.empMat[i].dispose()
     for (let i = 0; i < this.distMat.length; i++) this.distMat[i].dispose()
+    this.singMat.dispose()
     this.group.clear()
     this.scene.remove(this.group)
   }

@@ -68,8 +68,11 @@ const sim = () => page.evaluate(() => {
     v: +Math.hypot(r?.vel?.x ?? 0, r?.vel?.z ?? 0).toFixed(1),
     side: r?.driftSide ?? 0, tier: r?.driftTier ?? -2,
     charge: +(r?.driftCharge ?? 0).toFixed(2),
-    // The live emitter count, straight off the particle system.
-    spawns: g.vfx?.spawnCount ?? -1,
+    // The live emitter count, straight off the particle system -- the
+    // PLAYER's own lane where the build has one, because the whole-pool
+    // count is eight cars' worth of emitters and the question here is about
+    // one of them (see Vfx.localSpawnCount).
+    spawns: g.vfx?.localSpawnCount ?? g.vfx?.spawnCount ?? -1,
   }
 })
 

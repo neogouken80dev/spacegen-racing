@@ -20,7 +20,11 @@ import { chromium } from 'playwright'
 import { createServer } from 'node:http'
 import { readFile, mkdir } from 'node:fs/promises'
 import { join, extname } from 'node:path'
-import { createCanvas, loadImage } from 'canvas'
+// pngjs, not node-canvas. This probe was written against `canvas`, which is
+// not a dependency of this repo (package.json has pngjs, and every other
+// probe decodes with it), so it died on its first import and the blast lens
+// had no pixel check at all. All it ever needed was the RGBA of a PNG.
+import { PNG } from 'pngjs'
 
 const ROOT = new URL('../dist/', import.meta.url).pathname
 const MIME = {
@@ -71,6 +75,33 @@ await page.waitForTimeout(500)
 await clickText(['START RACE', 'START'])
 await page.waitForTimeout(3500)
 
+// Freeze the whole field so two captures differ by the blast and nothing
+// else -- installed while the grid is still counting down (see below), and
+// holding the countdown clock too, so the start lights cannot change and no
+// car ever launches into a neighbour.
+await page.evaluate(() => {
+  const g = window.__GAME__
+  const race = g.race
+  const snaps = race.state.racers.map((r) => ({
+    pos: { ...r.pos }, vel: { ...r.vel }, fwd: { ...r.fwd }, up: { ...r.up },
+    yaw: r.yaw, splineS: r.splineS, altitude: r.altitude,
+  }))
+  const phase = race.state.phase, countdown = race.state.countdown
+  const orig = race.step.bind(race)
+  race.step = function () {
+    orig()
+    race.state.phase = phase
+    race.state.countdown = countdown
+    race.state.racers.forEach((r, i) => {
+      const s = snaps[i]
+      Object.assign(r.pos, s.pos); Object.assign(r.vel, s.vel)
+      Object.assign(r.fwd, s.fwd); Object.assign(r.up, s.up)
+      r.yaw = s.yaw; r.yawRate = 0; r.splineS = s.splineS; r.altitude = s.altitude
+      r.driftSide = 0; r.spinTime = 0; r.stunTime = 0; r.boostMag = 0
+    })
+  }
+})
+
 /**
  * PIN THE QUALITY TIER FIRST.
  *
@@ -88,32 +119,28 @@ await page.evaluate(() => {
   if (g.tier !== 'high') g.setTier('high')
 })
 await page.waitForTimeout(2500)
+/**
+ * NOTHING BUT THE CANVAS MAY CHANGE BETWEEN THE THREE FRAMES.
+ *
+ * They were taken during the start countdown with the HUD showing and the
+ * countdown still running -- photographed, they read "1", "GO!" and "GO!"
+ * with the gantry lights gone green -- so the digits and the start lights
+ * changed under the lens between every pair, and that, not the front, was
+ * what the columns measured: the probe PASSED on the countdown digits.
+ * Waiting for the race instead is worse, because by then the grid has
+ * launched and the freeze holds cars in contact, bumping every step. So the
+ * DOM (digits, banners, position label) is hidden -- the composite is what
+ * is under test and only the canvas draws it -- and the freeze above holds
+ * the countdown clock where it is, lights and all.
+ */
+await page.addStyleTag({
+  content: 'body * { visibility: hidden !important } canvas { visibility: visible !important }',
+})
 const hasPost = await page.evaluate(() => !!window.__GAME__.post)
 if (!hasPost) {
   console.log('\nSKIPPED: no post-processing chain on this tier, nothing to measure.')
   await browser.close(); server.close(); process.exit(1)
 }
-
-// Freeze the whole field so two captures differ by the blast and nothing else.
-await page.evaluate(() => {
-  const g = window.__GAME__
-  const race = g.race
-  const snaps = race.state.racers.map((r) => ({
-    pos: { ...r.pos }, vel: { ...r.vel }, fwd: { ...r.fwd }, up: { ...r.up },
-    yaw: r.yaw, splineS: r.splineS, altitude: r.altitude,
-  }))
-  const orig = race.step.bind(race)
-  race.step = function () {
-    orig()
-    race.state.racers.forEach((r, i) => {
-      const s = snaps[i]
-      Object.assign(r.pos, s.pos); Object.assign(r.vel, s.vel)
-      Object.assign(r.fwd, s.fwd); Object.assign(r.up, s.up)
-      r.yaw = s.yaw; r.yawRate = 0; r.splineS = s.splineS; r.altitude = s.altitude
-      r.driftSide = 0; r.spinTime = 0; r.stunTime = 0; r.boostMag = 0
-    })
-  }
-})
 await page.waitForTimeout(2000)
 await mkdir(new URL('../shots/', import.meta.url).pathname, { recursive: true })
 
@@ -123,25 +150,25 @@ await mkdir(new URL('../shots/', import.meta.url).pathname, { recursive: true })
  * what is being measured is the look AT a given front, not its tail.
  */
 async function shoot(name, on) {
-  const where = await page.evaluate((live) => {
+  await page.evaluate((live) => {
     const g = window.__GAME__
-    if (g.__bk) { clearInterval(g.__bk); g.__bk = null }
-    const r = g.race.state.racers[0]
-    // 9 m up the road from the car, roughly frame centre from a chase rig.
-    const p = {
-      x: r.pos.x + r.fwd.x * 9, y: r.pos.y + r.fwd.y * 9 + 1.2, z: r.pos.z + r.fwd.z * 9,
+    // Pushed in through the public setter, in the pass's own screen space, so
+    // this measures the SHADER rather than the projection.
+    //
+    // APPENDED TO main.ts's OWN CALL, NOT RACED AGAINST IT. This used to set
+    // the front from a 4 ms interval "because main.ts calls setBlasts every
+    // frame and would otherwise overwrite this" -- but main.ts calls it
+    // IMMEDIATELY before post.render, in the same task, so the interval
+    // could never land between the two: the front was overwritten before
+    // every single draw, and no frame this probe ever photographed had one
+    // in it. Wrapping the setter puts it into the list main.ts hands over.
+    if (!g.post.__probeSet) {
+      const set = g.post.setBlasts.bind(g.post)
+      g.post.__probeSet = set
+      g.post.setBlasts = (list) => set(window.__PROBE_BLAST__ ? list.concat([window.__PROBE_BLAST__]) : list)
     }
-    if (!live) { g.post.setBlasts([]); return null }
-    // Pushed straight in through the public setter, in the pass's own screen
-    // space, so this measures the SHADER rather than the projection. The
-    // interval is needed because main.ts calls setBlasts every frame from the
-    // live VFX list and would otherwise overwrite this on the next one.
-    g.__bk = setInterval(() => {
-      g.post.setBlasts([{ x: 0.5, y: 0.5, radius: 0.18, strength: 1 }])
-    }, 4)
-    return p
+    window.__PROBE_BLAST__ = live ? { x: 0.5, y: 0.5, radius: 0.18, strength: 1 } : null
   }, on)
-  void where
   await page.waitForTimeout(1400)
   const path = new URL(`../shots/blast-${name}.png`, import.meta.url).pathname
   await page.screenshot({ path })
@@ -154,18 +181,11 @@ const off = await shoot('off', false)
 // the gap between these two is not a result.
 const off2 = await shoot('off2', false)
 const on = await shoot('on', true)
-await page.evaluate(() => {
-  const g = window.__GAME__
-  if (g.__bk) { clearInterval(g.__bk); g.__bk = null }
-  g.post.setBlasts([])
-})
+await page.evaluate(() => { window.__PROBE_BLAST__ = null })
 
 async function pix(path) {
-  const img = await loadImage(path)
-  const c = createCanvas(img.width, img.height)
-  const ctx = c.getContext('2d')
-  ctx.drawImage(img, 0, 0)
-  return { d: ctx.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height }
+  const png = PNG.sync.read(await readFile(path))
+  return { d: png.data, w: png.width, h: png.height }
 }
 const A = await pix(off)
 const N = await pix(off2)
@@ -185,7 +205,10 @@ for (let y = 0; y < A.h; y += 2) {
       + Math.abs(P.d[i + 2] - Q.d[i + 2])
     const t = Math.hypot(x - cx, y - cy) / R
     const k = t < 1 ? Math.min(BANDS - 2, Math.floor(t * (BANDS - 1))) : BANDS - 1
-    sum[k] += d3(A, B); noise[k] += d3(A, N); n[k]++
+    // ADJACENT PAIRS: the front is judged off2 -> on and the noise off -> off2,
+    // the same 1.4 s apart. Judging off -> on put twice the world's own drift
+    // in the blast column as in the noise column, which reads as signal.
+    sum[k] += d3(N, B); noise[k] += d3(A, N); n[k]++
   }
 }
 console.log('\n=== BLAST REFRACTION, MEASURED IN PIXELS =======================')
@@ -206,17 +229,16 @@ for (let k = 0; k < BANDS; k++) {
   )
 }
 /**
- * THE VERDICT USES THE RAW COLUMN, NOT THE NOISE-SUBTRACTED ONE.
+ * THE VERDICT: LOCALITY ON THE RAW COLUMN, AND A SIGNAL ABOVE THE NOISE.
  *
- * The noise column is a second pair of frames of a world that is still
- * animating -- particles, emissive strips, bloom settling -- so it is the same
- * order as the signal in the bands where the scene is busy, and subtracting it
- * band-by-band produces negative "signal" that means nothing. What it is good
- * for is the shape: it shows the scene noise is spread evenly while the blast
- * difference is not.
- *
- * The claim being tested is LOCALITY -- a refraction moves pixels only where
- * the front is -- and raw inside-vs-outside states that directly.
+ * The raw inside-vs-outside test states the claim directly -- a refraction
+ * moves pixels only where the front is -- but on its own it cannot tell a
+ * front from anything else that animates in the middle of the frame. With
+ * the front never actually reaching a draw (see shoot()), it passed HEAD's
+ * build on a signal of 0.4: the raw inside column was the gantry and the
+ * grid animating, and the noise column said so. Now that the world is
+ * frozen, DOM and countdown included, the noise column is small and the
+ * noise-subtracted peak means what it says, so it has to clear a floor too.
  */
 const rawIn = Math.max(
   sum[0] / Math.max(1, n[0]),
@@ -238,7 +260,10 @@ if (rawIn < outside * 3) {
   fail.push(`not local to the front: inside ${rawIn.toFixed(2)} vs outside `
     + `${outside.toFixed(2)} -- a refraction must not move the whole frame`)
 }
-void peakBand; void peak
+if (peak < 4) {
+  fail.push(`no band inside the front changed more than the frozen world does on its own `
+    + `(best signal ${peak.toFixed(2)} in band ${peakBand}) -- the front is not in the picture`)
+}
 if (errors.length) fail.push(`${errors.length} page errors: ${errors[0]}`)
 console.log(fail.length ? `\nFAILED:\n  ${fail.join('\n  ')}` : '\nBLAST REFRACTION PASSED')
 await browser.close(); server.close()
