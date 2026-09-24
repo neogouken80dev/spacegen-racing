@@ -32,13 +32,13 @@ import { circuit, type Seg } from './circuit'
  *   - NO SURFACE BELOW GRIP 0.70. Dry sand is `gravel` (0.70) through the
  *     dunes; wet packed sand and the boardwalk are `tarmac` (1.0) everywhere
  *     else. No ice, no oil, anywhere on the circuit.
- *   - FORGIVING EDGES. `open: true` runs the length of the tideline and
- *     nowhere else -- the beach continues past the verge there, so running
- *     wide costs time on sand, not a wall. Where the lap DOES fence you in,
- *     the dunes use `bounce` (dune fencing catches a car rather than
- *     scrubbing or launching it) and everything else is an ordinary wall,
- *     which is exactly where a beginner expects a boardwalk railing or a pier
- *     rail to be.
+ *   - FORGIVING EDGES. The dunes use `bounce` (dune fencing catches a car
+ *     rather than scrubbing or launching it) and everything else is an
+ *     ordinary wall, which is exactly where a beginner expects a boardwalk
+ *     railing, a pier rail or a sea wall to be. The tideline used to be
+ *     `open` -- the beach running on past the verge -- and that turned out to
+ *     be the opposite of forgiving: it was where 120 of the lap's 131 respawns
+ *     happened over 200 seeds. See the tideline segments below.
  *
  * What did NOT survive: the crosswind. The harmonic version carried a
  * moderate (10 m/s^2) sea breeze over the dunes, ramped and behind `bounce`
@@ -114,7 +114,7 @@ import { circuit, type Seg } from './circuit'
  * `Attrs.tag` exists purely for that bookkeeping. The theme, though, reads
  * `TrackNode.tag` directly (`ctx.tagSample` does a literal `.find(n => n.tag
  * === tag)` over `def.nodes`), and it needs FIVE of them here: `start`,
- * `dunes` (first gravel), `tideline` (first open coastal stretch), `pier`
+ * `dunes` (first gravel), `tideline` (the sea-wall stretch), `pier`
  * (the loop) and `pier-apex` (the top of the loop, a concept `circuit()`
  * itself has no notion of). So `build()` below replays the exact node-count
  * arithmetic `circuit()`'s own `walk()` uses -- per segment type, against the
@@ -280,29 +280,41 @@ const SEGS: Seg[] = [
   // of the file header for why a softer hairpin here measured WORSE.
   { t: 'corner', r: 50, deg: 125, w: 27, bank: 6, toY: 11, tag: 'lagoon-hook' },
 
-  // ---- THE TIDELINE. Wet packed sand (`tarmac`, full grip) and the first
-  // OPEN coastal segment: the beach runs on past the verge here, so drifting
-  // wide costs sand time, never a wall. This is the fastest stretch on the
-  // lap by feel -- flat out into two sweepers that never ask for a lift --
-  // even though Brake Zone edges it out by a few metres on the tape measure;
-  // the identity this whole circuit is built to deliver.
-  { t: 'straight', len: 215, tag: 'tideline', open: true, w: 26, toY: 12 },
+  // ---- THE TIDELINE. Wet packed sand (`tarmac`, full grip) along the sea
+  // wall. This is the fastest stretch on the lap by feel -- flat out into two
+  // sweepers that never ask for a lift -- even though Brake Zone edges it out
+  // by a few metres on the tape measure; the identity this whole circuit is
+  // built to deliver.
+  //
+  // IT WAS OPEN, AND THAT WAS THE LAP'S ONE TRAP. These five segments were
+  // authored `open` -- the beach running on past the verge, so drifting wide
+  // cost sand time rather than a wall. What it actually cost was the race:
+  // a car that ran wide at the fastest point on the lap carried on over the
+  // sand until the off-track timer respawned it. Over 200 seeds at Normal,
+  // 120 of the lap's 131 respawns happened on these five segments -- 0.60 a
+  // race here, 0.66 on the whole lap. Walled: none here, 0.05 on the lap. The
+  // wall is the same timber barrier the pier village uses, which photographs
+  // as the sea wall of a coast road with the sand and the surf right beyond
+  // it -- so the stretch still reads as the shoreline it is, and needed no
+  // new art to say so.
+  { t: 'straight', len: 215, tag: 'tideline', w: 26, toY: 12 },
 
   // BAY SWEEP A -- sweeper, r120 (band 110-220: flat out, still registers as
   // a corner to the AI's drift-hold gate). The shoreline itself curving away;
   // nobody lifts here.
-  { t: 'corner', r: 120, deg: 38, bank: 5, open: true, w: 26, toY: 13, tag: 'bay-sweep-a' },
+  { t: 'corner', r: 120, deg: 38, bank: 5, w: 26, toY: 13, tag: 'bay-sweep-a' },
 
-  { t: 'straight', len: 105, open: true, w: 26, toY: 13, tag: 'tideline-mid' },
+  { t: 'straight', len: 105, w: 26, toY: 13, tag: 'tideline-mid' },
 
   // BAY SWEEP B -- sweeper, r155. A second, even gentler arc holding the
   // shoreline's curve -- the two sweepers together are most of what makes
   // this the fastest lap in the game.
-  { t: 'corner', r: 155, deg: 32, bank: 4, open: true, w: 26, toY: 14, tag: 'bay-sweep-b' },
+  { t: 'corner', r: 155, deg: 32, bank: 4, w: 26, toY: 14, tag: 'bay-sweep-b' },
 
-  { t: 'straight', len: 105, open: true, w: 26, toY: 14, tag: 'tideline-end' },
+  { t: 'straight', len: 105, w: 26, toY: 14, tag: 'tideline-end' },
 
-  // ---- The beach ends here; ordinary walls resume for the pier village.
+  // ---- The sea wall ends here; ordinary walls carry on through the pier
+  // village.
   // HARBOR LEFT / HARBOR RIGHT -- medium, r66 then r74, opposite-handed: a
   // proper rhythm pair (the lap's only real esses) that bleeds speed off the
   // tideline before the Pier without ever asking for a full brake.

@@ -251,8 +251,18 @@ export const RUSTFALL: TrackDef = {
     { p: [-300, 1, 480], w: 15.938, bounce: true, surface: 'tarmac' },
     { p: [-260, 1, 468], w: 18.75, surface: 'tarmac' },
     { p: [-226, 1.5, 436], w: 20.625, bank: 22, surface: 'tarmac', tag: 'ring' },
-    { p: [-208, 3.5, 392], w: 20.625, bank: 34, surface: 'metal' },
-    { p: [-210, 5.5, 344], w: 20.625, bank: 34, surface: 'metal' },
+    // THE CARGO RING'S TWO STEEPEST NODES, 34 -> 22 degrees. The ring was
+    // where the AI most often ended up pinned against a barrier until the
+    // stall watchdog respawned it: 34 degrees of bank on metal at ring speed
+    // let a car that clipped the inside slide down onto the wall and stay
+    // there. At 22, level with the node before it, respawns in the ring fell
+    // from 0.29 to 0.14 a race and on the whole lap from 0.77 to 0.62,
+    // measured over 400 seeds at Normal (the first 30-seed read said 0.57 ->
+    // 0.10 and was luck; so was a 24-seed one that said it got worse). The
+    // lap barely moved: gravity.test's pinned lap 54.352 -> 54.292 s. The
+    // metal stays -- it is the ring's identity.
+    { p: [-208, 3.5, 392], w: 20.625, bank: 22, surface: 'metal' },
+    { p: [-210, 5.5, 344], w: 20.625, bank: 22, surface: 'metal' },
     { p: [-240.4, 6, 309.9], w: 20.625, bank: 18, surface: 'metal' },
     // THE "ESSES" WAS NEVER AN S, and that is why it was pinched.
     //

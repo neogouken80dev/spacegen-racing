@@ -204,8 +204,8 @@ describe('the catalogue', () => {
  * target by hand until the test passes.
  */
 const RECORD_SEEDS: Record<string, number> = {
-  rustfall: 4, cryostatic: 8, aetherion: 2, hollowchoir: 1,
-  emberfall: 1, abyssal: 1, halcyon: 7, neonspire: 5,
+  rustfall: 7, cryostatic: 8, aetherion: 2, hollowchoir: 1,
+  emberfall: 1, abyssal: 1, halcyon: 1, neonspire: 1,
 }
 
 function fastestLap(trackId: string, diff: 'expert' | 'normal', seed: number): number {

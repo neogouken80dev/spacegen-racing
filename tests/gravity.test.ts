@@ -442,7 +442,14 @@ describe('the AI', () => {
     //           inspection and is not claimed to be.
     //           Note this is Rustfall, not Elkarim -- the 55s floor two
     //           entries up is that circuit's and is not what this line pins.
-    expect(avg).toBeCloseTo(54.352, 2)
+    //   54.29s  THE CARGO RING'S TWO STEEPEST NODES WENT FROM 34 TO 22
+    //           DEGREES OF BANK (content/tracks/rustfall.ts), because the ring
+    //           was where the AI most often got pinned to a barrier until the
+    //           stall watchdog respawned it: 0.29 -> 0.14 respawns a race in
+    //           the ring over 400 seeds. FASTER by 0.06s, which is what a car
+    //           that no longer sometimes sits on a wall for a second and a
+    //           half looks like averaged over a field.
+    expect(avg).toBeCloseTo(54.292, 2)
   })
 })
 

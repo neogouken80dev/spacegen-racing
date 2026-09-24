@@ -717,9 +717,19 @@ const SEGS: Seg[] = [
   // correction cannot tell them apart and they were balanced to roughly equal
   // spans afterwards. See the header for why the feature moved here from the
   // old T13-to-Maglev-C run.
-  { t: 'straight', len: 68.47, w: 31, tag: 'squeeze' },
-  { t: 'straight', len: 78.47, w: 28 },
-  { t: 'straight', len: 68.47, w: 31, toY: 32 },
+  //
+  // THE PINCH IS BACK: 31 -> 28 -> 31 became 20 -> 17.5 -> 20, the authored
+  // narrowing at the widened street's scale. As a lay-by it did nothing a
+  // straight does not do; restored, it is the lap's one place where holding a
+  // line against a car alongside is the whole question. A DESIGN fix, not a
+  // safety one, and measured to cost nothing: over 200 seeds at Normal the
+  // lap's respawns are 0.04 a race before and after and there are none in the
+  // Squeeze either way (an earlier 30-seed read claiming 0.10 -> 0 was noise).
+  // 17.5 m is still wider than the narrowest corner exits elsewhere on the
+  // lap, so nothing here asks more of a car than the track already does.
+  { t: 'straight', len: 68.47, w: 20, tag: 'squeeze' },
+  { t: 'straight', len: 78.47, w: 17.5 },
+  { t: 'straight', len: 68.47, w: 20, toY: 32 },
 
   // ---- THE HOLLOW LOOPBACK, the "2"'s top hook: 66m / 40.5m / 66m, -172
   // degrees in total. Two 86-degree corners rather than one 172-degree arc --

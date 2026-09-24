@@ -200,23 +200,28 @@ export const ACH_CIRCUIT_BY_ID: ReadonlyMap<string, AchievementCircuit> =
  * makes it provably beatable: the lap that set it is under it.
  *
  *              expert fastest (seed, slot)  target   expert race-best p50   normal fastest
- *   Elkarim         47.783     (4, 5)       47.8          48.55                50.17
+ *   Elkarim         47.733     (7, 5)       47.8          48.13                50.22
  *   Frosthelm       52.117     (8, 7)       52.2          53.70                55.43
  *   Namaresh        59.683     (2, 4)       59.7          60.47                61.62
  *   Centurion P.    54.100     (1, 2)       54.2          55.47                57.30
  *   Ashkar          78.017     (1, 5)       78.1          79.85                82.32
  *   Meridian Deep   75.367     (1, 5)       75.4          76.88                80.58
- *   Halcyon Bay     52.683     (7, 2)       52.7          52.83                55.60
- *   Zhen-9          81.317     (5, 7)       81.4          83.08                86.07
+ *   Halcyon Bay     52.500     (1, 5)       52.6          52.88                54.55
+ *   Zhen-9          81.100     (1, 5)       81.2          82.28                85.73
  *
  * Centurion Prime's record is a whole tenth (3,246 steps of 1/60 s), and since
  * a beat is STRICTLY under, its target is the next tenth up rather than the lap
  * itself -- the same "the record lap is under its own target" rule as the rest.
  * Re-measured 2026-09-24 against this tree; every figure above reproduced.
+ * Then re-measured the same day after three track fixes (the cargo ring's
+ * bank on Elkarim, the tideline walled on Halcyon, the Squeeze narrowed on
+ * Zhen-9): Elkarim's record moved to another race and kept its 47.8 target,
+ * Halcyon's fell to 52.6 and Zhen-9's to 81.2. The other five reproduced to
+ * the thousandth.
  *
  * NOT TRIVIAL, AND THAT IS THE OTHER HALF OF THE MEASUREMENT: of 64 Expert
- * best laps per circuit, exactly one beat its target (the one that set it),
- * and of 64 NORMAL best laps, none did -- the Normal field's single fastest
+ * best laps per circuit, one or two beat the target (one of them the lap
+ * that set it), and of 64 NORMAL best laps, none did -- the Normal field's single fastest
  * lap is 1.9 to 5.2 seconds off. It is a lap a very good race produces, not a
  * lap an ordinary one stumbles into. tests/achievements.test.ts replays the
  * record-setting race for each circuit and fails if its lap no longer beats
@@ -234,8 +239,8 @@ export const LAP_TARGETS: Readonly<Record<string, number>> = {
   hollowchoir: 54.2,
   emberfall: 78.1,
   abyssal: 75.4,
-  halcyon: 52.7,
-  neonspire: 81.4,
+  halcyon: 52.6,
+  neonspire: 81.2,
 }
 
 // ---------------------------------------------------------------------------
