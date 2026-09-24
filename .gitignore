@@ -21,3 +21,7 @@ track-plans*.png
 
 # design benches (tools/bench) build output
 tools/bench/dist/
+
+# Agent worktrees and local agent state. Branches are merged by hand; the
+# folders themselves are scratch.
+.claude/

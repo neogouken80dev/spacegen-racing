@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from 'vite'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
@@ -50,4 +51,13 @@ export default defineConfig({
     },
   },
   server: { host: true, port: 5173 },
+  test: {
+    // Agent worktrees live under .claude/worktrees/ inside this checkout, each
+    // a full copy of tests/. Vitest's default exclude does not know the
+    // folder, so a run from the root collected every copy and ran the suite
+    // two and three times over, against three different versions of src/ --
+    // a pass that proved nothing about this one. Seen when a two-file run
+    // reported five files.
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**'],
+  },
 })
