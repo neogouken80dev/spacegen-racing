@@ -296,6 +296,9 @@ const ORD_SUF = ['', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th', 'th',
 const TIER_NAME = ['SPARK', 'FLARE', 'NOVA', 'SINGULARITY']
 const TIER_COLOR = ['#3d8bff', '#b44dff', '#ffd23f', '#ffffff']
 
+/** The minimap's mine diamond: the mine's own colour, whatever that becomes. */
+const MINE_MAP_COLOR = '#' + ITEMS.voidMine.color.toString(16).padStart(6, '0')
+
 /**
  * How many COMPLETED laps the split list will show at once.
  *
@@ -2380,7 +2383,11 @@ class HudImpl implements Hud {
       this.project(f.pos.x, f.pos.z)
       const x = this.px, y = this.py
       if (f.kind === 'mine') {
-        ctx.fillStyle = '#b44dff'
+        // Read from the item, not typed out: this was the literal '#b44dff'
+        // after the mine itself moved to teal (content/items.ts), so the map
+        // drew a purple diamond for a teal orb -- and that purple is the
+        // player's own FLARE tier, which is why the mine was moved at all.
+        ctx.fillStyle = MINE_MAP_COLOR
         ctx.beginPath()
         ctx.moveTo(x, y - 3.4)
         ctx.lineTo(x + 3.4, y)

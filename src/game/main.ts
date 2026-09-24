@@ -3058,11 +3058,16 @@ export class Game {
 
       // The final-lap bed. Keyed off the local racer's lap so the swap lands
       // when the PLAYER starts their last lap, not when the leader does.
+      // `RacerState.lap` counts laps COMPLETED (sim/race.ts sets it to
+      // `lapsDone`), so the last lap begins at total - 1. This used to test
+      // `lap >= total`, which is true only once the flag has fallen -- the
+      // same off-by-one the lapFinal sting had in audio/plan.ts. It was
+      // silent only because no track ships a `final` bed yet.
       if (this.phase === 'racing') {
         const lap = st.racers[this.localId]?.lap ?? 0
         if (lap !== this.lastMusicLap) {
           this.lastMusicLap = lap
-          this.audio.music(this.track.def.id, lap >= (st.totalLaps ?? 3))
+          this.audio.music(this.track.def.id, lap >= (st.totalLaps ?? 3) - 1)
         }
       }
       // ONE TOGGLE, EVERY CONSUMER. `reduceMotion` here is the player's own
