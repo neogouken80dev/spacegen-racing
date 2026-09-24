@@ -10,12 +10,31 @@ export interface ItemDef {
   description: string
 }
 
+/**
+ * `color` is presentation only: the HUD, the missile and mine meshes and the
+ * VFX read it, and nothing under src/sim/ does (the sim imports ITEM_PARAMS,
+ * ITEM_ORDER and the weights, never ITEMS), so no colour here can move the
+ * determinism hash.
+ *
+ * TWO OF THESE WERE DRIFT TIERS. The Rail Missile was #ffd23f and the Void
+ * Mine #b44dff, which are exactly the HUD's NOVA and FLARE (ui/hud.ts
+ * TIER_COLOR, styles.css --sg-t2 / --sg-t1): an incoming-rail warning and the
+ * player's own tier-2 gauge were the same gold, and a mine on the road was
+ * the colour of their tier-1 drift. They now sit in the two gaps on the hue
+ * wheel nothing else claims -- rail an electric lime (92 deg; 38 from the
+ * Overdrive's pale yellow, 48 from nitro green), mine a deep teal (168 deg;
+ * 33 from the nearest tier hue, darker than the gatling's mint so the two
+ * greens separate on lightness as well). The mine is held to about twice the
+ * old purple's luminance rather than a full-brightness teal, because the
+ * deployed orb's shader in render/entities.ts multiplies this colour by up to
+ * 2.75 on its armed beat.
+ */
 export const ITEMS: Record<ItemId, ItemDef> = {
   laserGatling: { id: 'laserGatling', name: 'Pulse Gatling', charges: 1, color: 0x35ff9e, icon: 'gatling', description: 'Three seconds of auto-fire. Hold a racer in your sights to break them.' },
-  voidMine:      { id: 'voidMine',      name: 'Void Mine',      charges: 1, color: 0xb44dff, icon: 'mine',    description: 'Drops behind you. Hold back to lob it further. Arms in 0.5s.' },
+  voidMine:      { id: 'voidMine',      name: 'Void Mine',      charges: 1, color: 0x18c7a4, icon: 'mine',    description: 'Drops behind you. Hold back to lob it further. Arms in 0.5s.' },
   nitro:         { id: 'nitro',         name: 'Nitro',          charges: 1, color: 0x2fe36b, icon: 'nitro',   description: 'Instant boost. Clears light debuffs.' },
   nitroTriple:   { id: 'nitroTriple',   name: 'Nitro x3',       charges: 3, color: 0x2fe36b, icon: 'nitro3',  description: 'Three boosts, held as orbiting pips.' },
-  railMissile:   { id: 'railMissile',   name: 'Rail Missile',   charges: 1, color: 0xffd23f, icon: 'rail',    description: 'Fires dead straight. Rewards aim.' },
+  railMissile:   { id: 'railMissile',   name: 'Rail Missile',   charges: 1, color: 0x95ff38, icon: 'rail',    description: 'Fires dead straight. Rewards aim.' },
   seekerMissile: { id: 'seekerMissile', name: 'Seeker Missile', charges: 1, color: 0xff8b2f, icon: 'seeker',  description: 'Homes on the racer ahead. Breakable lock.' },
   alphaMissile:  { id: 'alphaMissile',  name: 'Alpha Missile',  charges: 1, color: 0xff2f5e, icon: 'alpha',   description: 'Hunts 1st place along the spline.' },
   empBomb:       { id: 'empBomb',       name: 'EMP Bomb',       charges: 1, color: 0x5ad2ff, icon: 'emp',     description: 'Locks out every racer but you.' },

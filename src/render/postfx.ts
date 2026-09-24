@@ -256,8 +256,13 @@ const WARP_SHAPE = 0.65
  * branch in a per-pixel loop, so the cost is paid on every frame whether the
  * slot is live or not -- which is exactly why the shader tests `w <= 0` and
  * skips, rather than there being ten of them.
+ *
+ * ...PLUS ONE, for the lens the player's own SINGULARITY holds open at the
+ * rear axle for as long as tier 3 is held (see vfx.ts, updateSingularity).
+ * It is appended after every explosion, so it can never cost a pile-up one
+ * of its four, and a pile-up can never take it off the player's car.
  */
-const MAX_BLASTS = 4
+const MAX_BLASTS = 5
 
 /** One live shockfront, in the composite's own 0..1 UV space. */
 export interface Blast {
@@ -426,6 +431,14 @@ void main() {
   // fog over the game.
   float over = clamp((uSpeed - 0.72) * 3.6, 0.0, 1.0);
   float rush = clamp(over * 0.45 + uBoost * 0.95, 0.0, 1.15) * uScreen;
+  // THE LINES START EARLIER THAN THE BLUR, and that is the split the line
+  // above could not make: one rush drove both, so the lines could not come
+  // in before the smear did. A line is additive light at the rim and hides
+  // nothing; the blur is what takes the road away. So the lines ramp from
+  // 60% of top speed and reach the same full value at 100%, and the blur
+  // keeps its 72% threshold and its own rush untouched.
+  float overLines = clamp((uSpeed - 0.60) * 2.5, 0.0, 1.0);
+  float rushLines = clamp(overLines * 0.45 + uBoost * 0.95, 0.0, 1.15) * uScreen;
 
   // THE WARP IMPULSE, with the player's screen-effect intensity already spent
   // on it. Every use below reads THIS and never uWarp, so one multiply is the
@@ -518,7 +531,7 @@ void main() {
   // brings them inward, brightens them and lays a second, finer layer over the
   // top. See THE BOOST WARP in the header for why each of those four and not
   // "more of the same, harder".
-  if (rush > 0.03 || warp > 0.02) {
+  if (rushLines > 0.03 || warp > 0.02) {
     float ang = atan(c.y, c.x);
     // Streaks, not dashes: 26 is a hard little tick and 9 is a line with a
     // length you can read a direction off. This one exponent is most of what
@@ -529,13 +542,20 @@ void main() {
     float inner = mix(0.34, 0.16, streak);
     // The lines still need SOMETHING to ride on -- at a standstill under a
     // warp there is no rush at all -- so the punch supplies its own.
-    float amp = clamp(max(rush, warp * 0.9), 0.0, 1.0);
+    float amp = clamp(max(rushLines, warp * 0.9), 0.0, 1.0);
     float sector = floor(ang * 34.0);
     float seed = hash11(sector + 11.0);
     float gate = step(hash11(sector + 71.0), 0.18 + 0.82 * amp);
     float ph = fract(r * 1.7 - uTime * (1.1 + 3.2 * amp) + seed * 9.0);
     float line = pow(max(0.0, 1.0 - abs(ph * 2.0 - 1.0)), falloff);
-    float mask = smoothstep(inner, 0.92, r) * amp;
+    // THE RIM IS AT 0.707, NOT AT 0.92. r is measured in UV from the centre,
+    // so the farthest pixel on screen -- a corner -- is at sqrt(0.5) = 0.707
+    // and the middle of each edge at 0.5. The old 0.92 edge put the mask's
+    // top 30% OFF the screen: the lines never came above 70% of their own
+    // strength even in the corners, and managed 19% at the side edges, so at
+    // top speed with no boost they were barely there. 0.72 lets a corner
+    // reach full strength and roughly doubles the edges.
+    float mask = smoothstep(inner, 0.72, r) * amp;
     vec3 lineCol = mix(vec3(0.72, 0.86, 1.0), vec3(1.0, 0.88, 0.58), clamp(uBoost, 0.0, 1.0));
     col += lineCol * line * gate * mask * (0.42 + 0.55 * streak);
 
