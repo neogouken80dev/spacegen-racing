@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { describe, it, expect } from 'vitest'
 import {
   ChaseCamera, CAMERA_LIMITS, DEFAULT_CAMERA_SETTINGS, anchorYToAngle,
-  angleToAnchorY, normaliseCameraSettings, type CameraSettings,
+  angleToAnchorY, normaliseCameraSettings, softCeiling, type CameraSettings,
 } from '../src/game/camera'
 import { Race } from '../src/sim/race'
 import { Track } from '../src/sim/track'
@@ -87,6 +87,7 @@ function releaseSequence(chassisId: string, opts: { reduceMotion?: boolean; hold
   const ratios: number[] = []
   const pullIn: number[] = []
   let peakFovGap = 0
+  let peakFov = 0
   const dist = (cam: ChaseCamera): number => Math.hypot(
     cam.camera.position.x - r.pos.x, cam.camera.position.y - r.pos.y, cam.camera.position.z - r.pos.z)
   for (let f = 0; f < Math.round(2.5 * 60); f++) {
@@ -94,9 +95,10 @@ function releaseSequence(chassisId: string, opts: { reduceMotion?: boolean; hold
     ratios.push(apparentSize(withShot, r) / apparentSize(control, r))
     pullIn.push(dist(control) - dist(withShot))
     peakFovGap = Math.max(peakFovGap, withShot.camera.fov - control.camera.fov)
+    peakFov = Math.max(peakFov, withShot.camera.fov)
   }
   return {
-    tier, ratios, pullIn, peakFovGap, sizeBefore, withShot, control,
+    tier, ratios, pullIn, peakFovGap, peakFov, sizeBefore, withShot, control,
     maxPullIn: Math.max(...pullIn),
   }
 }
@@ -774,6 +776,88 @@ describe('the car holds its mark at every setting', () => {
       const { worst, offMark } = corner({ distance, tracking: 0.30 })
       expect(worst).toBe(0)
       expect(offMark, `car ${offMark.toFixed(4)} off its mark in NDC`).toBeLessThan(0.005)
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------
+
+describe('the lens has a ceiling, and the shot still has room under it', () => {
+  it('softCeiling is the identity below the knee and never reaches the ceiling', () => {
+    expect(softCeiling(62)).toBe(62)
+    expect(softCeiling(C.fovKnee)).toBe(C.fovKnee)
+    let last = -Infinity
+    for (let v = 60; v <= 160; v += 0.5) {
+      const out = softCeiling(v)
+      expect(out).toBeGreaterThanOrEqual(last)           // monotonic: more asked, more given
+      expect(out).toBeLessThan(C.fovCeiling)              // and never the whole ceiling
+      last = out
+    }
+    // No corner at the knee: the slope just above it is ~1, as below it.
+    const d = (softCeiling(C.fovKnee + 0.01) - softCeiling(C.fovKnee)) / 0.01
+    expect(d).toBeGreaterThan(0.99)
+  })
+
+  it('a tier-3 release on top of its own boost renders under 90 degrees', () => {
+    // The uncapped lens peaked at 95 vertical (125.5 horizontal) in real races;
+    // this is the worst case -- the top tier's full impulse landing on the
+    // boost the same release grants -- and it must still clear the punch the
+    // shot is tested for above.
+    const s = releaseSequence('solaire')
+    expect(s.tier).toBe(3)
+    expect(s.peakFov).toBeLessThan(90)
+    expect(s.peakFovGap).toBeGreaterThan(8)
+  })
+
+  it('reduced motion keeps only part of the speed-and-boost widening', () => {
+    const cam = new ChaseCamera(16 / 9)
+    const r = {
+      pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 80 }, yaw: 0, yawRate: 0,
+      fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, driftSide: 0, driftInward: 0,
+      boostMag: 1, boostTime: 1, boostSource: 'pad', altitude: 0.55,
+    } as unknown as RacerState
+    cam.reset(r)
+    for (let i = 0; i < 240; i++) { r.pos.z += 80 * RDT; cam.update(r, RDT, 80, false, true) }
+    const want = C.fovRest + (C.fovBoost - C.fovRest) * C.reducedMotionFovSwing
+    expect(cam.camera.fov).toBeLessThan(want + 0.5)
+    expect(cam.camera.fov).toBeGreaterThan(C.fovRest + 1)   // still says "fast"
+  })
+})
+
+describe('looking back is a cut, both ways', () => {
+  const racer = (): RacerState => ({
+    pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 50 }, yaw: 0, yawRate: 0,
+    fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, driftSide: 0, driftInward: 0,
+    boostMag: 0, boostTime: 0, altitude: 0.55,
+  } as unknown as RacerState)
+  // How far the lens's heading is from `dirZ` (+1 down the road, -1 behind).
+  const offBy = (cam: ChaseCamera, dirZ: number): number => {
+    const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.camera.quaternion)
+    return Math.acos(Math.max(-1, Math.min(1, (f.z * dirZ) / Math.hypot(f.x, f.z)))) * 180 / Math.PI
+  }
+
+  for (const gravity of [false, true]) {
+    it(`${gravity ? 'gravity' : 'flat'} track: faces behind on the first frame, and forward on release`, () => {
+      const cam = new ChaseCamera(16 / 9)
+      cam.gravity = gravity
+      const r = racer()
+      cam.reset(r)
+      for (let i = 0; i < 60; i++) { r.pos.z += 50 * RDT; cam.update(r, RDT, 60, false, false) }
+      expect(offBy(cam, 1)).toBeLessThan(25)
+      // It took 2.08 s to swing 90% of the way round at this speed.
+      r.pos.z += 50 * RDT; cam.update(r, RDT, 60, true, false)
+      expect(offBy(cam, -1)).toBeLessThan(25)
+      // And the car is on its mark in the rear view, not wherever the swing
+      // happened to leave it.
+      const ndc = new THREE.Vector3(r.pos.x, r.pos.y, r.pos.z).project(cam.camera)
+      expect(ndc.z).toBeLessThan(1)
+      expect(Math.abs(ndc.y - (1 - C.anchorY * 2))).toBeLessThan(0.08)
+      // Held: it stays behind.
+      for (let i = 0; i < 30; i++) { r.pos.z += 50 * RDT; cam.update(r, RDT, 60, true, false) }
+      expect(offBy(cam, -1)).toBeLessThan(25)
+      // Released: forward again on the next frame.
+      r.pos.z += 50 * RDT; cam.update(r, RDT, 60, false, false)
+      expect(offBy(cam, 1)).toBeLessThan(25)
     })
   }
 })

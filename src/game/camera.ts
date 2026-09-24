@@ -10,6 +10,18 @@ const CER = T.ceremony
 const DEG = Math.PI / 180
 
 /**
+ * A soft ceiling for the lens (TUNING.camera.fovCeiling and friends): the
+ * identity up to `knee`, then the excess compressed exponentially toward
+ * `ceiling`, so the curve is continuous in value and in slope and never
+ * actually reaches the ceiling.
+ */
+export function softCeiling(fov: number, knee: number = C.fovKnee, ceiling: number = C.fovCeiling): number {
+  const room = ceiling - knee
+  if (fov <= knee || room <= 0) return Math.min(fov, Math.max(knee, ceiling))
+  return knee + room * (1 - Math.exp(-(fov - knee) / room))
+}
+
+/**
  * ===========================================================================
  * THE PLAYER'S CAMERA, as six numbers they own.
  *
@@ -119,7 +131,9 @@ interface Rig {
 /**
  * The angle the AUTHORED anchor works out to, so the default of the exposed
  * control is the shipped frame rather than a number chosen to look tidy.
- * anchorY 0.812 against a 62-degree lens is 20.6 degrees below the axis.
+ * anchorY 0.676877 against a 62-degree lens is 12.0 degrees below the axis --
+ * the look-down angle the studio head dialled in on the live control, stored
+ * back as an anchor (see TUNING.camera.anchorY).
  */
 export function anchorYToAngle(anchorY: number): number {
   return Math.atan((anchorY - 0.5) * 2 * Math.tan(C.fovRest * 0.5 * DEG)) / DEG
@@ -136,11 +150,12 @@ export function angleToAnchorY(angleDeg: number): number {
  * of those stops. A default that is NOT on the grid is a trap -- nudge it once
  * and you can never get back to the frame the game shipped with.
  *
- * The angle is the only one that needed rounding for this. The authored
- * anchorY of 0.812 works out to 20.55 degrees below the axis; the control
- * offers 20.5. On the 944px reference frame the difference moves the car by
- * 0.7 of a pixel, which is an order of magnitude finer than the bounding box
- * the 0.812 was measured from in the first place.
+ * The angle is the only one that could fall between stops, so it is rounded
+ * to the control's half-degree grid. Today it does not need to: the authored
+ * anchorY of 0.676877 was itself written back FROM a 12-degree setting, and
+ * works out to 12.00002 degrees -- two ten-thousandths of a pixel from the
+ * stop on the 944px reference frame. The rounding stays so a future anchor
+ * typed in as a fraction still lands on a stop the player can return to.
  */
 export const DEFAULT_CAMERA_SETTINGS: Readonly<CameraSettings> = Object.freeze({
   distance: C.distance,
@@ -272,6 +287,8 @@ export class ChaseCamera {
   private yaw = 0
   private aspect: number = C.refAspect
   private fov: number = C.fovRest
+  /** Whether last frame was looking back: its change is the look-back cut. */
+  private lookingBack = false
   private roll = 0
   private driftYaw = 0
   private shake = 0
@@ -377,6 +394,7 @@ export class ChaseCamera {
   /** Snap directly behind the racer with no easing. Used on race start. */
   reset(r: RacerState): void {
     this.yaw = r.yaw
+    this.lookingBack = false
     this.fov = C.fovRest
     this.fovBase = C.fovRest
     this.roll = 0
@@ -575,12 +593,17 @@ export class ChaseCamera {
     // The crab angle: how far the direction of travel leads the nose. Measured
     // about the CAR's up on a gravity track -- a compass comparison reports a
     // slide that is not there for a car on a wall, and misses the one that is.
+    // THE LOOK-BACK CUT (see TUNING.camera.lookBackYaw): on the frame the
+    // button changes state the rig takes its new pose outright -- heading,
+    // drift swing, position and look target -- and damps normally after.
+    const cut = lookBack !== this.lookingBack
+    this.lookingBack = lookBack
     const wantDriftYaw = r.driftSide !== 0 && !lookBack && speed > 1
       ? (this.gravity
         ? signedAngleAround(r.fwd, r.vel, r.up)
         : angleDelta(r.yaw, Math.atan2(r.vel.x, r.vel.z))) * C.driftFollowVelocity
       : 0
-    this.driftYaw = damp(this.driftYaw, wantDriftYaw, this.rig.yawHalfLife, dt)
+    this.driftYaw = cut ? wantDriftYaw : damp(this.driftYaw, wantDriftYaw, this.rig.yawHalfLife, dt)
     const aimYaw = r.yaw + this.driftYaw
 
     // Yaw trails the vehicle so corners read as rotation rather than a snap.
@@ -588,13 +611,15 @@ export class ChaseCamera {
     // Unwrap so the camera never spins the long way around.
     while (targetYaw - this.yaw > Math.PI) targetYaw -= Math.PI * 2
     while (targetYaw - this.yaw < -Math.PI) targetYaw += Math.PI * 2
-    this.yaw = damp(this.yaw, targetYaw, this.rig.yawHalfLife, dt)
+    this.yaw = cut ? targetYaw : damp(this.yaw, targetYaw, this.rig.yawHalfLife, dt)
 
     // FOV, and the dolly impulse, BEFORE the camera is placed. The pull-in in
     // apply() needs both FOVs for this frame, and the impulse has to be
     // decayed -- or zeroed for reduced motion -- before anything reads it.
     const boost01 = clamp01(r.boostMag / 0.52)
-    const speedFov = C.fovRest + (C.fovBoost - C.fovRest) * clamp01(speed01 * 0.55 + boost01 * 0.75)
+    const swing = reduceMotion ? C.reducedMotionFovSwing : 1
+    const speedFov = C.fovRest
+      + (C.fovBoost - C.fovRest) * swing * clamp01(speed01 * 0.55 + boost01 * 0.75)
 
     // THE VERTIGO SHOT, ON A BOOST. `boostMag` is a step function -- set on
     // the grant, held, zeroed when the timer expires -- so a rise in it is a
@@ -642,8 +667,13 @@ export class ChaseCamera {
     // flicker where snapping the camera off reads as calm.
     this.warp = reduceMotion ? 0 : this.warp * Math.pow(2, -dt / C.warpHalfLife)
     if (this.warp < 0.002) this.warp = 0
-    this.fovBase = damp(this.fovBase, speedFov, C.fovHalfLife, dt)
-    this.fov = damp(this.fov, speedFov + C.dollyFov * this.dolly, C.fovHalfLife, dt)
+    // The driving view under its own, lower ceiling; the vertigo impulse on
+    // top of THAT, under the overall one (TUNING.camera.fovCeiling explains
+    // why there are two). `fovBase` is the no-impulse lens the pull-in in
+    // apply() compares against, so it takes the same sustained value.
+    const sustained = softCeiling(speedFov, C.fovSustainKnee, C.fovSustainCeiling)
+    this.fovBase = damp(this.fovBase, sustained, C.fovHalfLife, dt)
+    this.fov = damp(this.fov, softCeiling(sustained + C.dollyFov * this.dolly), C.fovHalfLife, dt)
 
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw)
     // The rig's TARGET offset. Both speed gains ship at 0 -- see
@@ -661,13 +691,13 @@ export class ChaseCamera {
     // the world axes: back along the heading, up along `_up`.
     this._car.set(r.pos.x, r.pos.y, r.pos.z)
     if (this.gravity) {
-      this.orient(r, dt, lookBack)
+      this.orient(r, cut ? -1 : dt, lookBack)
       this._desired.copy(this._fwd).multiplyScalar(-dist)
         .addScaledVector(this._up, height).add(this._car)
     } else {
       this._desired.set(r.pos.x - fx * dist, r.pos.y + height, r.pos.z - fz * dist)
     }
-    const f = Math.pow(2, -dt / this.rig.posHalfLife)
+    const f = cut ? 0 : Math.pow(2, -dt / this.rig.posHalfLife)
     this.pos.lerp(this._desired, 1 - f)
 
     // ---- THE DISTANCE LOCK -------------------------------------------------
@@ -749,17 +779,24 @@ export class ChaseCamera {
       if (this.pos.y < minY) this.pos.y = minY
     }
 
+    // The look-ahead point is ahead of the way the rig FACES: past the car
+    // down the road normally, and past it down the road behind while looking
+    // back. It used to stay ahead of the nose either way, which put the rear
+    // view's seed almost under the camera and left the anchor solve to find
+    // the car from a bad start every frame of the look.
+    const lookSign = lookBack ? -1 : 1
     if (this.gravity) {
-      this._target.copy(this._aimFwd).multiplyScalar(C.lookAhead)
+      this._target.copy(this._aimFwd).multiplyScalar(C.lookAhead * lookSign)
         .addScaledVector(this._up, 1.6).add(this._car)
     } else {
       this._target.set(
-        r.pos.x + Math.sin(aimYaw) * C.lookAhead,
+        r.pos.x + Math.sin(aimYaw) * C.lookAhead * lookSign,
         r.pos.y + 1.6,
-        r.pos.z + Math.cos(aimYaw) * C.lookAhead,
+        r.pos.z + Math.cos(aimYaw) * C.lookAhead * lookSign,
       )
     }
-    this.look.lerp(this._target, 1 - Math.pow(2, -dt / (this.rig.posHalfLife * 1.4)))
+    if (cut) this.look.copy(this._target)
+    else this.look.lerp(this._target, 1 - Math.pow(2, -dt / (this.rig.posHalfLife * 1.4)))
 
     this._anchor.set(r.pos.x, r.pos.y, r.pos.z)
 

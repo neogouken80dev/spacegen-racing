@@ -1408,6 +1408,51 @@ export const TUNING = {
      */
     minVerticalScale: 0.75,
     fovRest: 62, fovBoost: 86,
+    /**
+     * THE WIDEST THE LENS MAY GO: two soft ceilings on the vertical FOV, one
+     * for the view you drive in and one for the half-second punch on top.
+     *
+     * Speed and boost ask for up to 86 degrees and the vertigo shot adds up to
+     * 20 on top, so the uncapped lens peaked at 95.0 degrees vertical -- 125.5
+     * horizontal at 16:9 -- measured over hard-difficulty races on all eight
+     * circuits, with the 99th-percentile frame between 88.4 and 93.3. That far
+     * out the frame's edges stretch into a fisheye, and every boost held the
+     * lens at 86 (117.7 horizontal) for as long as the boost lasted.
+     *
+     * ONE CEILING WOULD HAVE KILLED THE SHOT. A release grants a boost, so the
+     * speed term is already at its top on the frame the vertigo impulse lands;
+     * a single soft cap near 90 left the impulse a few degrees of room and
+     * measured a 2.7-degree punch where the shot was tuned for 12.8. So the
+     * SUSTAINED view is held lower (`fovSustainKnee`/`fovSustainCeiling`: a
+     * boost at top speed now sits at 78.6 instead of 86, and unboosted top
+     * speed moves only from 75.2 to 75.1), and the impulse gets the room
+     * between that and the overall ceiling (`fovKnee`/`fovCeiling`), which is
+     * set against what is RENDERED: the lens trails its target (fovHalfLife)
+     * while the impulse decays (dollyHalfLife), so the drawn peak sits well
+     * under the target's.
+     *
+     * Measured over the same races after: the drawn peak is 87.3 degrees
+     * (119.0 horizontal), the 99th percentile 83.4-86.1, the median unchanged.
+     * A top-tier release still opens the frame 8.2 degrees over the no-shot
+     * camera (tests/camera.test.ts holds it above 8) with a 1.7 m pull-in.
+     *
+     * Soft rather than clamps: below each knee nothing changes, and above it
+     * the excess is compressed exponentially toward the ceiling, so the curve
+     * has no corner for the eye to catch -- a hard stop reads as the effect
+     * switching off. See camera.ts `softCeiling`. All four numbers are here to
+     * be turned, and the old lens is one edit away: put both knees above 106,
+     * the most the two terms can ever ask for together.
+     */
+    fovSustainKnee: 74,
+    fovSustainCeiling: 79,
+    fovKnee: 88,
+    fovCeiling: 100,
+    /**
+     * Reduced motion keeps this fraction of the speed-and-boost FOV swing.
+     * The widening is itself a zoom, and zooming is what the setting exists to
+     * calm; half the swing still says "fast" without the frame breathing.
+     */
+    reducedMotionFovSwing: 0.5,
     posHalfLife: 0.12, yawHalfLife: 0.20, fovHalfLife: 0.18,
     /**
      * DOLLY ZOOM (the vertigo shot) on a drift release.
@@ -1549,6 +1594,17 @@ export const TUNING = {
      * match a 0.85 nobody has ever seen.
      */
     shakeHit: 0.5,
+    /**
+     * LOOKING BACK IS A CUT. Holding look-back used to swing the chase rig
+     * round through the damped yaw and position, and at 50 m/s the camera had
+     * to overtake its own car to get there: 90% of the turn took 2.08 s, and
+     * releasing took 1.67 s to face forward again -- the whole window a glance
+     * at a missile on your tail is for. Every kart racer's rear view is an
+     * instant cut to a second camera, because a 180-degree whip pan at speed
+     * is both slow and disorienting. See ChaseCamera.update: the frame the
+     * button changes state, the rig is placed at its new pose outright, and
+     * the ordinary damping carries on from there.
+     */
     lookBackYaw: Math.PI,
   },
 
