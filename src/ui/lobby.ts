@@ -391,7 +391,9 @@ function avatarInto(host: HTMLElement, avatarId: string): void {
     img.dataset.art = 'fallback'
     img.src = placeholderPortrait(def)
   })
-  img.src = portraitFor(def)
+  // Lobby rows draw faces at 26-30px (lobby.css .sglb__avatar): at up to 3x
+  // that is under 128 device pixels, so the smallest file always covers it.
+  img.src = portraitFor(def, 30 * Math.min(3, window.devicePixelRatio || 1))
 }
 
 // ---------------------------------------------------------------------------

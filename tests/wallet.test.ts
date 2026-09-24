@@ -20,10 +20,10 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import {
-  AVATARS, AVATAR_BY_ID, AVATAR_DIR, ART_READY, DEFAULT_AVATAR_ID, FEATS,
+  AVATARS, AVATAR_BY_ID, AVATAR_DIR, DEFAULT_AVATAR_ID, FEATS,
   FEAT_CIRCUIT_ROUNDS, FEAT_SCORE, PRICES, RANKS, STARTER_IDS,
-  canBuy, catalogueFor, featsEarned, featsFromProfile, ownsAvatar,
-  placeholderPortrait, portraitFor, priceOf, ranksEarned, srcFor, wornAvatar,
+  artPending, artSizeFor, canBuy, catalogueFor, featsEarned, featsFromProfile, hasArt,
+  ownsAvatar, placeholderPortrait, portraitFor, priceOf, ranksEarned, srcFor, wornAvatar,
   type ProfileLike, type RaceFeatEvidence,
 } from '../src/content/avatars'
 import {
@@ -374,12 +374,13 @@ describe('the catalogue is well formed', () => {
     expect(AVATAR_BY_ID.size).toBe(AVATARS.length)
   })
 
-  it('puts every portrait at avatars/<id>.png and nowhere else', () => {
+  it('puts every portrait at avatars/<id>-<size>.webp and nowhere else', () => {
     // Asserted rather than assumed because the failure is silent: one `avatar/`
     // among twenty-four `avatars/` is a 404 that renders as a blank circle.
     for (const a of AVATARS) {
-      expect(a.src, a.id).toBe(`${AVATAR_DIR}${a.id}.png`)
+      expect(a.src, a.id).toBe(`${AVATAR_DIR}${a.id}-512.webp`)
       expect(a.src, a.id).toBe(srcFor(a.id))
+      expect(srcFor(a.id, 128), a.id).toBe(`${AVATAR_DIR}${a.id}-128.webp`)
       expect(a.id, a.id).toMatch(/^[a-z][a-z0-9]*$/)
     }
   })
@@ -449,22 +450,62 @@ describe('the catalogue is well formed', () => {
   })
 })
 
-describe('the placeholder art holds the screen until the real art lands', () => {
-  it('is still the placeholder, so the swap has not silently happened', () => {
-    // When this goes red, the one-line swap has been made and the PNGs had
-    // better be in public/avatars/.
-    expect(ART_READY).toBe(false)
-    expect(portraitFor(AVATARS[0])).toBe(placeholderPortrait(AVATARS[0]))
+describe('the art, and the stand-in for art that has not arrived', () => {
+  it('draws the delivered portrait for every avatar that has one', () => {
+    const drawn = AVATARS.filter((a) => hasArt(a.id))
+    // Twenty-three landed together; if this drops, a file went missing from
+    // public/avatars/ and the manifest noticed before a player did.
+    expect(drawn.length).toBeGreaterThanOrEqual(23)
+    for (const a of drawn) {
+      expect(portraitFor(a), a.id).toBe(srcFor(a.id, 512))
+      expect(portraitFor(a, 40), a.id).toBe(srcFor(a.id, 128))
+    }
   })
 
-  it('draws a different mark for every avatar', () => {
-    const marks = new Set(AVATARS.map((a) => portraitFor(a)))
+  it('picks the smallest file that covers the pixels asked for', () => {
+    expect(artSizeFor(1)).toBe(128)
+    expect(artSizeFor(128)).toBe(128)
+    expect(artSizeFor(129)).toBe(256)
+    expect(artSizeFor(186)).toBe(256)    // a 62px tile on a 3x phone
+    expect(artSizeFor(312)).toBe(512)    // the 104px profile portrait at 3x
+    expect(artSizeFor(5000)).toBe(512)   // never asks for a size that is not there
+  })
+
+  it('draws the placeholder for an avatar whose art has not been delivered', () => {
+    for (const a of AVATARS.filter((x) => !hasArt(x.id))) {
+      expect(portraitFor(a), a.id).toBe(placeholderPortrait(a))
+    }
+  })
+
+  it('will not sell a face that is not there, and says it is coming', () => {
+    const rich = profile({ credits: 999999, earned: 999999 })
+    for (const a of AVATARS) {
+      if (!artPending(a.id)) continue
+      expect(a.source.kind).toBe('shop')
+      expect(canBuy(rich, a.id), a.id).toBe(false)
+      const view = catalogueFor(rich).all.find((v) => v.def.id === a.id)
+      expect(view?.status).toBe('locked')
+      expect(view?.requirement).toContain('Arriving soon')
+      // An owner keeps it: an unlock is not something a missing file takes.
+      const owner = profile({ unlocked: [...STARTER_IDS, a.id] })
+      expect(ownsAvatar(owner, a.id)).toBe(true)
+      expect(wornAvatar(owner, a.id).id).toBe(a.id)
+    }
+    // Pending is a shop-only state: a starter, rank or feat face is earned, not
+    // bought, so a missing file never stands between a player and it.
+    for (const a of AVATARS) {
+      if (a.source.kind !== 'shop') expect(artPending(a.id), a.id).toBe(false)
+    }
+  })
+
+  it('draws a different placeholder mark for every avatar', () => {
+    const marks = new Set(AVATARS.map((a) => placeholderPortrait(a)))
     expect(marks.size).toBe(AVATARS.length)
   })
 
-  it('produces a data URI a browser can put in a src attribute', () => {
+  it('produces a placeholder a browser can put in a src attribute', () => {
     for (const a of AVATARS) {
-      const uri = portraitFor(a)
+      const uri = placeholderPortrait(a)
       expect(uri.startsWith('data:image/svg+xml;utf8,')).toBe(true)
       // A raw '#' would truncate the URI at the fragment and leave a blank img.
       expect(uri.indexOf('#')).toBe(-1)
@@ -486,8 +527,6 @@ describe('the placeholder art holds the screen until the real art lands', () => 
     expect(decoded).toContain('A &amp; &lt;B&gt;')
   })
 })
-
-// ---------------------------------------------------------------------------
 
 describe('who owns what', () => {
   it('gives every profile the starters, flag or no flag', () => {
@@ -527,8 +566,8 @@ describe('who owns what', () => {
 
   it('refuses a purchase the balance does not cover, and says how short', () => {
     const p = profile({ credits: PRICES.mid - 1 })
-    expect(canBuy(p, 'neonsaint')).toBe(false)
-    const view = catalogueFor(p).all.find((v) => v.def.id === 'neonsaint')
+    expect(canBuy(p, 'stormwright')).toBe(false)
+    const view = catalogueFor(p).all.find((v) => v.def.id === 'stormwright')
     expect(view?.status).toBe('locked')
     expect(view?.shortBy).toBe(1)
     expect(view?.requirement).toContain('1,000 credits')
@@ -536,22 +575,22 @@ describe('who owns what', () => {
     // check and a spend that are separate calls can always be separated.
     const w = new Wallet(false)
     w.adopt({ credits: PRICES.mid - 1, earned: PRICES.mid })
-    expect(w.spend(priceOf('neonsaint'))).toBe(false)
+    expect(w.spend(priceOf('stormwright'))).toBe(false)
     expect(w.balance).toBe(PRICES.mid - 1)
   })
 
   it('allows the purchase once the credits are there, and only once', () => {
     const p = profile({ credits: PRICES.mid })
-    expect(canBuy(p, 'neonsaint')).toBe(true)
+    expect(canBuy(p, 'stormwright')).toBe(true)
     const w = new Wallet(false)
     w.adopt({ credits: PRICES.mid, earned: PRICES.mid })
-    expect(w.spend(priceOf('neonsaint'))).toBe(true)
+    expect(w.spend(priceOf('stormwright'))).toBe(true)
     expect(w.balance).toBe(0)
     // The profile the account service hands back then owns it, and the shop row
     // stops offering it.
-    const after = profile({ credits: 0, earned: PRICES.mid, unlocked: [...STARTER_IDS, 'neonsaint'] })
-    expect(canBuy(after, 'neonsaint')).toBe(false)
-    expect(ownsAvatar(after, 'neonsaint')).toBe(true)
+    const after = profile({ credits: 0, earned: PRICES.mid, unlocked: [...STARTER_IDS, 'stormwright'] })
+    expect(canBuy(after, 'stormwright')).toBe(false)
+    expect(ownsAvatar(after, 'stormwright')).toBe(true)
   })
 
   it('will not sell something that is not for sale', () => {

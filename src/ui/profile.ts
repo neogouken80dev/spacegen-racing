@@ -95,7 +95,7 @@ import {
   type AccountService, type AvatarDef, type NameError, type PlayerProfile,
 } from '../net/types'
 import {
-  AVATARS, AVATAR_BY_ID, DEFAULT_AVATAR_ID, catalogueFor, placeholderPortrait,
+  AVATARS, AVATAR_BY_ID, DEFAULT_AVATAR_ID, catalogueFor, hasArt, placeholderPortrait,
   portraitFor, type AvatarStatus, type AvatarView,
 } from '../content/avatars'
 import { CHASSIS, CHASSIS_BY_ID } from '../content/chassis'
@@ -289,31 +289,42 @@ function button(cls: string, parent: Element, label: string): HTMLButtonElement 
 /**
  * A portrait that survives its own art going missing.
  *
- * `portraitFor` hands back a generated data URI today and a real PNG path the
- * day `ART_READY` flips, and the flip is exactly when a 404 becomes possible:
- * one file missing from `public/avatars/` renders as an empty circle in a grid
- * of twenty-four, which reads as a layout bug rather than as a missing file.
- * So the error handler swaps in the placeholder that the same module already
- * knows how to draw -- the picker degrades to how it looks today instead of to
- * a hole -- and marks the element so a probe can tell the two apart.
+ * `portraitFor` hands back a real file for every avatar with art and a
+ * generated data URI for the one or two without, and a file is exactly where
+ * a 404 becomes possible: one portrait missing from a deploy renders as an
+ * empty circle in a grid of twenty-four, which reads as a layout bug rather
+ * than as a missing file. So the error handler swaps in the placeholder that
+ * the same module already knows how to draw -- the picker degrades to a
+ * labelled stand-in instead of to a hole -- and marks the element so a probe
+ * can tell the two apart.
+ *
+ * `cssPx` is how big the host draws it. Times the pixel ratio, that picks the
+ * file size (`artSizeFor`), so a 48px tile on a 3x phone gets the 256 and the
+ * profile portrait gets the 512 without either paying for the other.
  *
  * `tried` guards against an error handler that re-fires on its own replacement,
  * which would be an infinite loop rather than a fallback.
  */
-function portraitInto(host: HTMLElement, def: AvatarDef): HTMLImageElement {
+function portraitInto(host: HTMLElement, def: AvatarDef, cssPx: number): HTMLImageElement {
   const img = el('img', 'sgpf__art', host)
   let tried = false
   img.decoding = 'async'
   img.alt = ''
-  img.dataset.art = 'primary'
+  img.dataset.art = hasArt(def.id) ? 'primary' : 'placeholder'
   img.addEventListener('error', () => {
     if (tried) return
     tried = true
     img.dataset.art = 'fallback'
     img.src = placeholderPortrait(def)
   })
-  img.src = portraitFor(def)
+  img.src = portraitFor(def, cssPx * devicePixels())
   return img
+}
+
+/** The pixel ratio, clamped: nothing is drawn sharper than 3x. */
+function devicePixels(): number {
+  const r = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  return Math.min(3, Math.max(1, r))
 }
 
 /** The garage's two-colour card chip, at tile size. A car has no photograph. */
@@ -588,7 +599,8 @@ class ProfileScreenImpl implements ProfileScreen {
     for (const def of AVATARS) {
       const tile = this.addTile(pGrid, {
         kind: 'avatar', id: def.id, label: def.name, accent: def.accent,
-        art: (host) => { portraitInto(host, def) },
+        // Tiles draw at clamp(44px, 6vmin, 62px) -- see .sgpf__tileArt.
+        art: (host) => { portraitInto(host, def, 62) },
       })
       tile.root.addEventListener('click', () => this.pressAvatar(def.id))
       this.avatarTiles.push(tile)
@@ -789,7 +801,8 @@ class ProfileScreenImpl implements ProfileScreen {
       this.portrait.textContent = ''
       this.portrait.style.setProperty('--accent', worn.accent)
       this.portrait.dataset.avatar = worn.id
-      portraitInto(this.portrait, worn)
+      // The identity portrait tops out at 104px -- see .sgpf__portrait.
+      portraitInto(this.portrait, worn, 104)
       this.portraitName.textContent = worn.name
     }
 

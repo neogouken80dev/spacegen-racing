@@ -96,7 +96,7 @@
  */
 import {
   AVATAR_BY_ID, DEFAULT_AVATAR_ID, STARTER_IDS, PRICES,
-  featsFromProfile, ownsAvatar, priceOf, ranksEarned,
+  artPending, featsFromProfile, ownsAvatar, priceOf, ranksEarned,
 } from '../content/avatars'
 import { MAX_PER_RACE } from '../score/wallet'
 import {
@@ -884,6 +884,11 @@ export async function handleAccount(
         // rather than the price, because `priceOf` returns 0 for exactly those
         // and a free shop item would otherwise be unbuyable.
         if (def.source.kind !== 'shop') return 'notforsale'
+        // A portrait that has not been delivered is listed as coming and not
+        // sold: `canBuy` already keeps the button dark, and this is the check
+        // that holds when a client skips the button. Same build, same
+        // manifest, so the two cannot disagree about which face is missing.
+        if (artPending(avatarId)) return 'notforsale'
         const price = priceOf(avatarId)
         // THE ONLY PLACE THE BALANCE IS ENFORCED, and it runs inside the CAS so
         // that a second tab cannot spend the same credits. `canBuy` in the UI

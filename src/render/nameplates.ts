@@ -399,9 +399,10 @@ export interface NameplateRoster {
  * A slot whose `avatarId` names an avatar this build does not have degrades to
  * a nameplate with no portrait rather than to a broken image: the id is
  * resolved through `AVATAR_BY_ID` and a miss is just a null. The portrait
- * itself always comes from `portraitFor`, never from `def.src`, because the
- * real art has not landed and `portraitFor` is the one switch that swaps the
- * placeholders for it (see src/content/avatars.ts, ART_READY).
+ * itself always comes from `portraitFor`, never from `def.src`: `src` is the
+ * 512px file and a plate draws a 40-texel face, and an avatar whose art has
+ * not been delivered has to come back as its placeholder rather than as a
+ * path that 404s (see src/content/avatars.ts, hasArt).
  */
 export function plateRoster(
   grid: readonly MultiplayerSlot[],
@@ -418,7 +419,8 @@ export function plateRoster(
     out.push({
       slot: s.slot,
       name: s.name,
-      portrait: def ? portraitFor(def) : null,
+      // FACE_PX texels in the atlas; the smallest file covers it three times.
+      portrait: def ? portraitFor(def, FACE_PX) : null,
       accent: def ? def.accent : C_MUTE,
       human,
     })

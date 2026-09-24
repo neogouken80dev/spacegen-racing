@@ -33,23 +33,32 @@
  * 0 meaning "free" would make three of those indistinguishable from the fourth.
  *
  * ===========================================================================
- * THE ART DOES NOT EXIST YET, AND NOTHING HERE WAITS FOR IT
+ * THE ART, AND WHAT STANDS IN FOR A PORTRAIT THAT HAS NOT ARRIVED
  *
- * Every `src` points at `avatars/<id>.png` under `public/`, which is the
- * convention and the whole of it -- see `srcFor` below, which is the only place
- * that path is ever built. Until those files land, `portraitFor()` hands back a
- * generated SVG data URI instead, drawn from the id and the accent so that
- * every avatar is visibly a DIFFERENT placeholder rather than twenty-four
- * copies of one grey circle. A picker full of identical squares tests nothing
- * about layout; a picker full of distinct marks tests almost all of it.
+ * The portraits live in `public/avatars/` as `<id>-<size>.webp` at every size
+ * in `ART_SIZES` -- see `srcFor` below, which is the only place that path is
+ * ever built. `artManifest.ts` lists the ids that actually have files, and is
+ * written by tools/import-art.mjs from what is on disk, so this module knows
+ * which faces exist without a single request.
  *
- * SWAPPING IN THE REAL ART IS ONE LINE: set `ART_READY` to true. That is the
- * only edit. Nothing else in the codebase may read `def.src` directly -- the
- * UI calls `portraitFor(def)` -- so the flip reaches every screen at once and
- * cannot leave the nameplate on placeholders while the picker is on art.
+ * ART LANDS PER ID, NOT AS A BATCH. This used to be one `ART_READY` switch on
+ * the argument that a roster half art and half generated marks reads as a bug.
+ * The art then arrived twenty-three of twenty-four, and the switch would have
+ * held twenty-three finished portraits hostage to one missing file. So the
+ * rule is now per id, with the one case that argument really was about --
+ * paying for a face that is not there -- handled directly: a SHOP avatar with
+ * no art is not for sale until it has some (`artPending`). Anyone who already
+ * owns one still wears it, drawn as its placeholder, because an unlock is not
+ * something a missing file may take away.
+ *
+ * Every consumer calls `portraitFor(def, px)`; nobody reads `def.src` for
+ * drawing. That is what lets a portrait be the right SIZE for where it is
+ * shown -- a 20 px nameplate never downloads the 512 -- and what makes a new
+ * file live everywhere at once the moment the manifest names it.
  */
 import type { AvatarDef, AvatarSource, PlayerProfile } from '../net/types'
 import { COMBO_MAX } from '../score/rules'
+import { ART_SIZES, AVATAR_ART, type ArtSize } from './artManifest'
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -67,28 +76,57 @@ export const AVATAR_DIR = 'avatars/'
  * merely ugly rather than broken. tests/wallet.test.ts asserts every entry
  * matches the convention anyway, so a later hand-edit past this helper is
  * caught too.
+ *
+ * `size` is one of the exported edge lengths; `def.src` is the largest, which
+ * is what a caller that has no idea how big it will draw should get.
  */
-export function srcFor(id: string): string {
-  return AVATAR_DIR + id + '.png'
+export function srcFor(id: string, size: ArtSize = LARGEST): string {
+  return AVATAR_DIR + id + '-' + size + '.webp'
+}
+
+const LARGEST: ArtSize = ART_SIZES[ART_SIZES.length - 1]
+
+const HAS_ART: ReadonlySet<string> = new Set(AVATAR_ART)
+
+/** Whether this avatar's portrait is in public/avatars/. */
+export function hasArt(id: string): boolean {
+  return HAS_ART.has(id)
 }
 
 /**
- * THE LINE THAT SWAPS PLACEHOLDERS FOR REAL ART. Flip it when the PNGs are in
- * `public/avatars/`.
+ * The smallest exported size that covers `px` device pixels.
  *
- * Deliberately a single boolean rather than a per-id set: a half-populated set
- * is a roster where some faces are art and some are generated marks, which
- * reads as a bug in the art rather than as work in progress. Art lands as a
- * batch or it does not land.
+ * Callers pass what they will DRAW in device pixels -- CSS size times the
+ * pixel ratio -- and get the file that is at least that big, so a picker tile
+ * on a 3x phone gets the 256 rather than a smeared 128, and a nameplate never
+ * pulls the 512.
  */
-export const ART_READY = false
+export function artSizeFor(px: number): ArtSize {
+  for (const n of ART_SIZES) if (n >= px) return n
+  return LARGEST
+}
 
 /**
- * What to actually draw for an avatar. Every consumer calls this; nobody reads
- * `def.src` directly, which is what makes `ART_READY` a one-line switch.
+ * What to actually draw for an avatar at `px` device pixels. Every consumer
+ * calls this; nobody draws `def.src` directly, which is what makes a new file
+ * in public/avatars/ live on every screen at once.
  */
-export function portraitFor(a: AvatarDef): string {
-  return ART_READY ? a.src : placeholderPortrait(a)
+export function portraitFor(a: AvatarDef, px: number = LARGEST): string {
+  return hasArt(a.id) ? srcFor(a.id, artSizeFor(px)) : placeholderPortrait(a)
+}
+
+/**
+ * A shop avatar whose portrait has not been delivered.
+ *
+ * Not for sale until it is: a price tag on a placeholder is asking for credits
+ * in exchange for a promise. It is still listed, with its price, as coming --
+ * a shop that silently loses a row reads as a bug, and one that says a face is
+ * on its way is a reason to come back. Owners keep it regardless (see the
+ * header).
+ */
+export function artPending(id: string): boolean {
+  const a = AVATAR_BY_ID.get(id)
+  return !!a && a.source.kind === 'shop' && !hasArt(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +142,8 @@ export function portraitFor(a: AvatarDef): string {
  *
  * IT IS MEANT TO LOOK UNFINISHED. The dashed ring and the hatching are there so
  * that nobody -- us, Vince, or a screenshot in a review -- mistakes a generated
- * mark for shipped art and stops chasing the portraits. What it is NOT is
+ * mark for shipped art and stops chasing the portrait it stands in for. It is
+ * also what a portrait falls back to if its file fails to load. What it is NOT is
  * identical across the roster: the initials and the four-dot constellation are
  * derived from the id, so all twenty-four are distinguishable at picker size
  * and the layout can be judged today.
@@ -395,35 +434,45 @@ function def(id: string, name: string, source: AvatarSource, accent: string): Av
  * -- what you have, what you can buy, what time gives you, what skill gives you
  * -- and it is stable, so a portrait never moves under the cursor.
  *
- * THE ACCENTS ARE PROVISIONAL AND HAVE A JOB. Each one is the ring on the
- * picker and the edge of the nameplate at 24px while a car goes past at 60 m/s,
- * so they are spread around the wheel and kept clear of the HUD's own reds and
- * ambers. When the real portraits land, every accent should be RE-SAMPLED from
- * its art -- an accent that disagrees with the face it sits under is worse than
- * no accent, because the player's colour is supposed to be the same thing in
- * three places.
+ * THE ACCENTS HAVE A JOB, AND ARE READ FROM THE ART. Each one is the ring on
+ * the picker and the edge of the nameplate at 24px while a car goes past at
+ * 60 m/s, so they are spread around the wheel and kept clear of the HUD's own
+ * reds and ambers. Each portrait was painted with its accent as the rim light
+ * and the halo behind the head, and these are the colours the finished art
+ * actually glows -- checked against it by tools/import-art.mjs, which measures
+ * each portrait's halo and flags any accent more than 30 degrees of hue away.
+ * The four that moved when the art landed were the four whose character
+ * changed: the dockhand (bay blue to toxic green), the storm ninja (gold to
+ * electric indigo), and small corrections to the nomad's sand and the
+ * pirate's rust.
+ *
+ * FIVE NAMES CHANGED WITH THE ART, AND NO ID DID. Bay Dockhand, Ember Hand,
+ * Neon Saint, Storm Wright and Set Pacer became Dead Dockhand, Ember Oni, Neon
+ * Count, Storm Ninja and El Pacer, because the portraits are a zombie, an oni,
+ * a vampire, a ninja and a luchador. The ids are what saved profiles and the
+ * account server point at, so they stay exactly as they were.
  */
 export const AVATARS: readonly AvatarDef[] = [
   // --- starter: four faces nobody has to earn -------------------------------
   def('cadet', 'Rookie Cadet', starter(), '#8fa3b8'),
   def('wrench', 'Pit Wrench', starter(), '#d08a3c'),
-  def('nomad', 'Dust Nomad', starter(), '#b9905c'),
+  def('nomad', 'Dust Nomad', starter(), '#c49a5e'),
   def('marshal', 'Track Marshal', starter(), '#4fb3a4'),
 
   // --- shop: the bulk of the roster ----------------------------------------
   def('ferrypilot', 'Ferry Pilot', shop(PRICES.cheap), '#7b8fd6'),
-  def('scrapjack', 'Scrap Jack', shop(PRICES.cheap), '#a3552f'),
-  def('dockhand', 'Bay Dockhand', shop(PRICES.cheap), '#3fa3c9'),
-  def('emberhand', 'Ember Hand', shop(PRICES.low), '#e2663a'),
+  def('scrapjack', 'Scrap Jack', shop(PRICES.cheap), '#b0552c'),
+  def('dockhand', 'Dead Dockhand', shop(PRICES.cheap), '#6fbf73'),
+  def('emberhand', 'Ember Oni', shop(PRICES.low), '#e2663a'),
   def('frostwarden', 'Frost Warden', shop(PRICES.low), '#86c8f0'),
   def('tidecaller', 'Tide Caller', shop(PRICES.low), '#2f9c8a'),
-  def('neonsaint', 'Neon Saint', shop(PRICES.mid), '#ff4fa3'),
-  def('stormwright', 'Storm Wright', shop(PRICES.mid), '#d8b45a'),
+  def('neonsaint', 'Neon Count', shop(PRICES.mid), '#ff4fa3'),
+  def('stormwright', 'Storm Ninja', shop(PRICES.mid), '#6a7cff'),
   def('hollowcantor', 'Hollow Cantor', shop(PRICES.high), '#b06fe0'),
   def('voidsmith', 'Void Smith', shop(PRICES.chase), '#e8e2d0'),
 
   // --- rank: lifetime earnings, no purchase step ---------------------------
-  def('pacer', 'Set Pacer', rank(RANKS.pacer), '#9bd45e'),
+  def('pacer', 'El Pacer', rank(RANKS.pacer), '#9bd45e'),
   def('linekeeper', 'Line Keeper', rank(RANKS.keeper), '#58c7d8'),
   def('apexrunner', 'Apex Runner', rank(RANKS.apex), '#f2a93b'),
   def('veteran', 'Circuit Veteran', rank(RANKS.veteran), '#c86bf0'),
@@ -550,6 +599,7 @@ export function canBuy(p: ProfileLike, id: string): boolean {
   const a = AVATAR_BY_ID.get(id)
   if (!a || a.source.kind !== 'shop') return false
   if (ownsAvatar(p, id)) return false
+  if (artPending(id)) return false
   return p.credits >= a.source.price
 }
 
@@ -571,6 +621,13 @@ function viewOf(p: ProfileLike, a: AvatarDef): AvatarView {
   switch (a.source.kind) {
     case 'shop': {
       const price = a.source.price
+      if (artPending(a.id)) {
+        return {
+          def: a, status: 'locked',
+          requirement: `Arriving soon — ${comma(price)} credits.`,
+          shortBy: 0, progress: 0,
+        }
+      }
       const short = Math.max(0, price - p.credits)
       return {
         def: a,

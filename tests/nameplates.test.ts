@@ -24,7 +24,7 @@ import {
   type NameplateRoster, type NameplateSystem,
 } from '../src/render/nameplates'
 import { QUALITY_PRESETS } from '../src/render/api'
-import { AVATARS, placeholderPortrait, AVATAR_BY_ID } from '../src/content/avatars'
+import { AVATARS, placeholderPortrait, AVATAR_BY_ID, hasArt, portraitFor } from '../src/content/avatars'
 import { Race } from '../src/sim/race'
 import { Track } from '../src/sim/track'
 import { RUSTFALL } from '../src/content/tracks/rustfall'
@@ -223,17 +223,18 @@ describe('the roster', () => {
     expect(spec?.human).toBe(true)
   })
 
-  it('takes the portrait from portraitFor, never from def.src', () => {
-    // While ART_READY is false the two differ: `src` is a .png that does not
-    // exist yet and `portraitFor` is a generated data URI. A plate that read
-    // `src` would be a 404 in every screenshot until the art lands, and would
-    // then silently start working, which is the kind of bug that never gets
-    // found. Pinned by comparing against the generator's own output.
+  it('takes the portrait from portraitFor at plate size, never from def.src', () => {
+    // `src` is the 512px file; a plate draws a 40-texel face, so a plate that
+    // read `src` would pull the largest file for the smallest use -- eight
+    // portraits a race, on a phone. And for an avatar whose art has not been
+    // delivered, `src` is a path that 404s where portraitFor is the stand-in.
     const spec = plateRoster(grid(), HUMANS[0]).find((s) => s.slot === 1)
     const def = AVATAR_BY_ID.get(AVATARS[1].id)
     expect(def).toBeDefined()
-    expect(spec?.portrait).toBe(placeholderPortrait(def!))
+    expect(spec?.portrait).toBe(portraitFor(def!, 40))
     expect(spec?.portrait).not.toBe(def!.src)
+    if (hasArt(def!.id)) expect(spec?.portrait).toMatch(/-128\.webp$/)
+    else expect(spec?.portrait).toBe(placeholderPortrait(def!))
   })
 
   it('carries the avatar accent so a player is the same colour everywhere', () => {

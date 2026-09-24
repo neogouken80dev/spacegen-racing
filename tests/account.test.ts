@@ -44,7 +44,7 @@ import {
   type AccountRecord, type AccountRequest, type AccountResponse, type AccountStore,
 } from '../src/net/account'
 import { LiveAccountService, type StorageLike } from '../src/net/account'
-import { AVATARS, DEFAULT_AVATAR_ID, PRICES, RANKS, STARTER_IDS } from '../src/content/avatars'
+import { AVATARS, DEFAULT_AVATAR_ID, PRICES, RANKS, STARTER_IDS, artPending } from '../src/content/avatars'
 import { MAX_PER_RACE, REF_SCORE, Wallet } from '../src/score/wallet'
 import { bankAward } from '../src/game/main'
 import type { PlayerProfile } from '../src/net/types'
@@ -632,6 +632,23 @@ describe('purchases', () => {
     expect(errorOf(await h.call({ op: 'buy', ...me, avatarId: 'nonesuch' }))).toBe('unknown')
     expect(errorOf(await h.call({ op: 'avatar', ...me, avatarId: 'nonesuch' }))).toBe('unknown')
   })
+  it('will not sell a shop portrait whose art has not been delivered', async () => {
+    // Tied to the predicate rather than to one id, so this stays true the day
+    // the missing portrait lands: whatever is pending is refused, and
+    // everything else in the shop is not refused for that reason.
+    const h = harness()
+    const me = await mint(h)
+    const rec = record(h.store, me.id)
+    rec.credits = 999999
+    h.store.map.set(`acct/${me.id}`, JSON.stringify(rec))
+    for (const a of AVATARS) {
+      if (a.source.kind !== 'shop') continue
+      const res = await h.call({ op: 'buy', ...me, avatarId: a.id })
+      if (artPending(a.id)) expect(errorOf(res), a.id).toBe('notforsale')
+      else expect(res.ok, a.id).toBe(true)
+    }
+  })
+
 
   it('refuses to WEAR something that has not been earned', async () => {
     const h = harness()
