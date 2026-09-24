@@ -28,6 +28,7 @@ import { getDerived } from '../content/chassis'
 import type { AudioStage, SoundId, Volumes } from './api'
 import { DEFAULT_VOLUMES } from './api'
 import { CATALOGUE } from './catalogue'
+import { clearCueSink, setCueSink } from './cues'
 import { AudioPlanner, engineFor } from './plan'
 import { createStage } from './stage'
 
@@ -42,6 +43,9 @@ export type VoKind =
  * `tierUp` has none on purpose: it fires up to four times per slide and the
  * drift already speaks through the tier sound. A voice there would talk over
  * the player constantly during the one mechanic that needs concentration.
+ * (For a long time that sentence was the only place the tier sound spoke: it
+ * was catalogued and preloaded and never played. The planner plays it now, a
+ * whole tone higher per rung -- see the drift-tier block in plan.ts.)
  */
 export const VO_LINES: Record<VoKind, readonly string[]> = {
   tierUp: [],
@@ -222,7 +226,12 @@ class AudioImpl implements AudioSystem {
   constructor() {
     this.vol = loadVolumes()
     this.stage = createStage(this.vol)
+    // The front end's menu cues arrive through cues.ts, because nothing hands
+    // the front end this object. See the note there.
+    setCueSink(this.cueSink)
   }
+
+  private readonly cueSink = (id: SoundId): void => { this.cue(id) }
 
   get available(): boolean { return this.stage !== null }
   get volumes(): Volumes { return this.vol }
@@ -397,6 +406,7 @@ class AudioImpl implements AudioSystem {
   }
 
   dispose(): void {
+    clearCueSink(this.cueSink)
     this.stage?.dispose()
     this.stage = null
   }

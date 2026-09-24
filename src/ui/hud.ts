@@ -26,6 +26,7 @@ import type { LinkStatus, MigrationState } from '../net/types'
 import { ITEMS, ITEM_ORDER } from '../content/items'
 import { CHASSIS_BY_ID, getDerived, getLocomotion } from '../content/chassis'
 import { TUNING } from '../content/tuning'
+import { threatTime, urgency } from '../audio/threat'
 
 // ---------------------------------------------------------------------------
 // Public shape
@@ -387,6 +388,105 @@ const WARN_ITEMS: ItemId[] = [
   'railMissile', 'seekerMissile', 'alphaMissile', 'voidMine', 'gravityWell',
 ]
 
+/**
+ * THE WRONG-WAY WARNING.
+ *
+ * There was none. A player who spun, or came off a wall pointing back up the
+ * circuit, could drive a long way the wrong way on a track whose two
+ * directions look much alike -- and on a phone, with the minimap at 84 px,
+ * there was nothing else to tell them.
+ *
+ * WHAT COUNTS. The nose more than WRONG_ON off the track's own direction, the
+ * car actually TRAVELLING backwards along the track at WRONG_SPEED or more,
+ * and both held for WRONG_HOLD seconds of race time. The speed test is what
+ * separates driving the wrong way from the moments a car merely faces it: a
+ * reverse off a barrier moves the right way, and a bounce that leaves the nose
+ * pointing back up the road is over long before 0.6 s.
+ *
+ * HYSTERESIS, so a car sitting near the threshold cannot strobe it: once up,
+ * the warning stays up until the nose is back inside WRONG_OFF, and it does
+ * not care about speed on the way out -- a player who has stopped to turn
+ * round is still facing the wrong way until they have.
+ *
+ * GATED OFF during a spin, a stun and a respawn, all three of which own the
+ * car and all three of which have their own words on screen already. And on
+ * the RACE clock rather than wall time: a paused race with the car parked
+ * backwards must not tick a warning up behind the pause menu.
+ *
+ * Heading as the sim measures it (vehicle.ts headingError, read here, never
+ * called): `yaw` against the tangent's compass bearing on a flat track, where
+ * `fwd` is not maintained at all, and the true 3D angle between `fwd` and the
+ * tangent on a gravity track, where yaw means nothing on a wall.
+ */
+const WRONG_ON = Math.cos(100 * (Math.PI / 180))
+const WRONG_OFF = Math.cos(80 * (Math.PI / 180))
+const WRONG_HOLD = 0.6
+const WRONG_SPEED = 8
+
+/** Pure, and exported so the rule can be tested without a DOM. See WRONG_ON. */
+export class WrongWayWatch {
+  on = false
+  private held = 0
+  private lastTime = Number.NaN
+
+  /**
+   * One frame. `time` is `RaceState.time`; `racing` is whether the race is
+   * live for this racer. Returns whether the warning should be up.
+   */
+  update(r: RacerState, track: Track, time: number, racing: boolean): boolean {
+    const dt = time - this.lastTime
+    this.lastTime = time
+    // A frame that ran no sim step adds nothing; a jump (a new race, a resume
+    // after a long stall) is not held-for time either.
+    const step = dt > 0 && dt < 0.5 ? dt : 0
+    if (!racing || r.finished || r.spinTime > 0 || r.stunTime > 0 || r.respawnTime > 0) {
+      this.on = false
+      this.held = 0
+      return false
+    }
+    const t = track.at(r.splineS).tangent
+    let c: number
+    if (track.hasGravity) {
+      c = r.fwd.x * t.x + r.fwd.y * t.y + r.fwd.z * t.z
+    } else {
+      const l = Math.hypot(t.x, t.z) || 1
+      c = (Math.sin(r.yaw) * t.x + Math.cos(r.yaw) * t.z) / l
+    }
+    if (this.on) {
+      if (c > WRONG_OFF) { this.on = false; this.held = 0 }
+      return this.on
+    }
+    const along = r.vel.x * t.x + r.vel.y * t.y + r.vel.z * t.z
+    if (c < WRONG_ON && along < -WRONG_SPEED) {
+      this.held += step
+      if (this.held >= WRONG_HOLD) this.on = true
+    } else {
+      this.held = 0
+    }
+    return this.on
+  }
+
+  reset(): void {
+    this.on = false
+    this.held = 0
+    this.lastTime = Number.NaN
+  }
+}
+
+/**
+ * Seconds the guard / ward chip holds. Long enough to read two words at a
+ * glance and then gone: it reports something that has already been dealt with.
+ */
+const CHIP_HOLD = 1.25
+
+/** The U-turn beside WRONG WAY. Stroke only, so the plate's ink colours it. */
+const UTURN =
+  '<svg class="sg-ctr__wrongIcon" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<path d="M17 20 V10 A5 5 0 0 0 7 10 V14" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M3.5 11 L7 15 L10.5 11" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
 const ITEM_INDEX: Record<string, number> = {}
 for (let i = 0; i < ITEM_ORDER.length; i++) ITEM_INDEX[ITEM_ORDER[i]] = i
 
@@ -668,6 +768,11 @@ interface WarnUi {
   shown: number
   active: boolean
   lastRot: number
+  /** Pulse phase, radians. Advances faster as the threat closes. */
+  phase: number
+  /** Last urgency and pulse opacity written, quantised, so a steady slot costs nothing. */
+  lastU: number
+  lastOp: number
 }
 
 /** One line of the lap-split list: `2  1:02.48  +1.84`. */
@@ -735,6 +840,9 @@ class HudImpl implements Hud {
 
   // warnings
   private readonly warns: WarnUi[] = []
+  /** The most urgent threats this frame: projectile index and time to impact. Preallocated. */
+  private readonly warnIdx = new Int32Array(WARN_SLOTS)
+  private readonly warnTti = new Float64Array(WARN_SLOTS)
 
   // finish ceremony
   private readonly finWrap: HTMLElement
@@ -780,6 +888,22 @@ class HudImpl implements Hud {
   private readonly splitEl: HTMLElement
   private readonly spinEl: HTMLElement
   private readonly spinTxt: HTMLElement
+  /** Which story the spin slot is telling: '' (none), 'spin' or 'emp'. */
+  private spinKind = ''
+  private readonly wrongEl: HTMLElement
+  private readonly wrongWatch = new WrongWayWatch()
+  private wrongOn = false
+  private wrongPhase = 0
+  private readonly chipEl: HTMLElement
+  private chipT = 0
+  /**
+   * The sim frame whose events were last read, so a render frame that ran no
+   * sim step -- a 120 Hz display, a paused race -- cannot read the same
+   * events twice. Same guard cheer.ts and vfx.ts keep. `lastState` catches a
+   * new race, whose frame counter starts again from zero.
+   */
+  private lastEventFrame = -1
+  private lastState: RaceState | null = null
 
   // --- cached per-frame state ---------------------------------------------
   private lastNow = 0
@@ -1019,6 +1143,22 @@ class HudImpl implements Hud {
     this.spinTxt.textContent = 'SPUN OUT'
     this.spinEl.hidden = true
 
+    // WRONG WAY. Above the centre, in the band where the road meets the sky:
+    // the player needs the road below it to turn round on, and the car and
+    // the boost flash already own the band beneath the centre.
+    this.wrongEl = div('sg-ctr sg-ctr__wrong', centre)
+    this.wrongEl.appendChild(svgFrom(UTURN))
+    span('sg-ctr__wrongTxt', this.wrongEl, 'WRONG WAY')
+    this.wrongEl.hidden = true
+    this.wrongEl.setAttribute('role', 'status')
+
+    // PLATING HELD / BLOCKED. The pilot's ability eating a hit is a reward,
+    // and until now the only trace of it was a hit that did not happen -- which
+    // looks exactly like nothing. A small chip rather than a banner: it
+    // reports something already dealt with, so it is short and it is quiet.
+    this.chipEl = div('sg-ctr sg-ctr__chip', centre)
+    this.chipEl.hidden = true
+
     // --- THE ROUND CARD ----------------------------------------------------
     // In the centre stack with the countdown and the FINAL LAP banner, because
     // it is the same kind of thing: a transient that names the moment. It sits
@@ -1225,7 +1365,7 @@ class HudImpl implements Hud {
       icons.push(svg)
     }
     root.hidden = true
-    return { root, icons, shown: -1, active: false, lastRot: 9999 }
+    return { root, icons, shown: -1, active: false, lastRot: 9999, phase: 0, lastU: -1, lastOp: -1 }
   }
 
   // -------------------------------------------------------------------------
@@ -1401,6 +1541,9 @@ class HudImpl implements Hud {
         this.splitT = 0; this.splitEl.hidden = true
         this.bannerT = 0; this.bannerEl.hidden = true
         this.spinEl.hidden = true
+        this.spinKind = ''
+        this.wrongWatch.reset(); this.wrongOn = false; this.wrongEl.hidden = true
+        this.chipT = 0; this.chipEl.hidden = true
         for (let i = 0; i < this.warns.length; i++) {
           this.warns[i].active = false
           this.warns[i].root.hidden = true
@@ -1479,7 +1622,16 @@ class HudImpl implements Hud {
       return
     }
 
-    this.updateEvents(r)
+    // ONCE PER SIM FRAME. `events` is written back only on frames that ran a
+    // step, so a frame that ran none (a display faster than the sim, a pause)
+    // still holds the last step's list -- and read again, a lap split toast and
+    // a boost flash restart from full strength on every such frame. cheer.ts
+    // and vfx.ts have carried this guard for that reason; the HUD had not.
+    if (state !== this.lastState) { this.lastState = state; this.lastEventFrame = -1 }
+    if (state.frame !== this.lastEventFrame) {
+      this.lastEventFrame = state.frame
+      this.updateEvents(r)
+    }
     this.updatePosition(r, state)
     this.updateSplits(r, state)
     this.updateItems(r, dt)
@@ -1487,8 +1639,8 @@ class HudImpl implements Hud {
     this.updateCharge(r, dt)
     this.updateLift(r, dt)
     this.updateWind(r)
-    this.updateWarnings(r, state)
-    this.updateCentre(r, state, dt)
+    this.updateWarnings(r, state, dt)
+    this.updateCentre(r, state, track, dt)
     this.updateMap(state, track, r)
     this.updateClock(state, fps, dt)
   }
@@ -1511,12 +1663,24 @@ class HudImpl implements Hud {
     return racers.length > 0 ? racers[0] : null
   }
 
-  /** Events are cleared by the sim every step, so read them opportunistically. */
+  /**
+   * Events are cleared by the sim every step, so read them opportunistically --
+   * and once per sim frame; see the guard in update().
+   */
   private updateEvents(r: RacerState): void {
     const ev = r.events
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i]
-      if (e.t === 'boost') {
+      if (e.t === 'guard' || e.t === 'ward') {
+        // The two absorbs, in the pilot's favour: plating eats a crash, the
+        // ward eats a weapon. Worded as outcomes rather than as ability names
+        // -- the player may not know which pilot perk they picked, but they
+        // know what "BLOCKED" means the instant they read it.
+        setText(this.chipEl, e.t === 'guard' ? 'PLATING HELD' : 'BLOCKED')
+        this.chipEl.dataset.kind = e.t
+        this.chipEl.hidden = false
+        this.chipT = CHIP_HOLD
+      } else if (e.t === 'boost') {
         // A drift release the callout layer has taken is announced once, by
         // it. This flash sits at ~57% of the frame height, which is straight
         // across the car and the road at chase-camera framing, and printing
@@ -1892,8 +2056,22 @@ class HudImpl implements Hud {
   /**
    * Directional threat arcs on the screen rim. Bearing is relative to the
    * local racer's facing: straight up is dead ahead, straight down is behind.
+   *
+   * WHAT GOES ON THE RIM is decided by audio/threat.ts, the same rule the
+   * lock-on tone reads, and it is a much shorter list than it was: the rim used
+   * to light for anything within 150 m that the player had not fired, and 58%
+   * of what it drew were gatling rounds -- under the ALPHA MISSILE glyph, as
+   * there was no case for `bullet` -- while 4.9% were missiles aimed at the
+   * player. Now: seekers and Alphas hunting the player, and rails whose line
+   * reaches the player inside two seconds. The slots go to the most urgent
+   * first, rather than to whatever happened to be earliest in the array.
+   *
+   * URGENCY is read off time to impact. A calm lock sits on the rim steady and
+   * a little translucent; as it closes the arc grows, brightens and pulses,
+   * up to about eight beats a second in the last half-second. Under reduced
+   * motion it grows and brightens and never pulses.
    */
-  private updateWarnings(r: RacerState, state: RaceState): void {
+  private updateWarnings(r: RacerState, state: RaceState, dt: number): void {
     const w = this.viewW
     const h = this.viewH
     const compact = w < 860 || h < 540
@@ -1901,17 +2079,29 @@ class HudImpl implements Hud {
     const ry = h * (compact ? 0.33 : 0.39)
 
     const sinY = Math.sin(r.yaw), cosY = Math.cos(r.yaw)
-    let n = 0
 
+    // Keep the WARN_SLOTS soonest, in order. Insertion into two preallocated
+    // arrays: a race rarely has more than a handful of live projectiles that
+    // survive the filter, and this runs every frame.
     const projectiles = state.projectiles
-    for (let i = 0; i < projectiles.length && n < WARN_SLOTS; i++) {
-      const p = projectiles[i]
-      if (!p.alive || p.ownerId === r.id) continue
-      const dx = p.pos.x - r.pos.x, dz = p.pos.z - r.pos.z
-      const d2 = dx * dx + dz * dz
-      if (d2 > 150 * 150) continue
+    const idx = this.warnIdx, tti = this.warnTti
+    let m = 0
+    for (let i = 0; i < projectiles.length; i++) {
+      const t = threatTime(projectiles[i], r)
+      if (t < 0) continue
+      if (m === WARN_SLOTS && !(t < tti[m - 1])) continue
+      let j = m < WARN_SLOTS ? m++ : m - 1
+      while (j > 0 && tti[j - 1] > t) { tti[j] = tti[j - 1]; idx[j] = idx[j - 1]; j-- }
+      tti[j] = t
+      idx[j] = i
+    }
+
+    let n = 0
+    for (let k = 0; k < m; k++) {
+      const p = projectiles[idx[k]]
       const kind = p.kind === 'rail' ? 0 : p.kind === 'seeker' ? 1 : 2
-      this.placeWarn(this.warns[n], kind, dx, dz, sinY, cosY, rx, ry)
+      this.placeWarn(this.warns[n], kind, p.pos.x - r.pos.x, p.pos.z - r.pos.z,
+        sinY, cosY, rx, ry, urgency(tti[k]), dt)
       n++
     }
 
@@ -1923,7 +2113,9 @@ class HudImpl implements Hud {
       const dx = f.pos.x - r.pos.x, dz = f.pos.z - r.pos.z
       const d2 = dx * dx + dz * dz
       if (d2 > 42 * 42) continue
-      this.placeWarn(this.warns[n], f.kind === 'mine' ? 3 : 4, dx, dz, sinY, cosY, rx, ry)
+      // A field does not close on anyone -- it sits there -- so it has no time
+      // to impact to be urgent about. Drawn at a fixed middle weight, unpulsed.
+      this.placeWarn(this.warns[n], f.kind === 'mine' ? 3 : 4, dx, dz, sinY, cosY, rx, ry, 0.5, dt)
       n++
     }
 
@@ -1936,7 +2128,26 @@ class HudImpl implements Hud {
   private placeWarn(
     wn: WarnUi, kind: number, dx: number, dz: number,
     sinY: number, cosY: number, rx: number, ry: number,
+    u: number, dt: number,
   ): void {
+    // Urgency, quantised to twentieths so a steady threat writes nothing.
+    const uq = Math.round(u * 20) / 20
+    if (uq !== wn.lastU) {
+      wn.lastU = uq
+      wn.root.style.setProperty('--u', String(uq))
+    }
+    // The pulse: 1.2 Hz at a calm lock, ~8 Hz when it is about to land. Only
+    // for something in flight -- kinds 0-2 -- and never under reduced motion.
+    let op = 1
+    if (!this.reduced && uq > 0 && kind < 3) {
+      wn.phase = (wn.phase + dt * Math.PI * 2 * (1.2 + 6.8 * uq)) % (Math.PI * 2)
+      op = 0.62 + 0.38 * (0.5 + 0.5 * Math.cos(wn.phase))
+    }
+    const oq = Math.round(op * 20) / 20
+    if (oq !== wn.lastOp) {
+      wn.lastOp = oq
+      wn.root.style.setProperty('--p', String(oq))
+    }
     // Local frame: forward = (sin yaw, cos yaw); screen right = -x when facing +z.
     const fwd = dx * sinY + dz * cosY
     const side = dz * sinY - dx * cosY
@@ -1962,7 +2173,7 @@ class HudImpl implements Hud {
     if (!wn.active) { wn.active = true; wn.root.hidden = false }
   }
 
-  private updateCentre(r: RacerState, state: RaceState, dt: number): void {
+  private updateCentre(r: RacerState, state: RaceState, track: Track, dt: number): void {
     // the round card ------------------------------------------------------
     // Pinned at full strength for the whole countdown, then run out over
     // ROUND_FADE once the race is live. Keyed off the SIM PHASE rather than a
@@ -2050,17 +2261,57 @@ class HudImpl implements Hud {
       if (this.splitT === 0) this.splitEl.hidden = true
     }
 
-    // spin-out -------------------------------------------------------------
+    // spin-out, and systems down --------------------------------------------
+    // ONE SLOT, TWO STORIES. "SPUN OUT" keys off `spinTime`, and an EMP never
+    // sets it -- it sets `stunTime` -- so for the 1.1 s an EMP held the player
+    // helpless, the HUD said nothing at all about why the car had stopped
+    // answering. It is the same kind of moment (the car is not yours for a
+    // second, and here is why), so it takes the same slot in its own hue.
+    //
+    // Only the EMP's stun. The jump start's bog sets `stunTime` too, and it
+    // already has the one line in cheer.ts written to explain it; `lastHitBy`
+    // is what tells the two apart. A spin outranks a stun if both are running.
     const spinning = r.spinTime > 0
-    if (spinning) {
-      this.spinEl.hidden = false
-      this.spinEl.style.setProperty('--k', Math.min(1, r.spinTime).toFixed(3))
-      if (!this.reduced) {
+    const emp = !spinning && r.stunTime > 0 && r.lastHitBy === 'empBomb'
+    const kind = spinning ? 'spin' : emp ? 'emp' : ''
+    if (kind !== this.spinKind) {
+      this.spinKind = kind
+      if (kind) {
+        setText(this.spinTxt, kind === 'emp' ? 'SYSTEMS DOWN' : 'SPUN OUT')
+        this.spinEl.dataset.kind = kind
+        this.spinTxt.style.removeProperty('--spin')
+      }
+      this.spinEl.hidden = !kind
+    }
+    if (kind) {
+      this.spinEl.style.setProperty('--k', Math.min(1, spinning ? r.spinTime : r.stunTime * 2).toFixed(3))
+      if (!this.reduced && spinning) {
         this.spinPhase = (this.spinPhase + dt * 420) % 360
         this.spinTxt.style.setProperty('--spin', (Math.sin(this.spinPhase * 0.0175) * 8).toFixed(1))
       }
-    } else if (!this.spinEl.hidden) {
-      this.spinEl.hidden = true
+    }
+
+    // wrong way --------------------------------------------------------------
+    const wrong = this.wrongWatch.update(r, track, state.time, state.phase === 'racing')
+    if (wrong !== this.wrongOn) {
+      this.wrongOn = wrong
+      this.wrongEl.hidden = !wrong
+      this.wrongPhase = 0
+      if (!wrong) this.wrongEl.style.removeProperty('--k')
+    }
+    if (wrong && !this.reduced) {
+      // A slow breath rather than a blink: it is up for as long as the player
+      // is pointing the wrong way, and a strobe held for that long is noise.
+      this.wrongPhase = (this.wrongPhase + dt * 5.2) % (Math.PI * 2)
+      this.wrongEl.style.setProperty('--k', (0.78 + 0.22 * Math.cos(this.wrongPhase)).toFixed(2))
+    }
+
+    // plating held / blocked -----------------------------------------------
+    if (this.chipT > 0) {
+      this.chipT -= dt
+      if (this.chipT < 0) this.chipT = 0
+      this.chipEl.style.setProperty('--k', Math.min(1, this.chipT / 0.35).toFixed(3))
+      if (this.chipT === 0) this.chipEl.hidden = true
     }
 
     // position flash pop ---------------------------------------------------

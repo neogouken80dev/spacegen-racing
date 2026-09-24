@@ -5,17 +5,20 @@
  * it is allowed to repeat, and either the file it plays or the synth recipe
  * that stands in for one.
  *
- * EVERY ONE-SHOT IS NOW A RECORDING.
+ * EVERY EVENT SOUND IS A RECORDING.
  *
  * The table shipped for months as synth recipes -- filtered noise and swept
  * oscillators -- so that the whole path (event, planner, voice limiter,
  * panner, bus, output) was exercised from the first run rather than waiting on
  * a hundred deliveries. That was the right way round, and the swap it was
- * built for has now happened: 41 of the 43 entries below play files cut from
+ * built for has now happened: 42 of the 45 entries below play files cut from
  * the Gamemaster Pro Sound Collection by `tools/build-sfx.mjs`, which records
  * the trim and loudness decision behind each one. The whole pack is ~343 kB.
+ * (This header said 41 of 43 for a while after launchBog landed, and every
+ * other comment in the module that counted repeated it. tests/audio.test.ts
+ * now pins the count, so the next entry has to update this line to pass.)
  *
- * TWO ENTRIES ARE STILL SYNTH, AND SHOULD STAY THAT WAY.
+ * THREE ENTRIES ARE SYNTH, AND SHOULD STAY THAT WAY.
  *
  * `scrapeWall` and `scrapeCar` are SUSTAINED: their gain and their filter
  * cut-off are both driven every frame from the contact force, so a graze
@@ -24,6 +27,10 @@
  * buy a loop point to worry about. The engine is the same argument and goes
  * the other way -- see `AudioStage.setEngine`, where a sampled jet loop plays
  * at a rate driven by revs, with the oscillator engine kept as the fallback.
+ *
+ * `lockOn` is not a sound effect at all but an instrument: a clean blip that
+ * repeats faster, and higher, as a homing missile closes. A recording would be
+ * a file to download for what an oscillator does exactly.
  *
  * WHAT `level` IS FOR
  *
@@ -80,15 +87,27 @@ export const CATALOGUE: Record<SoundId, SoundDef> = {
   // The boost ladder climbs in pitch AND in length, so a Singularity sounds
   // like more than a Spark rather than just louder. Same escalation the rings,
   // the sparks and the callout copy already use.
-  boost0: f('audio/sfx/boost-0.mp3', 0.35, 'sfx', 0.10, 2, { vary: 0.10 }),
-  boost1: f('audio/sfx/boost-1.mp3', 0.45, 'sfx', 0.10, 2, { vary: 0.08 }),
-  boost2: f('audio/sfx/boost-2.mp3', 0.55, 'sfx', 0.10, 2, { vary: 0.06 }),
-  boost3: f('audio/sfx/boost-3.mp3', 0.70, 'sfx', 0.10, 2, { vary: 0.04 }),
+  //
+  // POSITIONAL, WHICH ONLY MATTERS FOR OTHER CARS. `emit` never pans the
+  // player's own sounds, so yours still arrive flat and dead centre. Another
+  // car's boost used to arrive flat too, at the same level as yours: over six
+  // measured AI races the field fired 235 boosts that played flat at >= 0.5
+  // gain against 154 of the player's own, with nothing -- no direction, no
+  // level step -- to tell the two apart. The planner also trims another car's
+  // boost to 0.6 of yours; see OTHER_CAR in plan.ts.
+  boost0: f('audio/sfx/boost-0.mp3', 0.35, 'sfx', 0.10, 2, { vary: 0.10, positional: true }),
+  boost1: f('audio/sfx/boost-1.mp3', 0.45, 'sfx', 0.10, 2, { vary: 0.08, positional: true }),
+  boost2: f('audio/sfx/boost-2.mp3', 0.55, 'sfx', 0.10, 2, { vary: 0.06, positional: true }),
+  boost3: f('audio/sfx/boost-3.mp3', 0.70, 'sfx', 0.10, 2, { vary: 0.04, positional: true }),
 
   driftStart: f('audio/sfx/drift-start.mp3', 0.22, 'sfx', 0.15, 2, { vary: 0.12 }),
   // Each rung banked. Quiet on purpose: it fires up to four times per slide and
-  // the loud moment is the release.
-  driftTier: f('audio/sfx/drift-tier.mp3', 0.20, 'sfx', 0.12, 3, { vary: 0.06 }),
+  // the loud moment is the release. The planner raises its pitch a whole tone
+  // per rung, so the ladder can be heard climbing -- see the drift-tier block
+  // in plan.ts, which is also the first thing that ever played this file.
+  // `vary` is half what it was for the same reason: a +/-6% spread is wider
+  // than the 12% step between rungs, and two neighbours could land on one note.
+  driftTier: f('audio/sfx/drift-tier.mp3', 0.20, 'sfx', 0.12, 3, { vary: 0.03 }),
   driftRelease: f('audio/sfx/drift-release.mp3', 0.40, 'sfx', 0.10, 2, { vary: 0.08 }),
 
   land: f('audio/sfx/land.mp3', 0.40, 'sfx', 0.10, 3, { vary: 0.12, positional: true }),
@@ -113,17 +132,27 @@ export const CATALOGUE: Record<SoundId, SoundDef> = {
   fireMine: f('audio/sfx/fire-mine.mp3', 0.34, 'sfx', 0.15, 2, { vary: 0.06, positional: true }),
   fireEmp: f('audio/sfx/fire-emp.mp3', 0.55, 'sfx', 0.20, 2, { vary: 0.05, positional: true }),
   fireWell: f('audio/sfx/fire-well.mp3', 0.55, 'sfx', 0.25, 2, { vary: 0.04, positional: true }),
-  // The gatling fires ten rounds a second and they are SUPPOSED to stack into a
-  // rattle -- that is what the weapon is. Short, quiet, high voice count, and
-  // a real minGap so a 120Hz display cannot double it.
+  // THE SPOOL-UP, NOT THE RATTLE. This used to be described as the ten-rounds-
+  // a-second rattle, and it cannot be: it answers the `fire` event, which the
+  // sim pushes ONCE when the item is triggered (race.ts useItem). The rounds
+  // themselves are `beamFire`, pushed per round by stepGatling, and that entry
+  // below is the rattle. The high voice count here is harmless headroom.
   fireGatling: f('audio/sfx/fire-gatling.mp3', 0.20, 'sfx', 0.045, 6, { vary: 0.18, positional: true }),
-  fireNitro: f('audio/sfx/nitro.mp3', 0.50, 'sfx', 0.10, 2, { vary: 0.06 }),
+  // Positional for the same reason as the boosts above: another car's nitro
+  // was arriving flat, at full level, indistinguishable from your own.
+  fireNitro: f('audio/sfx/nitro.mp3', 0.50, 'sfx', 0.10, 2, { vary: 0.06, positional: true }),
 
+  // One per gatling round: this IS the rattle. Ten a second against the 0.4 s
+  // default hold and three voices lets about two rounds in three sound --
+  // measured, 100 of the player's 155 over six AI races -- which still reads as
+  // automatic fire.
   beamFire: f('audio/sfx/beam-fire.mp3', 0.20, 'sfx', 0.08, 3, { vary: 0.10, positional: true }),
   beamHit: f('audio/sfx/beam-hit.mp3', 0.18, 'sfx', 0.05, 5, { vary: 0.20, positional: true }),
   // The one item event in the game that takes sustained skill. It gets a sound
-  // that lands like an achievement rather than an impact.
-  beamBreak: f('audio/sfx/beam-break.mp3', 0.62, 'sfx', 0.30, 1, { vary: 0.03 }),
+  // that lands like an achievement rather than an impact -- when it is YOURS.
+  // When another car breaks a third car, the same achievement is somebody
+  // else's and plays positionally, trimmed, like their boosts.
+  beamBreak: f('audio/sfx/beam-break.mp3', 0.62, 'sfx', 0.30, 1, { vary: 0.03, positional: true }),
 
   hitLight: f('audio/sfx/hit-light.mp3', 0.55, 'sfx', 0.12, 3, { vary: 0.10, positional: true }),
   hitHeavy: f('audio/sfx/hit-heavy.mp3', 0.75, 'sfx', 0.20, 2, { vary: 0.06, positional: true }),
@@ -131,9 +160,26 @@ export const CATALOGUE: Record<SoundId, SoundDef> = {
 
   // An absorb is the pilot doing its job, so both of these are bright and
   // pleasant -- the opposite read from the hit they replaced. See the note on
-  // the guard/ward events in sim/types.ts.
+  // the guard/ward events in sim/types.ts. (A guard used to be followed, in the
+  // same frame, by a full crashWall: the plating eats the impact but the wall
+  // event still reports its whole force. The planner drops the crash now.)
   guard: f('audio/sfx/guard.mp3', 0.45, 'sfx', 0.20, 2, { vary: 0.05, positional: true }),
   ward: f('audio/sfx/ward.mp3', 0.45, 'sfx', 0.20, 2, { vary: 0.05, positional: true }),
+
+  /**
+   * THE LOCK-ON TONE. A homing missile -- seeker or Alpha -- has the player,
+   * and the planner repeats this faster and higher as it closes (see the
+   * lock-on block in plan.ts). Synth, on purpose: see the header.
+   *
+   * A triangle at A6 with a fifth above it: bright enough to cut through a
+   * full field of engines, short enough (70 ms) that ten a second at the
+   * urgent end is still a series of blips rather than a drone. `minGap` 0.08
+   * is under the fastest interval the planner asks for (0.11 s), so it never
+   * eats a beep the planner meant, and still stops a 120 Hz display doubling
+   * one.
+   */
+  lockOn: s({ shape: 'tone', freq: 1760, dur: 0.07, gain: 0.26, attack: 0.002, harm: 0.35, harmonic: 1.5 },
+    'sfx', 0.08, 2),
 
   // --- race ----------------------------------------------------------------
   countdown: f('audio/sfx/countdown.mp3', 0.50, 'sfx', 0.40, 1),

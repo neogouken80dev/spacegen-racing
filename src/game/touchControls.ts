@@ -748,7 +748,12 @@ const CSS = `
   .sgtc-lh{gap:5px;max-width:min(40vw,244px)}
   .sgtc-pad{--padsz:62px;gap:0}
   .sgtc-pad__lbl{font-size:8px;letter-spacing:.16em}
-  .sgtc-hint{min-height:0;padding:7px 12px;font-size:10px}
+  /* Shorter padding, NOT a shorter button. This used to also say
+     min-height:0, which took the one button in this corner -- the tap iOS
+     needs before it will hand over the tilt sensor -- down to ~31px on every
+     landscape phone. 44px is the floor for anything a thumb has to hit; the
+     padding shrinks, the target does not. */
+  .sgtc-hint{min-height:44px;padding:7px 12px;font-size:11px}
 }
 /* Portrait: the action cluster is a tall stack up the right edge and the HUD's
    instrument strip has to lift clear of it, so the teaching block cannot also
@@ -771,7 +776,8 @@ const CSS = `
     max-width:min(64vw,320px)}
   .sgtc-pad{--padsz:62px}
   .sgtc-pad__lbl{font-size:8px;letter-spacing:.14em}
-  .sgtc-hint{min-height:0;padding:8px 12px;font-size:10px}
+  /* As above: a tighter button, never a target under 44px. */
+  .sgtc-hint{min-height:44px;padding:8px 12px;font-size:11px}
 }
 
 @media (prefers-reduced-motion:reduce){

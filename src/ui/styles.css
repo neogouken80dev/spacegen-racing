@@ -311,22 +311,35 @@
   letter-spacing: 0.02em;
 }
 
+/* THE PLATE IS DARKER THAN THE OTHER CHIPS, and the "/ 3" is --sg-dim rather
+   than --sg-mute, for one measured reason: Frosthelm's snow. At 0.6 over
+   #dfe9f5 the plate lets enough white through that --sg-mute read 1.1:1 --
+   the lap total, the one number in this chip that tells a player how long the
+   race is, simply was not there. 0.8 and --sg-dim put it at 4.7:1 on snow
+   (8.0:1 at night, from 3.8) and the current lap at 10.2:1 on snow, from 5.2;
+   on a night track the extra 0.2 of plate is invisible. */
 .sg-lap {
   display: flex;
   align-items: baseline;
   gap: 0.34em;
   padding: 3px 10px 4px;
   border-radius: var(--sg-r-sm);
-  background: rgba(8, 14, 28, 0.6);
+  background: rgba(8, 14, 28, 0.8);
   border-left: 3px solid var(--sg-cyan);
   font-family: var(--sg-display);
   font-size: clamp(13px, 1.9vmin, 22px);
   letter-spacing: 0.14em;
 }
 
+/* THE HUD'S TYPE FLOOR IS 11 PX. Every in-race label below that floor was
+   measured on a phone (tools/probe-hudstates.mjs): KM/H at 8, the drift-tier
+   name at 7-8, LIFT at 8, WIND at 9, the race clock at 10, this LAP at 10.1 --
+   and the score caption at 6.5, a clamp floor of 13 halved by the phone's
+   --sgs. Each rule below keeps its own fluid middle and cap and only raises
+   the floor, so desktop sizes that were already over it do not move. */
 .sg-lap__label {
   color: var(--sg-dim);
-  font-size: 0.78em;
+  font-size: max(11px, 0.78em);
 }
 
 .sg-lap__cur {
@@ -335,7 +348,7 @@
 
 .sg-lap__sep,
 .sg-lap__tot {
-  color: var(--sg-mute);
+  color: var(--sg-dim);
 }
 
 .sg-hud__pos.is-final .sg-lap {
@@ -400,7 +413,7 @@
 
 .sg-split__d {
   color: var(--sg-dim);
-  font-size: 0.92em;
+  font-size: max(11px, 0.92em);
   text-align: right;
 }
 
@@ -475,7 +488,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--sg-num);
-  font-size: clamp(10px, 1.5vmin, 15px);
+  font-size: clamp(11px, 1.5vmin, 15px);
   letter-spacing: 0.04em;
 }
 
@@ -490,7 +503,7 @@
 
 .sg-map__fps {
   color: var(--sg-mute);
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
 }
 
 /* ==========================================================================
@@ -597,7 +610,7 @@
 
 .sg-slot__name {
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.4vmin, 14px);
+  font-size: clamp(11px, 1.4vmin, 14px);
   letter-spacing: 0.14em;
   color: var(--sg-dim);
   text-transform: uppercase;
@@ -709,7 +722,7 @@
 
 .sg-gauge__unit {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 12px);
+  font-size: clamp(11px, 1.15vmin, 12px);
   letter-spacing: 0.28em;
   color: var(--sg-dim);
   margin-top: 2px;
@@ -718,7 +731,7 @@
 .sg-gauge__tier {
   margin-top: 5px;
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.35vmin, 14px);
+  font-size: clamp(11px, 1.35vmin, 14px);
   letter-spacing: 0.2em;
   color: var(--ring);
   text-shadow: 0 0 12px var(--ring);
@@ -825,7 +838,7 @@
 
    `margin-top` clears the in-race tool bar, which is NOT part of this grid —
    it is an absolutely positioned overlay pinned to `top: max(10px, safe-area)`
-   at 44 px tall (38 on compact) — so the two would otherwise stack on the same
+   at 44 px tall on every layout — so the two would otherwise stack on the same
    pixels. It is the one hardcoded offset in this sheet and it is a function of
    that bar's height; if the bar changes size, this follows it.
 
@@ -850,7 +863,7 @@
 
 .sg-wind__label {
   font-family: var(--sg-display);
-  font-size: clamp(9px, 1.25vmin, 13px);
+  font-size: clamp(11px, 1.25vmin, 13px);
   letter-spacing: 0.2em;
   color: var(--sg-dim);
   line-height: 1;
@@ -909,7 +922,7 @@
 
 .sg-lift__label {
   font-family: var(--sg-display);
-  font-size: clamp(8px, 1.15vmin, 12px);
+  font-size: clamp(11px, 1.15vmin, 12px);
   letter-spacing: 0.22em;
   color: var(--sg-dim);
 }
@@ -968,6 +981,13 @@
   place-items: center;
   color: var(--wc, var(--sg-red));
   will-change: transform, opacity;
+  /* URGENCY. hud.ts writes --u (0 calm .. 1 about to land, from the time to
+     impact) and --p (the pulse, 0.62..1, which it drives faster as --u rises
+     and holds at 1 under reduced motion). A calm lock sits steady and a little
+     translucent; an imminent one is full strength, larger and pulsing. */
+  --u: 0;
+  --p: 1;
+  opacity: calc(var(--p) * (0.72 + 0.28 * var(--u)));
 }
 
 .sg-warn__arc {
@@ -975,6 +995,8 @@
   width: 100%;
   height: 100%;
   overflow: visible;
+  transform: scale(calc(0.9 + 0.3 * var(--u)));
+  transform-origin: 50% 100%;
 }
 
 .sg-warn__arc path {
@@ -1103,6 +1125,77 @@
   transform: rotate(calc(var(--spin, 0) * 1deg));
 }
 
+/* SYSTEMS DOWN: the EMP's stun, in the slot SPUN OUT uses, in the EMP's own
+   hue (ITEMS.empBomb, #5ad2ff) so it reads as the weapon that did it. No
+   wobble -- the car is not spinning, it is dead in the water. */
+.sg-ctr__spin[data-kind="emp"] {
+  background: radial-gradient(
+    120% 90% at 50% 50%,
+    rgba(90, 210, 255, 0) 32%,
+    rgba(90, 210, 255, 0.24) 100%
+  );
+}
+.sg-ctr__spin[data-kind="emp"] .sg-ctr__spinTxt {
+  color: #b8ecff;
+  letter-spacing: 0.16em;
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.55), 0 0 40px rgba(90, 210, 255, 0.95);
+  transform: none;
+}
+
+/* WRONG WAY. Above the centre, where the road meets the sky, so the road the
+   player has to turn round on stays in view beneath it. A filled red plate
+   rather than glowing type: this is the one message in the stack that is an
+   instruction, and it has to survive a white sky as well as a black one. --k
+   is a slow breath driven from hud.ts (never under reduced motion). */
+.sg-ctr__wrong {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  transform: translateY(calc(-1 * clamp(64px, 14vmin, 160px)));
+  padding: 0.24em 0.75em 0.3em 0.6em;
+  font-size: clamp(20px, 4.2vmin, 48px);
+  font-style: italic;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  color: #fff3f5;
+  background: linear-gradient(180deg, rgba(255, 59, 94, 0.94) 0%, rgba(176, 22, 52, 0.94) 100%);
+  border: 2px solid #ffc0cc;
+  border-radius: 12px;
+  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.45), 0 0 44px rgba(255, 59, 94, 0.55);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+  opacity: var(--k, 1);
+}
+.sg-ctr__wrongIcon {
+  width: 1.05em;
+  height: 1.05em;
+  flex: none;
+  display: block;
+}
+
+/* PLATING HELD / BLOCKED. A small pill just above the car, held for a
+   moment and faded: it reports a hit that has already been dealt with, so it
+   is the quietest thing in this stack. Steel for the plating, green for the
+   ward -- both are the pilot doing their job, which is praise, not alarm. */
+.sg-ctr__chip {
+  transform: translateY(clamp(24px, 4.5vmin, 52px));
+  padding: 4px 12px 5px;
+  font-size: clamp(12px, 1.9vmin, 20px);
+  letter-spacing: 0.18em;
+  line-height: 1;
+  color: #eaf6ff;
+  background: rgba(8, 14, 28, 0.78);
+  border: 2px solid var(--chip, #9fd8ff);
+  border-radius: 999px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.4), 0 0 18px var(--chipGlow, rgba(159, 216, 255, 0.45));
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+  opacity: var(--k, 1);
+}
+.sg-ctr__chip[data-kind="ward"] {
+  --chip: var(--sg-green);
+  --chipGlow: rgba(47, 227, 107, 0.45);
+  color: #dcffe9;
+}
+
 /* ==========================================================================
    HUD — compact / touch layout
    Pulls every element inward and off the bottom outer thirds, which the
@@ -1201,9 +1294,6 @@
   color: var(--sg-red);
 }
 
-/* The tool bar is 38px on compact rather than 44, so the pill comes up with
-   it. Tighter all round: it must never be wide enough to crowd the minimap
-   on a 412px frame. */
 /* POSITION AND LAP ON ONE LINE, HARD AGAINST THE TOP.
    Stacked, this block ran position -> lap chip -> lap splits straight down the
    left of the frame and the lap chip sat about a fifth of the way into the
@@ -1223,11 +1313,17 @@
   margin-top: 0;
 }
 
+/* Tighter all round than the desktop pill: it must never be wide enough to
+   crowd the minimap on a 412px frame.
+   52px, not 46: the tool bar above it no longer shrinks to 38px on a short
+   screen (a thumb target is 44px on every screen -- see .sg-tools__btn in
+   settings.css), so the pill steps down with it and keeps the same 6px of
+   clear air it had. */
 .sg-compact .sg-hud__wind {
   gap: 6px;
   padding: 2px 9px 3px;
   border-width: 1px;
-  margin-top: 46px;
+  margin-top: 52px;
 }
 
 /* THE ITEM SLOTS, ALONG THE TOP BESIDE THE TOOL BUTTONS.
@@ -1296,8 +1392,8 @@
 }
 .sg-compact .sg-gauge__unit {
   margin-top: 0;
-  font-size: 8px;
-  letter-spacing: 0.16em;
+  font-size: 11px;
+  letter-spacing: 0.08em;
 }
 /* The bar carries its own tier label; the ring's one would be a second copy
    in the same 40px of screen. */
@@ -1322,13 +1418,14 @@
    the strip grow a row the first time a drift charges. */
 .sg-compact .sg-gauge__barTier {
   font-family: var(--sg-display);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.08em;
   text-align: center;
+  white-space: nowrap;
   color: var(--ring);
-  text-shadow: 0 0 10px var(--ring);
-  min-height: 8px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 10px var(--ring);
+  min-height: 11px;
 }
 .sg-compact .sg-gauge__barTrack {
   position: relative;
@@ -1412,11 +1509,13 @@
     gap: 1px;
     margin-top: 2px;
   }
+  /* Floored at the HUD's 11px (it was 9): three 11px rows are 45px, and the
+     row they sit in is the top strip, beside the ordinal, not below it. */
   .sg-split {
-    font-size: clamp(9px, 2.7vmin, 13px);
+    font-size: clamp(11px, 2.7vmin, 13px);
     padding: 1px 7px 2px 6px;
     column-gap: 0.5em;
-    line-height: 1.25;
+    line-height: 1.2;
   }
 }
 
@@ -1436,37 +1535,85 @@
    player has on.
    -------------------------------------------------------------------------- */
 @media (max-width: 860px) and (orientation: portrait) {
-  .sg-hud__band {
+  /* EVERY RULE IN THIS BLOCK CARRIES `.sg-compact`, and most of them did not.
+     When the compact layout moved from a media query to the class, its rules
+     gained a second class of specificity and this block's did not -- so the
+     band's gap and padding, the bar width, the tier label size, the speed size
+     and the charge segments written here all silently lost to the landscape
+     values, and only the margin-bottom and the hidden unit (which the compact
+     rules never set) ever applied. Measured on a 390 px portrait phone, the
+     strip that was supposed to narrow came out 247 px wide and its right end
+     ran 17 px into the ITEM pad's circle, over the charge count. With the
+     narrowing actually in force it ends clear of the pad. */
+  .sg-compact .sg-hud__band {
     margin-bottom: 116px;
     gap: 7px;
     padding: 4px 9px 5px;
   }
-  .sg-hud__gauge {
+  .sg-compact .sg-hud__gauge {
     gap: 7px;
   }
-  .sg-gauge__bar {
+  .sg-compact .sg-gauge__bar {
     width: clamp(46px, 13vw, 58px);
   }
-  /* SINGULARITY is eleven characters over a 54px bar. Tighten it here rather
-     than let the longest tier name push into the charge icon. */
-  .sg-gauge__barTier {
-    font-size: 7px;
-    letter-spacing: 0.05em;
-  }
-  .sg-gauge__spd {
+  .sg-compact .sg-gauge__spd {
     font-size: clamp(19px, 5.4vw, 24px);
   }
   /* Two characters of unit for 30px of a 412px-wide frame, next to a number
      that is already the only large thing on the strip. */
-  .sg-gauge__unit {
+  .sg-compact .sg-gauge__unit {
     display: none;
   }
-  .sg-charge__seg {
+  .sg-compact .sg-charge__seg {
     width: 2px;
     height: 10px;
   }
-  .sg-charge__bar {
+  .sg-compact .sg-charge__bar {
     gap: 1px;
+  }
+
+  /* THE ITEM SLOTS LEAVE THE TOP STRIP IN PORTRAIT. The compact layout parks
+     them in the top-centre cell beside the tool bar, which on a landscape
+     phone is 300 px of room -- and on a 390 px portrait phone is 120, most of
+     it the tool bar: measured, the slot sat at x 209-255 directly under the
+     pause button at x 199-243. Portrait has the one thing landscape lacks,
+     height, so they go down the right edge instead, just under the minimap:
+     still top-right, still off the road, clear of every thumb. */
+  .sg-compact .sg-hud__items {
+    grid-area: mr;
+    align-self: start;
+    justify-self: end;
+  }
+
+  /* ...AND THE POSITION BLOCK STACKS AGAIN. The compact row -- ordinal, lap
+     chip and splits side by side -- was written for a landscape strip; across
+     a 390 px top edge it ran the lap chip and the splits under the tool bar
+     too. Stacked, it is the desktop column in the left third, where portrait
+     has all the height it needs. */
+  .sg-compact .sg-hud__pos {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  /* THE TIER NAME SITS ON TOP OF THE STRIP, NOT INSIDE IT. This block used to
+     fit SINGULARITY over the bar by setting it at 7px -- a rule that, as above,
+     never applied; it rendered at the compact 8px instead. At the 11px floor
+     the word measures 83px over a 51px bar, and in the strip it could only
+     overflow sideways into the speed or the charges. Lifted out of the flow it
+     is a tab riding the band's top edge, centred on its bar, free to be as
+     wide as the word. */
+  .sg-compact .sg-gauge__bar {
+    position: relative;
+  }
+  .sg-compact .sg-gauge__barTier {
+    position: absolute;
+    left: 50%;
+    /* 6px, not 3: at 3 the word's box sat 2px into the top of the speed
+       number's (measured, 18 px^2), and the eye reads that as touching. */
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    min-height: 0;
   }
 }
 
@@ -4029,7 +4176,7 @@
 
 .sg-fin__label {
   font-family: var(--sg-ui);
-  font-size: clamp(10px, 1.5vmin, 15px);
+  font-size: clamp(11px, 1.5vmin, 15px);
   letter-spacing: 0.42em;
   text-indent: 0.42em;
   color: var(--sg-dim);
@@ -4330,8 +4477,20 @@
      set in the same face as the settings menu, sitting directly above
      cheer.ts's callouts in Arial Black. One face for both. */
   font-family: var(--sg-display);
-  /* Hue of the current combo rung. Neutral until a combo exists. */
+  /* Hue of the current combo rung. Neutral until a combo exists.
+
+     --sc-rgb IS THE SAME HUE AS A TRIPLE, and every rule that sets one sets
+     the other. It exists so the halos and glows below can say
+     `rgba(var(--sc-rgb), 0.4)` where they used to mix --sc with transparent
+     through color-mix(). That function is newer
+     than this game's device floor (cheer.ts's halo note says the same and
+     writes its rgba from script for the same reason), and a declaration that
+     fails to parse is dropped WHOLE -- and five of those color-mix() calls
+     sat inside the text-shadow that also carries the number's dark outline,
+     the half that keeps it legible over a white sky. On an older engine the
+     score lost its outline, silently, on every frame it was on screen. */
   --sc: var(--sg-ink);
+  --sc-rgb: 234, 242, 255;
   /* ONE KNOB FOR THE WHOLE BLOCK'S TYPE SIZE.
      Every font-size under .sg-score is multiplied by this, so a phone can halve
      the entire cluster -- number, multiplier, caption, and all fourteen of the
@@ -4391,7 +4550,7 @@
 }
 
 .sg-total__k {
-  font-size: clamp(8px, 1.1vw, 11px);
+  font-size: clamp(11px, 1.1vw, 12px);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.24em;
@@ -4443,6 +4602,22 @@
   .sg-total__v { font-size: clamp(15px, 2.2vw, 22px); }
 }
 
+/* ...SO ON A COMPACT LANDSCAPE PHONE IT GOES BESIDE IT. 30% was not under the
+   minimap there, it was ON its clock: the compact minimap and its clock pill
+   end at ~131 px on a 390 px screen and 30% is 117, so SCORE was printed
+   across the race time -- measured, 770 px^2 of the two boxes on top of each
+   other, both unreadable. Directly below the clock is no better: the LOOK and
+   BACK pads start at ~165. The one free corner is the sky left of the
+   minimap, level with its top, where the top strip still has room. The
+   offset is the compact minimap's own width (canvas + 5px padding + 2px
+   border each side) plus a gap. */
+@media (max-height: 460px) {
+  .sg-compact .sg-total {
+    top: calc(var(--sg-pad) + var(--sg-sat) + 2px);
+    right: calc(var(--sg-pad) + var(--sg-sar) + clamp(84px, 22vmin, 112px) + 14px + 10px);
+  }
+}
+
 /* THE PHONE GETS HALF THE TYPE AND SITS HIGHER.
    `--sgs` multiplies every font-size in the block (see its declaration on
    .sg-score), so this is the whole of the size change: the number, the
@@ -4464,10 +4639,12 @@
   .sg-moment {
     --sg-moment-base: 14%;
     /* The compact strip's own numbers: `.sg-compact .sg-hud__wind` sets
-       margin-top 46px and the pill measures 16.5px there. Same derivation as
-       the desktop floor, different constants, and it tracks the safe-area
-       inset on a notched phone the way the strip itself does. */
-    --sg-moment-floor: calc(var(--sg-pad) + var(--sg-sat) + 72px);
+       margin-top 52px and the pill measures ~18px there (its WIND label is
+       on the HUD's 11px floor now, and its offset follows the 44px tool bar).
+       Same derivation as the desktop floor, different constants, and it
+       tracks the safe-area inset on a notched phone the way the strip itself
+       does. Was 72px against a 46px offset and a 16.5px pill. */
+    --sg-moment-floor: calc(var(--sg-pad) + var(--sg-sat) + 78px);
   }
   .sg-score { --sgs: 0.5; }
 }
@@ -4522,7 +4699,7 @@
   text-shadow:
     0 2px 0 rgba(0, 0, 0, 0.9),
     0 0 4px rgba(0, 0, 0, 0.8),
-    0 0 18px color-mix(in srgb, var(--sc) 40%, transparent);
+    0 0 18px rgba(var(--sc-rgb), 0.4);
   transition: transform 140ms ease-out;
 }
 
@@ -4538,7 +4715,7 @@
 }
 
 .sg-score__x {
-  font-size: calc((min(clamp(21px, 3.8vw, 36px), 5.5vw)) * var(--sgs));
+  font-size: max(11px, calc((min(clamp(21px, 3.8vw, 36px), 5.5vw)) * var(--sgs)));
   font-weight: 700;
   line-height: 1;
   font-style: italic;
@@ -4553,7 +4730,7 @@
   font-variant-numeric: tabular-nums;
   font-style: italic;
   color: var(--sg-ink);
-  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9), 0 0 12px color-mix(in srgb, var(--sc) 45%, transparent);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9), 0 0 12px rgba(var(--sc-rgb), 0.45);
 }
 
 /* Line two: what is happening right now and what it is worth. */
@@ -4561,9 +4738,16 @@
    It carries the escalation hue rather than plain ink, so the two lines read as
    one object that is heating up together -- which is the whole reason they were
    merged into a single stack. It stays a step smaller and a step calmer than
-   the number: two shouting lines is no hierarchy at all. */
+   the number: two shouting lines is no hierarchy at all.
+
+   FLOORED, NOT HALVED. The phone's `--sgs: 0.5` is right for the number and
+   wrong for the words under it: a 13px floor halved is 6.5px, which is the
+   name of the moment reduced to a smear exactly when it is supposed to be
+   read. Every caption size in this block is wrapped in the HUD's 11px floor,
+   so the halving still shrinks the number and simply cannot take the label
+   below legibility. */
 .sg-score__event {
-  font-size: calc((clamp(13px, 2.3vw, 21px)) * var(--sgs));
+  font-size: max(11px, calc((clamp(13px, 2.3vw, 21px)) * var(--sgs)));
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.14em;
@@ -4580,11 +4764,11 @@
   color: var(--sc);
   text-shadow:
     0 1px 0 rgba(0, 0, 0, 0.9),
-    0 0 10px color-mix(in srgb, var(--sc) 70%, transparent);
+    0 0 10px rgba(var(--sc-rgb), 0.7);
 }
-.sg-score[data-mag="2"] .sg-score__event { font-size: calc((clamp(15px, 2.7vw, 25px)) * var(--sgs)); }
+.sg-score[data-mag="2"] .sg-score__event { font-size: max(11px, calc((clamp(15px, 2.7vw, 25px)) * var(--sgs))); }
 .sg-score[data-mag="3"] .sg-score__event {
-  font-size: calc((clamp(17px, 3.1vw, 29px)) * var(--sgs));
+  font-size: max(11px, calc((clamp(17px, 3.1vw, 29px)) * var(--sgs)));
   letter-spacing: 0.2em;
 }
 
@@ -4594,7 +4778,7 @@
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--sc);
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px color-mix(in srgb, var(--sc) 40%, transparent);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 0 8px rgba(var(--sc-rgb), 0.4);
 }
 
 /* How far through the current rung, full width of the block. */
@@ -4629,7 +4813,7 @@
 }
 
 .sg-score__pop {
-  font-size: clamp(10px, 1.7vw, 13px);
+  font-size: clamp(11px, 1.7vw, 13px);
   font-weight: 600;
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
@@ -4643,25 +4827,25 @@
 /* The rung ladder. Each rung recolours the whole widget through --sc, so the
    counter, the multiplier, the event value and the meter all move together and
    the player reads one escalating object rather than four tinted parts. */
-.sg-score[data-rung="0"] { --sc: var(--sg-t0); }
-.sg-score[data-rung="1"] { --sc: var(--sg-violet); }
-.sg-score[data-rung="2"] { --sc: var(--sg-gold); }
-.sg-score[data-rung="3"] { --sc: var(--sg-white); }
-.sg-score[data-rung="4"] { --sc: #ffb020; }
-.sg-score[data-rung="5"] { --sc: #ff7a1a; }
+.sg-score[data-rung="0"] { --sc: var(--sg-t0); --sc-rgb: 61, 139, 255; }
+.sg-score[data-rung="1"] { --sc: var(--sg-violet); --sc-rgb: 180, 77, 255; }
+.sg-score[data-rung="2"] { --sc: var(--sg-gold); --sc-rgb: 255, 210, 63; }
+.sg-score[data-rung="3"] { --sc: var(--sg-white); --sc-rgb: 255, 255, 255; }
+.sg-score[data-rung="4"] { --sc: #ffb020; --sc-rgb: 255, 176, 32; }
+.sg-score[data-rung="5"] { --sc: #ff7a1a; --sc-rgb: 255, 122, 26; }
 
 /* THE MAGNITUDE LADDER OVERRIDES THE RUNG LADDER, and only upward.
    These come after the rung block so they win on equal specificity, which is
    the intent: a long slide that has banked 40,000 at a modest multiplier has
    earned the hot colour whatever the multiplier says. Rungs 4 and 5 are already
    hotter than anything here, so they are re-stated below to take it back. */
-.sg-score[data-mag="1"] { --sc: var(--sg-gold); }
-.sg-score[data-mag="2"] { --sc: #ffb020; }
-.sg-score[data-mag="3"] { --sc: #ff5a1a; }
+.sg-score[data-mag="1"] { --sc: var(--sg-gold); --sc-rgb: 255, 210, 63; }
+.sg-score[data-mag="2"] { --sc: #ffb020; --sc-rgb: 255, 176, 32; }
+.sg-score[data-mag="3"] { --sc: #ff5a1a; --sc-rgb: 255, 90, 26; }
 .sg-score[data-rung="4"][data-mag="1"],
-.sg-score[data-rung="4"][data-mag="2"] { --sc: #ffb020; }
+.sg-score[data-rung="4"][data-mag="2"] { --sc: #ffb020; --sc-rgb: 255, 176, 32; }
 .sg-score[data-rung="5"][data-mag="1"],
-.sg-score[data-rung="5"][data-mag="2"] { --sc: #ff7a1a; }
+.sg-score[data-rung="5"][data-mag="2"] { --sc: #ff7a1a; --sc-rgb: 255, 122, 26; }
 
 /* Reduced motion: the number lands rather than runs (scorer side), and nothing
    here scales or slides. The resting state of every element is already the
@@ -5301,7 +5485,7 @@
   transform: skewX(-12deg);
   opacity: 0;
   transition: opacity 200ms linear;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--sc) 60%, transparent);
+  box-shadow: 0 0 8px rgba(var(--sc-rgb), 0.6);
 }
 
 .sg-score[data-rung] .sg-score__line::before,
@@ -5311,7 +5495,7 @@
 .sg-score[data-rung="4"] .sg-score__line::after,
 .sg-score[data-rung="5"] .sg-score__line::before,
 .sg-score[data-rung="5"] .sg-score__line::after {
-  box-shadow: 0 0 16px var(--sc), 0 0 34px color-mix(in srgb, var(--sc) 70%, transparent);
+  box-shadow: 0 0 16px var(--sc), 0 0 34px rgba(var(--sc-rgb), 0.7);
   animation: sgScoreBar 620ms ease-in-out infinite alternate;
 }
 
@@ -5335,7 +5519,7 @@
   border-radius: 50%;
   background: radial-gradient(
     ellipse at center,
-    color-mix(in srgb, var(--sc) 16%, transparent) 0%,
+    rgba(var(--sc-rgb), 0.16) 0%,
     rgba(2, 4, 10, 0.42) 38%,
     rgba(0, 0, 0, 0) 72%
   );
@@ -5376,9 +5560,9 @@
 .sg-score[data-mag="3"] .sg-score__value { font-size: calc((min(clamp(66px, 13vw, 126px), 16vw)) * var(--sgs)); }
 
 .sg-score__event { color: var(--sc); }
-.sg-score[data-rung="3"] .sg-score__event { font-size: calc((clamp(15px, 2.7vw, 25px)) * var(--sgs)); }
-.sg-score[data-rung="4"] .sg-score__event { font-size: calc((clamp(16px, 3.0vw, 28px)) * var(--sgs)); }
-.sg-score[data-rung="5"] .sg-score__event { font-size: calc((clamp(17px, 3.3vw, 31px)) * var(--sgs)); letter-spacing: 0.2em; }
+.sg-score[data-rung="3"] .sg-score__event { font-size: max(11px, calc((clamp(15px, 2.7vw, 25px)) * var(--sgs))); }
+.sg-score[data-rung="4"] .sg-score__event { font-size: max(11px, calc((clamp(16px, 3.0vw, 28px)) * var(--sgs))); }
+.sg-score[data-rung="5"] .sg-score__event { font-size: max(11px, calc((clamp(17px, 3.3vw, 31px)) * var(--sgs))); letter-spacing: 0.2em; }
 
 /* ---------------------------------------------------------------------------
    THE SWELL — the number growing with how hard it is climbing.
@@ -5481,8 +5665,8 @@
   /* A hot white core in the rung's hue, rather than a flat disc of it: a spark
      that is the same colour all the way through reads as a dot, and what makes
      it read as a spark is that the middle is brighter than the edge. */
-  background: radial-gradient(circle, #fff 0%, var(--sc) 42%, color-mix(in srgb, var(--sc) 40%, transparent) 100%);
-  box-shadow: 0 0 14px var(--sc), 0 0 32px color-mix(in srgb, var(--sc) 75%, transparent);
+  background: radial-gradient(circle, #fff 0%, var(--sc) 42%, rgba(var(--sc-rgb), 0.4) 100%);
+  box-shadow: 0 0 14px var(--sc), 0 0 32px rgba(var(--sc-rgb), 0.75);
   opacity: 0;
   will-change: transform, opacity;
   animation: sgScoreSpark var(--sd, 0.45s) cubic-bezier(0.1, 0.7, 0.25, 1) 1;
@@ -5542,7 +5726,7 @@
     0 0 4px rgba(0, 0, 0, 0.8),
     -2px 0 0 rgba(255, 60, 120, 0.55),
     2px 0 0 rgba(60, 220, 255, 0.55),
-    0 0 26px color-mix(in srgb, var(--sc) 55%, transparent);
+    0 0 26px rgba(var(--sc-rgb), 0.55);
 }
 
 /* THE TICK. One flinch per award, not per digit change: during a slide the
@@ -5863,7 +6047,7 @@
      gap above the thumb pads, which is the right place there too. */
   transform: translateY(calc(-1 * (var(--sg-pad) + var(--sg-sab) + 104px)));
   font-family: var(--sg-ui);
-  font-size: clamp(10px, 1.45vmin, 15px);
+  font-size: clamp(11px, 1.45vmin, 15px);
   font-weight: 700;
   letter-spacing: 0.3em;
   /* The tracking is added after the last glyph too, so without this the line

@@ -43,6 +43,11 @@ export type SoundId =
   | 'beamFire' | 'beamHit' | 'beamBreak'
   | 'hitLight' | 'hitHeavy' | 'hitEmp'
   | 'guard' | 'ward'
+  /**
+   * A homing missile has you. Repeated, faster as it closes -- see the lock-on
+   * block in plan.ts -- so it is an instrument reading, not an event sound.
+   */
+  | 'lockOn'
   // --- race ----------------------------------------------------------------
   | 'countdown' | 'countdownGo' | 'lap' | 'lapFinal' | 'finish' | 'crack'
   /**
@@ -64,17 +69,21 @@ export type Bus = 'sfx' | 'music' | 'vo'
  * A sound is EITHER a file or a synth recipe, and the rest of the system does
  * not care which.
  *
- * That is the point of the union. The game has no audio assets at all today, so
- * a system that could only play files would be untestable and unshippable until
- * someone delivers a hundred wavs. Every sound below therefore ships with a
- * synth recipe that is honest placeholder material -- audible, distinguishable,
- * roughly the right shape -- and upgrading one to a real recording is a
- * one-line edit that nothing else in the codebase notices.
+ * The union was built for a game with no audio assets at all. Every entry
+ * shipped as a synth recipe -- honest placeholder material, audible and
+ * distinguishable -- so the whole path could be exercised before a single file
+ * existed, and upgrading one to a recording was a one-line edit nothing else
+ * noticed. That swap has HAPPENED: 42 of the catalogue's 45 entries are
+ * recordings now, and this comment said "no audio assets at all" for a long
+ * time after it stopped being true. The count is pinned by tests/audio.test.ts
+ * so the sentence cannot go stale quietly again.
  *
- * It also means the arcade one-shots may simply never become files. A boost
- * whoosh generated from a filtered noise burst costs zero bytes over the wire
- * on a PWA with a download budget, never needs decoding, and can be varied per
- * play so the tenth one does not sound like a copy of the first.
+ * The union stays because the three synth entries are synth ON PURPOSE, not for
+ * want of a file. The two sustained scrapes have their filter driven every
+ * frame from the contact force, and a recording is one fixed spectrum. The
+ * lock-on tone is an instrument reading rather than a sound effect: a plain
+ * pitched blip, re-pitched per play as the missile closes, which is exactly
+ * what an oscillator is and costs zero bytes over the wire.
  */
 export type SoundSource =
   | { kind: 'file'; url: string }
@@ -243,5 +252,13 @@ export interface EngineVoice {
   boost: number
   /** 0..1 drift layer, the tyre/repulsor squall. */
   drift: number
+  /**
+   * 0..1 SPUTTER: the car's systems are down (an EMP, or a jump start's bog)
+   * and the engine should cut in and out rather than carry on revving. The
+   * stage chops the voice at audio rate -- see `AudioStage.setEngine` -- so the
+   * stutter is the same at 30 fps as at 120, which a gain written once per
+   * render frame could never be.
+   */
+  stun: number
   at: { x: number; y: number; z: number } | null
 }
