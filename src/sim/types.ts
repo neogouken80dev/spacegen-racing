@@ -341,7 +341,21 @@ export type RacerEvent =
   | { t: 'launch'; grade: 'perfect' | 'good' | 'jump' }
   | { t: 'driftStart' }
   | { t: 'driftEnd'; tier: number }
-  | { t: 'hit'; item: ItemId }
+  /**
+   * A weapon took effect on this racer: a spin, a stun or a slow.
+   *
+   * `by` IS WHO DID IT -- the attacker's racer index, read off the projectile's
+   * or the field's `ownerId` (or the rammer, or the EMP's user) at the line
+   * that resolves the hit, and -1 where there is nobody to name. It exists for
+   * the achievements (content/achievements.ts): "knocked out a rival" and
+   * "weapon hits on rivals" are claims about WHO, and until this field the
+   * only event naming a target was the gatling's `beamHit` on the shooter.
+   *
+   * PUBLISHED STATE ONLY. Nothing in the sim reads `r.events` (see
+   * game/eventCarry.ts), so adding a field here cannot move a trajectory or
+   * the determinism hash -- `tools/headless.ts --assert` still pins a84519e0.
+   */
+  | { t: 'hit'; item: ItemId; by: number }
   /**
    * A pilot ability absorbed something. `guard` is the defensive plating eating
    * an impact, `ward` the health pilot's field repair eating a weapon.
@@ -353,7 +367,8 @@ export type RacerEvent =
    * signal is a hit that did not arrive.
    */
   | { t: 'guard' }
-  | { t: 'ward'; item: ItemId }
+  /** `by` as on `hit`: whose weapon the field repair ate. */
+  | { t: 'ward'; item: ItemId; by: number }
   | { t: 'fire'; item: ItemId }
   | { t: 'pickup' }
   | { t: 'charge' }

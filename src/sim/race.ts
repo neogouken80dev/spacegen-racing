@@ -461,11 +461,12 @@ export class Race {
         const nx = dx / d, nz = dz / d
         const overlap = minD - d
 
-        // Overdrive Core: instant spin-out on contact.
+        // Overdrive Core: instant spin-out on contact. The rammer is the one
+        // holding the core, so that is who the hit is attributed to.
         if (a.invincibleTime > 0 && b.invincibleTime <= 0 && b.immuneTime <= 0) {
-          this.hit(b, 'overdriveCore', ITEM_PARAMS.overdriveCore.contactSpin)
+          this.hit(b, 'overdriveCore', ITEM_PARAMS.overdriveCore.contactSpin, a.id)
         } else if (b.invincibleTime > 0 && a.invincibleTime <= 0 && a.immuneTime <= 0) {
-          this.hit(a, 'overdriveCore', ITEM_PARAMS.overdriveCore.contactSpin)
+          this.hit(a, 'overdriveCore', ITEM_PARAMS.overdriveCore.contactSpin, b.id)
         }
 
         const ma = getDerived(a.chassisId, a.pilotId).massKg * a.massMult
@@ -720,7 +721,7 @@ export class Race {
           if (o.invincibleTime > 0 || o.immuneTime > 0) continue
           o.stunTime = Math.max(o.stunTime, o.boostTime > 0 ? p.stunTimeBoosting : p.stunTime)
           o.lastHitBy = 'empBomb'
-          o.events.push({ t: 'hit', item: 'empBomb' })
+          o.events.push({ t: 'hit', item: 'empBomb', by: r.id })
         }
         consume(); break
       }
@@ -957,7 +958,7 @@ export class Race {
           const lethal = r.beamCharge >= G.breakAt - 1e-6
           if (lethal) {
             r.beamCharge = 0
-            this.hit(r, 'laserGatling', G.spinTime)
+            this.hit(r, 'laserGatling', G.spinTime, p.ownerId)
           }
           // Reported on the SHOOTER, which is where the VFX reads it from and
           // who the hit marker belongs to.
@@ -1001,7 +1002,7 @@ export class Race {
         // offensive pilot buys more of it. Alpha keeps its own full stop --
         // see the fullStop note in hit().
         const spin = baseSpin * (ownerAb.weaponMult ?? 1)
-        this.hit(r, item, spin, p.kind === 'alpha')
+        this.hit(r, item, spin, p.ownerId, p.kind === 'alpha')
         p.alive = false
         break
       }
@@ -1027,7 +1028,7 @@ export class Race {
           if (f.armDelay > 0 || r.id === f.ownerId) continue
           if (d < f.radius && r.invincibleTime <= 0 && r.immuneTime <= 0) {
             const p = ITEM_PARAMS.voidMine
-            this.hit(r, 'voidMine', p.spinTime)
+            this.hit(r, 'voidMine', p.spinTime, f.ownerId)
             f.alive = false
           }
         } else {
@@ -1038,7 +1039,7 @@ export class Race {
             r.slowMag = p.slowMag
             r.massMult = p.massMult
             if (r.lastHitBy !== 'gravityWell') {
-              r.events.push({ t: 'hit', item: 'gravityWell' })
+              r.events.push({ t: 'hit', item: 'gravityWell', by: f.ownerId })
               r.lastHitBy = 'gravityWell'
             }
           } else if (r.lastHitBy === 'gravityWell' && r.slowTime <= 0) {
@@ -1095,7 +1096,15 @@ export class Race {
     }
   }
 
-  private hit(r: RacerState, item: ItemId, spin: number, fullStop = false): void {
+  /**
+   * `by` is the attacker's racer index, or -1 for nobody. It is only ever
+   * WRITTEN onto the event below -- no line in this method or anywhere else in
+   * the sim reads it -- so it is attribution for the achievements and nothing
+   * else, and it cannot move the determinism hash. Every caller passes it
+   * explicitly rather than defaulting it, so a new weapon that forgets to say
+   * who fired it is a type error, not a silent -1.
+   */
+  private hit(r: RacerState, item: ItemId, spin: number, by: number, fullStop = false): void {
     if (r.immuneTime > 0 || r.invincibleTime > 0) return
     const ab = pilotAbility(r.pilotId)
 
@@ -1114,7 +1123,7 @@ export class Race {
     if (ab.wardCooldown && r.wardTime <= 0) {
       r.wardTime = ab.wardCooldown
       r.immuneTime = T.items.staggerShield
-      r.events.push({ t: 'ward', item })
+      r.events.push({ t: 'ward', item, by })
       return
     }
 
@@ -1141,7 +1150,7 @@ export class Race {
       ? baseKeep
       : 1 - (1 - baseKeep) * (ab.scrubMult ?? 1)
     r.vel.x *= keep; r.vel.z *= keep
-    r.events.push({ t: 'hit', item })
+    r.events.push({ t: 'hit', item, by })
   }
 
   /**

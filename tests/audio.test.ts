@@ -115,7 +115,7 @@ describe('the voice limiter', () => {
     const st = state(4)
     const carry: RacerEvent[][] = st.racers.map(() => [])
     // Same frame, three victims, one explosion.
-    for (const i of [1, 2, 3]) carry[i] = [{ t: 'hit', item: 'railMissile' }]
+    for (const i of [1, 2, 3]) carry[i] = [{ t: 'hit', item: 'railMissile', by: -1 }]
     const out = p.frame(st, carry, 0, ORIGIN, 0)
     const hits = out.plays.filter((x) => x.id === 'hitLight')
     expect(hits.length, `${hits.length} impacts for one missile`).toBe(1)
@@ -301,7 +301,7 @@ describe('the player cannot be crowded out by the field', () => {
       const p = new AudioPlanner()
       const st = pack()
       st.racers[me].isLocal = true
-      const carry: RacerEvent[][] = st.racers.map(() => [{ t: 'hit', item: 'empBomb' } as RacerEvent])
+      const carry: RacerEvent[][] = st.racers.map(() => [{ t: 'hit', item: 'empBomb', by: -1 } as RacerEvent])
       const out = seat(p, st, carry, me, 1)
       const flat = out.plays.filter((x) => x.id === 'hitEmp' && x.at === null)
       expect(flat.length, `seat ${me}: the player's own EMP hit was not played`).toBe(1)
@@ -339,8 +339,8 @@ describe('the player cannot be crowded out by the field', () => {
     const st = state(2)
     st.racers[1].pos.x = 8
     const carry: RacerEvent[][] = [
-      [{ t: 'hit', item: 'railMissile' }],
-      [{ t: 'hit', item: 'railMissile' }],
+      [{ t: 'hit', item: 'railMissile', by: -1 }],
+      [{ t: 'hit', item: 'railMissile', by: -1 }],
     ]
     const out = p.frame(st, carry, 0, ORIGIN, 0)
     const hits = out.plays.filter((x) => x.id === 'hitLight')
