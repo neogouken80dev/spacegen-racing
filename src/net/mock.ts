@@ -47,7 +47,7 @@
  */
 import {
   LOBBY_MAX_PLAYERS, LOBBY_MIN_PLAYERS, NAME_RULES, REGIONS, SERIES_LENGTHS,
-  type AccountService, type CreateLobbyOptions, type JoinError, type LobbyFilter,
+  type AccountService, type AchievementSync, type CreateLobbyOptions, type JoinError, type LobbyFilter,
   type LobbyMember, type LobbyRoom, type LobbyService, type LobbyStatus,
   type LobbySummary, type MultiplayerSlot, type NameError, type PlayerProfile,
   type RaceStartPacket, type RaceTransport, type RegionId, type Result,
@@ -58,6 +58,10 @@ import {
   AVATARS, AVATAR_BY_ID, DEFAULT_AVATAR_ID, PRICES, STARTER_IDS,
   featsFromProfile, ownsAvatar, priceOf, ranksEarned,
 } from '../content/avatars'
+import {
+  asSnapshot, emptySnapshot, featsFromUnlocks, mergeSnapshots, withDerived,
+  type AchievementSnapshot,
+} from '../content/achievements'
 import { CHASSIS } from '../content/chassis'
 import { PILOTS, PILOTS_BY_ID } from '../content/pilots'
 import { TRACKS } from '../content/tracks/index'
@@ -1366,6 +1370,14 @@ interface StoredAccount {
    *  mock checks it; it is here so the stored shape is the real one. */
   secret: string
   profile: PlayerProfile
+  /**
+   * The account's achievements, which a real backend keeps in the account
+   * record. The mock has no record that survives a reload -- the world is
+   * rebuilt on every page load (see `load`) -- so it keeps them where it keeps
+   * the profile, on the device, and reads them back through the catalogue's
+   * sanitiser like anything else from storage.
+   */
+  ach?: AchievementSnapshot
 }
 
 const num = (v: unknown, d: number): number =>
@@ -1472,6 +1484,8 @@ export function createMockAccountService(opts: MockNetOptions = {}): AccountServ
 
   let profile: PlayerProfile | null = null
   let secret = ''
+  /** The account's achievements. See `StoredAccount.ach`. */
+  let achieved: AchievementSnapshot = emptySnapshot()
   let offline = opts.offline === true
   /** True when the last write to storage did not stick. The profile still
    *  works; it just will not survive a reload, and the UI may want to say so. */
@@ -1496,12 +1510,14 @@ export function createMockAccountService(opts: MockNetOptions = {}): AccountServ
 
   function persist(): void {
     if (!profile) return
-    const payload: StoredAccount = { v: LS_VERSION, id: profile.id, secret, profile }
+    const payload: StoredAccount = { v: LS_VERSION, id: profile.id, secret, profile, ach: achieved }
     storageBlocked = !writeKey(store, LS_ACCOUNT, JSON.stringify(payload))
   }
 
   /** Read whatever this device remembers. Never throws; see deviceStorage. */
-  function restore(): { id: string; secret: string; profile: PlayerProfile | null } | null {
+  function restore(): {
+    id: string; secret: string; profile: PlayerProfile | null; ach: AchievementSnapshot
+  } | null {
     const raw = readKey(store, LS_ACCOUNT)
     if (!raw) return null
     try {
@@ -1510,7 +1526,9 @@ export function createMockAccountService(opts: MockNetOptions = {}): AccountServ
       if (num(p.v, -1) !== LS_VERSION) return null
       const id = str(p.id)
       if (!id) return null
-      return { id, secret: str(p.secret), profile: readProfile(p.profile, id) }
+      // An old payload has no `ach` and reads as nothing earned, which is what
+      // it is. Same sanitiser as the server: unknown ids dropped one by one.
+      return { id, secret: str(p.secret), profile: readProfile(p.profile, id), ach: asSnapshot(p.ach).snap }
     } catch {
       return null
     }
@@ -1590,6 +1608,7 @@ export function createMockAccountService(opts: MockNetOptions = {}): AccountServ
         () => {
           const reachable = opts.offline !== true && !broken()
           offline = !reachable
+          if (saved) achieved = saved.ach
           if (saved?.profile) {
             secret = saved.secret
             // THE MOCK ADOPTS THE DEVICE'S COPY when its own table has never
@@ -1722,6 +1741,41 @@ export function createMockAccountService(opts: MockNetOptions = {}): AccountServ
           }))
         },
         () => fail<PlayerProfile>('offline'),
+      )
+    },
+
+    /**
+     * THE SAME MERGE THE SERVER DOES, WITHOUT THE BOUNDS.
+     *
+     * Union and max through content/achievements.ts's one rule, then the feat
+     * portraits the merged wall implies (`featsFromUnlocks`) -- which is the
+     * part that finally lets the mock grant Singularity Hand, Half Million,
+     * Grand Champion and Iron Run: see the note at the bottom of this file.
+     *
+     * No per-post bounds and no pace, exactly as this mock's `award` has no
+     * clamp and no pace: the mock is the device's own account, there is nobody
+     * to defend it from, and net/account.ts is where the bounds are written and
+     * tested. What the mock DOES keep is the failure dice and the offline flag,
+     * because those are what the calling code has to survive.
+     */
+    syncAchievements(progress: AchievementSnapshot): Promise<Result<AchievementSync>> {
+      return call(
+        delay(),
+        (): Result<AchievementSync> => {
+          // `guard` only ever answers with a failure, typed for the profile
+          // calls; re-typed here rather than widened there.
+          const blocked = guard()
+          if (blocked && !blocked.ok) return fail<AchievementSync>(blocked.error)
+          const merged = mergeSnapshots(achieved, asSnapshot(progress).snap)
+          const p = profile!
+          achieved = withDerived(merged, {
+            unlocked: p.unlocked, earned: p.earned, credits: p.credits, races: p.races, wins: p.wins,
+          })
+          const unlocked = new Set([...p.unlocked, ...featsFromUnlocks(achieved.unlocked)])
+          const next = commit({ ...p, unlocked: [...unlocked] })
+          return ok({ profile: next, progress: { unlocked: [...achieved.unlocked], counters: { ...achieved.counters } } })
+        },
+        () => fail<AchievementSync>('offline'),
       )
     },
 
@@ -2290,9 +2344,10 @@ export function resetSharedWorld(): void {
 //     worth mocking.
 //   - NO BANDWIDTH OR PAYLOAD SIZE. Latency is modelled; throughput is not.
 //     Nothing above the seam sends enough bytes for it to matter.
-//   - NO EVIDENCE-BASED FEATS. `award` is handed a number of credits and a
-//     won/lost flag, which is enough to grant ranks and the two feats that
-//     lifetime counters imply (see `featsFromProfile`), and not enough for the
-//     three that need a combo, a score or a circuit standing. Those want
-//     `featsEarned` and a `RaceFeatEvidence` the contract does not carry, so
-//     the mock grants what it can check and nothing it cannot.
+//   - EVIDENCE-BASED FEATS COME THROUGH THE ACHIEVEMENTS, NOT `award`. `award`
+//     is still handed only credits and a won/lost flag -- enough for ranks and
+//     Flag Bearer. The four feats that need a combo, a score or a circuit
+//     standing are granted by `syncAchievements`, from the synced Combo King,
+//     High Roller, Grand Champion and mark:ironrun (content/achievements.ts
+//     FEAT_OF), exactly as net/account.ts's `toProfile` derives them. Before
+//     that sync existed, nothing could grant them at all.
