@@ -157,7 +157,7 @@ if (NOWEBGL) {
   await page.waitForTimeout(2000)
   await shot('1-garage-nowebgl')
   const fb = await page.evaluate(() => {
-    const box = document.querySelector('.sg-prev')
+    const box = document.querySelector('.sg-screen--garage .sg-prev')
     const detail = document.querySelector('.sg-screen--garage .sg-detail')
     return {
       dbg: window.__GARAGE_PREVIEW__ ? window.__GARAGE_PREVIEW__.debug() : null,
@@ -238,7 +238,7 @@ console.log(`auto-rotate: yaw ${y0.toFixed(3)} -> ${y1.toFixed(3)} (delta ${(y1 
 // A swipe that starts on the PREVIEW must rotate it; a swipe that starts on a
 // LIST must scroll the list. Both measured on the real touch viewport, through
 // real touch events, because a mouse drag proves nothing about either.
-const box = await page.locator('.sg-prev').boundingBox()
+const box = await page.locator('.sg-screen--garage .sg-prev').boundingBox()
 const listSel = '.sg-screen--garage .sg-col--pilot .sg-list'
 const listBox = await page.locator(listSel).boundingBox()
 const scrollTop = () => page.$eval(listSel, (e) => e.scrollTop)

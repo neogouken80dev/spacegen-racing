@@ -602,6 +602,15 @@ export class Game {
   private frameTimes: number[] = []
   private frameIdx = 0
   private qualityCooldown = 0
+  /**
+   * The tier the player chose -- the garage setting, the settings panel, or
+   * the device guess before either. The adaptive scaler only ever steps DOWN
+   * from where it is; this is the ceiling it may climb back toward between
+   * races (see `adaptTierForRace`), and it never climbs past it.
+   */
+  private chosenTier: QualityTier = 'medium'
+  /** The last settled p95 frame time of the race in progress, ms. */
+  private raceP95 = Infinity
   private fps = 60
   /** Substep cap. Mutable so headless test harnesses can let the fixed-step
    *  accumulator catch up when the renderer is running at software speed. */
@@ -629,6 +638,7 @@ export class Game {
     this.renderer.toneMappingExposure = 1.05
 
     this.tier = detectTier()
+    this.chosenTier = this.tier
     this.quality = { ...QUALITY_PRESETS[this.tier] }
 
     this.track = new Track(RUSTFALL)
@@ -706,7 +716,7 @@ export class Game {
       this.compact.refresh()
       this.settings.refresh()
     }
-    this.settings.onQualityChange = (q) => this.setTier(q)
+    this.settings.onQualityChange = (q) => { this.chosenTier = q; this.setTier(q) }
     this.settings.onReducedMotionChange = (on) => {
       this.reduceMotion = on
       // All four motion consumers from one value. The VFX system reads
@@ -813,6 +823,7 @@ export class Game {
       } else {
         this.setTrack(sel.trackId)
       }
+      this.chosenTier = sel.quality
       this.setTier(sel.quality)
       this.startRace()
     }
@@ -1684,6 +1695,7 @@ export class Game {
     // the title race up here leaves that callback a no-op.
     this.stopAttract()
     resetAI()
+    this.adaptTierForRace()
     this.applyRenderScale()
     this.buildWorld()
     // A rematch must not replay the last race's final-frame events.
@@ -3032,12 +3044,49 @@ export class Game {
     this.qualityCooldown -= dt
     if (this.qualityCooldown <= 0 && this.frameTimes.length >= 90 && this.phase === 'racing') {
       const p95 = percentile(this.frameTimes, 0.95)
+      this.raceP95 = p95
       if (p95 > 24 && this.tier !== 'low') {
         this.setTier(this.tier === 'high' ? 'medium' : 'low')
         this.qualityCooldown = 6
         this.frameTimes.length = 0
+        this.raceP95 = Infinity
       }
     }
+  }
+
+  /**
+   * The quality a race STARTS at, decided before its world is built.
+   *
+   * TWO THINGS WERE WRONG WITH A ONE-WAY RATCHET.
+   *
+   * It judged the countdown. The window it reads is the last 90 frames, and
+   * at the start of a race those are the frames that built the world and
+   * compiled its shaders -- the slowest frames of the session on any device.
+   * The check ran from the first frame the window was full, so a machine that
+   * hitched while compiling could lose a tier before the lights went out. The
+   * window is now emptied here and the first four seconds (the 3.6 s countdown
+   * and a margin) are not judged.
+   *
+   * And it never gave anything back. A notification, a thermal blip or one
+   * bad corner cost the player their chosen quality for every rematch and
+   * every round that followed; only going back through the garage restored
+   * it. Now a race that ran with a lot of room to spare -- a settled p95
+   * under 13 ms at the lower tier, twice the frame rate the step-down fires
+   * at -- starts the NEXT race one tier higher, never above the player's
+   * choice. Between races, because a step is a world rebuild and a rebuild
+   * mid-race is a hitch at the worst moment; and one tier at a time, so a
+   * wrong guess costs one step-down six seconds into a race, not a lurch.
+   */
+  private adaptTierForRace(): void {
+    const RANK: Record<QualityTier, number> = { low: 0, medium: 1, high: 2 }
+    if (RANK[this.tier] < RANK[this.chosenTier] && this.raceP95 < 13) {
+      this.tier = this.tier === 'low' ? 'medium' : 'high'
+      this.quality = { ...QUALITY_PRESETS[this.tier] }
+    }
+    this.raceP95 = Infinity
+    this.frameTimes.length = 0
+    this.frameIdx = 0
+    this.qualityCooldown = 4
   }
 
   private renderFrame(dt: number): void {
@@ -3236,7 +3285,7 @@ export class Game {
        * belongs to the wrong vehicle.
        *
        * Handed the INTERPOLATED views rather than `st.racers`, for the same
-       * reason the vehicle visuals get them: the sim steps at a fixed 120 Hz
+       * reason the vehicle visuals get them: the sim steps at a fixed 60 Hz
        * and the display does not, so the cars on screen are between sim
        * frames and a plate anchored to the raw state would swim against the
        * car it is nailed to on any display that is not exactly in step.

@@ -416,10 +416,10 @@ describe.each(TRACKS.map((d) => [`${d.name} (${d.id})`, d] as const))(
     solid.dispose(); paint.dispose()
   })
 
-  it('keeps viaduct piers off the road the flyover crosses over', () => {
-    // Only meaningful on a track that has a flyover. Cryostatic never crosses
-    // itself, so it builds no piers and the assertion has nothing to measure.
-    if (def.id !== 'rustfall') { expect(true).toBe(true); return }
+  // Only meaningful on a track that has a flyover, so it only RUNS on one:
+  // this used to register for every circuit and pass the others with an
+  // `expect(true)`, which reports a green tick for a measurement nobody made.
+  it.runIf(def.id === 'rustfall')('keeps viaduct piers off the road the flyover crosses over', () => {
     // Piers stand `width * 0.46` off the deck centreline and run to the floor,
     // so a bay that lands where the flyover crosses the sweeper plants two legs
     // in the middle of a road 10 m below. A leg on the tarmac shows up here as a
@@ -627,6 +627,24 @@ describe.each([
     const k = Math.abs(track.curvatureAt(s - 7.5, 15))
     return k > 1e-6 ? 1 / k : Infinity
   }
+  /**
+   * WHERE TO READ IT: HALFWAY BETWEEN SAMPLES, NEVER ON ONE.
+   *
+   * `curvatureAt` compares the tangents of two SAMPLES found by `Track.at`,
+   * which snaps an arc length to the nearest one. Read at s = i * L/m -- on a
+   * sample -- both ends of the 15 m window sit exactly on a rounding boundary,
+   * so which neighbour each end snaps to is decided by the last few bits of
+   * floating point, and the window flips between 10 and 11 samples from one i
+   * to the next. The same corner then measures two radii an eleventh apart,
+   * and every number built on it inherits the flip: Elkarim's surface tax read
+   * 0.2526 against its 0.25 floor where the geometry is worth 0.336, and
+   * Frosthelm's read passed its 0.55 floor on a lap length 15 mm from the
+   * point where the rounding goes the other way. Read halfway between samples
+   * the window is 10 samples every time, on every circuit, and the reading is
+   * the road's. The sim's own reading has the same flip and is the deferred
+   * `Track.at` fix; this is only the instrument.
+   */
+  const between = (i: number): number => ((i + 0.5) / m) * track.length
 
   it('lays every item box row on the road and never closer than a box is wide', () => {
     // BOX_SIZE in render/entities.ts is a 2.4m cube. Two boxes on a row closer
@@ -650,7 +668,7 @@ describe.each([
     let worst = Infinity
     let worstAt = -1
     for (let i = 0; i < m; i++) {
-      const s = (i / m) * track.length
+      const s = between(i)
       const surface = track.samples[i].surface
       const grip = lerp(1, SURFACE_GRIP[surface], loco.surfaceFrictionInfluence)
       const v = cornerSpeedAt(lateralBudget(derived, loco, grip), 1 / radiusAt(s))
@@ -706,8 +724,7 @@ describe.each([
       }
       const v = new Array<number>(m)
       for (let i = 0; i < m; i++) {
-        const s = (i / m) * track.length
-        v[i] = Math.min(top, cornerSpeedAt(lateralBudget(derived, loco, gripAt(i)), 1 / radiusAt(s)))
+        v[i] = Math.min(top, cornerSpeedAt(lateralBudget(derived, loco, gripAt(i)), 1 / radiusAt(between(i))))
       }
       // Two laps of backward relaxation so the limit propagates around the
       // wrap, which one pass cannot do on a closed circuit.
@@ -746,7 +763,14 @@ describe.each([
     // So the floor keeps the part that still means something -- the surface
     // layer is not decorative -- and the PLACEMENT assertion below is what now
     // carries the design rule the old floor was standing in for.
-    const floor: Record<string, number> = { rustfall: 0.25, cryostatic: 0.55, aetherion: 0.25 }
+    //
+    // AND ONE FLOOR MOVED BECAUSE THE INSTRUMENT GOT HONEST, not because the
+    // track changed. Read between samples (see `between` above) the three
+    // measure Rustfall 0.336, Cryostatic 0.424 and Aetherion 0.660 s a lap.
+    // Cryostatic's 0.55 floor had been cleared only by the on-sample reading's
+    // rounding flip, so it comes down to 0.40, under the honest value with the
+    // same kind of margin the other two have; nothing about the ice moved.
+    const floor: Record<string, number> = { rustfall: 0.25, cryostatic: 0.40, aetherion: 0.25 }
     const tax = idealLap(true) - idealLap(false)
     expect(tax, `${name} surface tax per lap under the friction budget`)
       .toBeGreaterThan(floor[def.id])
@@ -856,7 +880,12 @@ describe.each([
         }
       }
     }
-    if (minDy === Infinity) { expect(true).toBe(true); return }
+    // All three of these circuits cross themselves, on purpose and documented
+    // above, so finding no crossing is a regression in its own right -- the
+    // flyover or the pass-under has gone -- not a free pass. It used to return
+    // `expect(true)` here, and `Infinity > floor` would have passed as well.
+    expect(minDy, `${name} is documented as crossing itself, and no crossing was found`)
+      .toBeLessThan(Infinity)
     expect(minDy, `${name} closest road-over-road clearance at ${where}`)
       .toBeGreaterThan(floor[def.id])
   })

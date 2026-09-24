@@ -38,9 +38,14 @@ console.log(`  ${t.length.toFixed(0)}m, ${nodes.length} nodes, ${t.samples.lengt
 console.log(`  chord ${chordMin.toFixed(1)}-${chordMax.toFixed(1)}m   ratio ${(chordMax / chordMin).toFixed(2)}  (a big ratio puts curvature spikes at the joins)`)
 
 // Corner census: the radii the SIM reads, which is the only opinion that counts.
+// Read HALFWAY BETWEEN SAMPLES. At i * 1.5 m the reading sits on (or within
+// millimetres of) a sample, where Track.at's nearest-sample snap decides each
+// end of the window by rounding and the same corner reads two different radii
+// from one i to the next. tests/track.test.ts `between` has the full story.
 const radii: number[] = []
+const step = t.length / t.samples.length
 for (let i = 0; i < t.samples.length; i++) {
-  const k = Math.abs(t.curvatureAt(i * 1.5, 20))
+  const k = Math.abs(t.curvatureAt((i + 0.5) * step, 20))
   if (k > 0.0045) radii.push(1 / k)
 }
 const held = (100 * radii.length) / t.samples.length

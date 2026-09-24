@@ -127,7 +127,7 @@ console.log('preview:', JSON.stringify(sel))
 
 const dir = new URL('../shots/', import.meta.url).pathname
 await mkdir(dir, { recursive: true })
-const box = page.locator('.sg-prev').first()
+const box = page.locator('.sg-screen--garage .sg-prev')
 
 for (const deg of YAWS) {
   await page.evaluate((y) => window.__GARAGE_PREVIEW__.setYaw(y), (deg * Math.PI) / 180)

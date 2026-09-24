@@ -15,6 +15,15 @@
  * for identical driving -- which tests/score.test.ts asserts by driving the
  * same scripted run at three frame rates.
  *
+ * THAT PROMISE HAS A SECOND HALF THIS FILE CANNOT KEEP ALONE. Time is one
+ * input; events are the other, and this reads them with no frame guard. For a
+ * long time a frame that ran no sim step -- half the frames at 120Hz -- still
+ * held the previous step's events, and this paid every award again: the same
+ * Rustfall race scored 392,840 at 60Hz and 702,337 at 144Hz, while the test
+ * above (which feeds the scorer directly) stayed green. The event half is kept
+ * by main.ts's carry, which publishes nothing on a stepless frame, and is
+ * asserted end to end in tests/eventCarry.test.ts.
+ *
  * EVENTS ARE READ FROM `r.events` AFTER THE SUB-STEP WRITE-BACK.
  *
  * main.ts accumulates events across every sub-step of a render frame and writes

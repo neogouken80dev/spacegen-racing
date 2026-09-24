@@ -1053,8 +1053,10 @@ export class Race {
   }
 
   /**
-   * The Pulse Gatling. Hitscan, fires on a fixed cadence while its budget
-   * lasts, and does no single-hit damage worth the name: every hit chips speed
+   * The Pulse Gatling. Real rounds, not hitscan -- each shot is a `bullet`
+   * projectile that flies and can miss (see the note on it in sim/types.ts) --
+   * fired on a fixed cadence while its budget lasts, and doing no single-hit
+   * damage worth the name: every hit chips speed
    * and shoves the target sideways, and only sustained tracking on ONE racer
    * accumulates enough beam to break them. Breaking line of sight bleeds it off.
    */

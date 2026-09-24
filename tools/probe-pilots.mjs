@@ -83,7 +83,7 @@ async function waitFrames(n, capMs = 60000) {
 
 const dir = new URL('../shots/pilots/', import.meta.url).pathname
 await mkdir(dir, { recursive: true })
-const box = page.locator('.sg-prev').first()
+const box = page.locator('.sg-screen--garage .sg-prev')
 
 for (const name of NAMES) {
   const card = page.locator('.sg-screen--garage .sg-col--pilot .sg-card')
