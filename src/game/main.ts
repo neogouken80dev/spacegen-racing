@@ -50,7 +50,7 @@ import type { RacerState, RacerEvent, SimConfig, InputFrame } from '../sim/types
  * that never opens a lobby still pay nothing.
  */
 import {
-  accountService, existingAccountService, liveLobby, lobbyService, raceTransport,
+  accountService, existingAccountService, liveLobby, lobbyService, netProfile, raceTransport,
 } from '../net'
 import { LockstepRunner } from '../net/lockstep'
 import type {
@@ -2050,7 +2050,7 @@ export class Game {
     if (this.circuitActive && this.circuit && !wasComplete && isComplete(this.circuit)) {
       // ACHIEVEMENTS, banked AFTER the round: Grand Champion is read off the
       // table scoreCircuitRound just finished. See bankRace.
-      this.bankRace(true)
+      this.bankRace(true, true)
       this.beginPodium()
       return
     }
@@ -2061,8 +2061,11 @@ export class Game {
     // unaffected".
     const mpPodium = this.scoreSeriesRound()
     // ACHIEVEMENTS, after the series table for the same reason: a sweep is
-    // read off it.
-    this.bankRace(false)
+    // read off it. The toast only when a podium comes first: the results
+    // screen carries its own "New badges" strip, and a toast on top of it was
+    // the same news twice -- photographed at 390x844 covering half the
+    // results title for its whole 4.2 seconds.
+    this.bankRace(false, mpPodium)
     if (mpPodium) { this.beginSeriesPodium(); return }
     this.phase = 'results'
     this.hud.root.style.display = 'none'
@@ -2433,20 +2436,28 @@ export class Game {
    * MULTIPLAYER MEANS ANOTHER PERSON ON THE GRID, not merely a lobby: a room
    * of one against the AI fill is a single race wearing a room's name, and
    * Online Victor says "multiplayer race".
+   *
+   * AND A PERSON MEANS THE LIVE NETWORK. The shipped default is still the
+   * mock world (net/index.ts, DEFAULT_PROFILE), whose lobbies are full of
+   * simulated players with player ids -- every one of them driven by the AI.
+   * Counting those would hand out Online Victor for beating bots in a room
+   * with a lobby's name on it, so the badge waits for `live`, the one profile
+   * where the other ids on the grid are somebody.
    */
   private raceContext(
     score: number, bestCombo: number,
     circuit: CircuitEvidence | null = null, sweep = false,
   ): RaceContext {
     const packet = this.multiplayer
-    const multiplayer = packet !== null && packet.grid.some(
+    const multiplayer = packet !== null && netProfile() === 'live' && packet.grid.some(
       (s) => s.playerId !== null && s.playerId !== packet.localPlayerId)
     return { difficulty: this.raceDifficulty(), multiplayer, score, bestCombo, circuit, sweep }
   }
 
   /**
    * Bank the race that just took the flag, and put what it unlocked on the
-   * results strip and in a toast.
+   * results strip -- and in a toast when `toast` says a podium stands between
+   * the flag and that strip.
    *
    * CALLED AFTER THE ROUND IS SCORED, from both of finishRace's exits: Grand
    * Champion and Iron Run are read off the circuit table and a lobby sweep off
@@ -2454,7 +2465,7 @@ export class Game {
    * the ones captured at the flag (`lastScore`), not the scorer's running
    * total, for the reason the capture exists: the ceremony is not the player's.
    */
-  private bankRace(circuitDone: boolean): void {
+  private bankRace(circuitDone: boolean, toast: boolean): void {
     const race = this.race
     if (!race) return
     const ev = circuitDone && this.circuit ? circuitEvidence(this.circuit) : null
@@ -2465,7 +2476,7 @@ export class Game {
       this.raceContext(this.lastScore, this.lastBestCombo, ev?.circuit ?? null, sweep))
     this.badgeToasts.setChipHost(null)
     this.frontEnd.setUnlocks(ids)
-    this.ach.announce(ids)
+    if (toast) this.ach.announce(ids)
   }
 
   /**

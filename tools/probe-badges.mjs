@@ -654,7 +654,11 @@ if (ONLY !== 'screens') {
   if (out.phase !== 'results') note('race', 'never reached the results screen')
   if (!out.news.some((n) => n.kind === 'chip')) note('race', 'no mid-race chip was raised by the preview')
   if (out.strip.length === 0) note('race', 'the results strip is empty after a race that crossed thresholds')
-  if (!out.news.some((n) => n.kind === 'show')) note('race', 'no toast at the flag')
+  // The results screen's strip IS the announcement at the flag: a toast on top
+  // of it was the same news twice, and on a 390x844 phone it sat over half the
+  // results title for its whole 4.2 s. So a race that ends on the results
+  // screen raises none (main.ts bankRace; a podium in between still gets one).
+  if (out.news.some((n) => n.kind === 'show' && n.t >= 0)) note('race', 'a toast was raised at the flag on top of the results strip')
   if (out.tracking) note('race', 'the tracker is still watching after the flag')
   if (!delta.finishes && out.finished) note('race', 'a finished race did not count a finish')
   if (errors.length) for (const e of errors.slice(0, 6)) note('race', `page error: ${e}`)
