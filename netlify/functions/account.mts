@@ -2,7 +2,12 @@
  * SpaceGen Racing — the account endpoint.
  * ---------------------------------------------------------------------------
  *   POST /api/account   { op: 'mint' | 'load' | 'name' | 'avatar' | 'buy'
- *                             | 'award', ... }  ->  { ok, ... }
+ *                             | 'award' | 'achieve', ... }  ->  { ok, ... }
+ *
+ * `achieve` (achievement sync) adds nothing to this file: its bounds, its pace
+ * and its candid list of what cannot be verified are in src/net/account.ts,
+ * and it counts against the same per-IP bucket as every other op -- one post
+ * per race, which is well inside RATE_LIMIT.
  *
  * WHY THERE IS ALMOST NOTHING IN THIS FILE.
  *
@@ -40,9 +45,9 @@
  * COST
  *
  * One request on launch, one per name change, one per avatar change or
- * purchase, and one per finished race. A player costs perhaps five requests an
- * hour, which is an order of magnitude below the signalling endpoint and two
- * below the lobby directory. Nothing here polls.
+ * purchase, and two per finished race (the award and the achievement sync). A
+ * player costs perhaps ten requests an hour, which is still an order of
+ * magnitude below the signalling endpoint. Nothing here polls.
  */
 import type { Context } from '@netlify/functions'
 import { getStore } from '@netlify/blobs'

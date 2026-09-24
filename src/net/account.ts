@@ -77,31 +77,76 @@
  *      anything -- to make "this account has been clamped four hundred times" a
  *      fact on the record for the day somebody looks, rather than an archaeology
  *      project across function logs that have rotated away.
- *   4. IT DERIVES EVERY UNLOCK AND ACCEPTS NONE. This is the part that IS a
- *      guarantee, and it is worth stating exactly because everything above is
- *      not. A client cannot post "and I unlocked Old Guard". Rank avatars come
- *      from `ranksEarned(earned)` and the two counter-implied feats from
- *      `featsFromProfile({races, wins})`, both computed here from this server's
- *      own numbers; shop avatars come from `buy`, where this server holds the
- *      balance; and the three feats that need race evidence cannot be granted
- *      here at all, because `award` is not told about them. So a forger can
- *      inflate a balance by lying and still cannot conjure a portrait: the
- *      unlock graph is a pure function of counters the server owns.
+ *   4. IT DERIVES EVERY UNLOCK AND ACCEPTS NONE -- NO LONGER QUITE TRUE; see
+ *      below for exactly where the line moved. A client cannot post "and I
+ *      unlocked Old Guard". Rank avatars come from `ranksEarned(earned)` and
+ *      the two counter-implied feats from `featsFromProfile({races, wins})`,
+ *      both computed here from this server's own numbers; shop avatars come
+ *      from `buy`, where this server holds the balance.
  *
  * WHAT IS LEFT OVER IS THE BALANCE ITSELF, AND IT IS NOT VERIFIED. The board is
  * labelled UNVERIFIED where players can see it; the same sentence belongs on
  * the profile screen, and asking for it is in the report. The honest fix is the
  * same one the leaderboard is waiting for -- re-simulating a submitted input
  * trace -- and `award`'s signature in types.ts is already shaped for it.
+ *
+ * ===========================================================================
+ * ACHIEVEMENTS, AND THE TRUST CHANGE THEY BRING
+ *
+ * `achieve` posts a device's whole achievement snapshot (content/achievements
+ * .ts): the ids it claims to have earned and its lifetime counters. This
+ * server can check the SHAPE of that and nothing about its truth -- it has
+ * never seen a race. So, candidly, in the order the defences bite:
+ *
+ *   1. IDS ARE VALIDATED against the catalogue. An id this build does not
+ *      know is dropped and counted (`achRejected`).
+ *   2. ONLY EVIDENCE IS ACCEPTED AS A CLAIM. A clean lap, a win on Expert, a
+ *      x16 combo: one race proved it and only the client saw the race. Tier,
+ *      profile and set-of-others achievements (Knockouts silver, Tycoon, World
+ *      Tour) are NOT taken from the post -- they are re-derived here from this
+ *      record's own counters and profile, every read.
+ *   3. COUNTERS ARE BOUNDED PER POST. Each may rise by at most its per-race
+ *      ceiling (`COUNTER_CEILING`, measured) times the number of races that
+ *      could physically have been driven since the last accepted post -- one
+ *      per AWARD_MIN_GAP_MS of wall clock, at most AWARD_PER_HOUR of them. New
+ *      evidence claims are bounded the same way (ACH_EVIDENCE_PER_RACE per
+ *      race). The excess is not refused, it is DEFERRED: the device posts its
+ *      whole snapshot every time, so what one post could not carry the next
+ *      one will, once the clock has moved. Clamps are counted (`achClamped`).
+ *   4. THE RATE IS LIMITED like `award`'s -- ACH_MIN_GAP_MS apart, at most
+ *      ACH_PER_HOUR an hour, refusals counted -- on a ledger of its own, so an
+ *      achievement sync can never cost the race its credits.
+ *   5. MERGES CANNOT GO DOWN. Union and max: a post can add, never remove.
+ *
+ * AND THE LINE THAT MOVED. Four feat portraits now hang off synced state --
+ * Singularity Hand off Combo King, Half Million off High Roller, Grand
+ * Champion off Grand Champion, Iron Run off `mark:ironrun` -- and `toProfile`
+ * derives them from what this record holds (`featsFromUnlocks`). Those
+ * achievements are EVIDENCE, so those four portraits are now CLIENT-CLAIMED,
+ * exactly as the balance is: a forger who lies can own them. That is the
+ * price of granting them at all -- before this, nobody could own them, because
+ * `award` was never told a combo, a score or a standing -- and it is bounded
+ * the way everything else here is: per post, per hour, and on the record.
+ * Flag Bearer is unchanged (a win is still a counter this server owns), and
+ * the rank ladder and the shop still derive nothing from a client's word.
+ *
+ * The honest fix is the same one again: replaying a submitted input trace
+ * would let this server SEE the combo, and `achieve` would then carry the
+ * trace instead of the claim.
  */
 import {
   AVATAR_BY_ID, DEFAULT_AVATAR_ID, STARTER_IDS, PRICES,
   artPending, featsFromProfile, ownsAvatar, priceOf, ranksEarned,
 } from '../content/avatars'
+import {
+  ACHIEVEMENTS, COUNTERS, COUNTER_CEILING, asSnapshot, featsFromUnlocks, isClaimable,
+  isKnownId, isMark, withDerived,
+  type AchievementSnapshot, type Counters,
+} from '../content/achievements'
 import { MAX_PER_RACE } from '../score/wallet'
 import {
   NAME_RULES,
-  type AccountService, type NameError, type PlayerProfile, type Result,
+  type AccountService, type AchievementSync, type NameError, type PlayerProfile, type Result,
 } from './types'
 
 /** Where the function is mounted. Imported by the client so there is one path. */
@@ -163,6 +208,32 @@ export const AWARD_WINDOW_MS = 3_600_000
 /** How many recent awards an account carries. Two hours of the cap above, so
  *  the window question can always be answered from the record itself. */
 export const AWARD_LOG = 24
+
+/**
+ * Achievement syncs: the same gap and the same hourly cap as awards, on a
+ * ledger of their own.
+ *
+ * THE SAME NUMBERS, because the honest client posts one after every race --
+ * finished or quit -- and races are what AWARD_MIN_GAP_MS is already measured
+ * against. A LEDGER OF THEIR OWN, because a finished race posts BOTH, a second
+ * apart, and a shared ledger would refuse whichever came second: an
+ * achievement sync must never cost the race its credits, or the other way
+ * round. score/progress.ts mirrors the gap on the client so an honest device
+ * holds its post rather than earning a refusal on the record for it.
+ */
+export const ACH_MIN_GAP_MS = AWARD_MIN_GAP_MS
+export const ACH_PER_HOUR = AWARD_PER_HOUR
+
+/**
+ * The most NEW evidence achievements one race can prove.
+ *
+ * Counted, not guessed: eight track badges, one Front Runner, Untouchable,
+ * Comeback, Photo Finish, Iron Will, Clean Sweep, Combo King, High Roller,
+ * Grand Champion, and the two marks -- nineteen, and one race cannot actually
+ * reach all of them (Untouchable and Iron Will exclude each other). Twenty is
+ * the bound per race of allowance.
+ */
+export const ACH_EVIDENCE_PER_RACE = 20
 
 /**
  * Tries a read-modify-write gets before giving up.
@@ -271,6 +342,22 @@ export interface AccountRecord {
   /** Posts clamped by MAX_PER_RACE, and posts refused for pace. Forensics. */
   clamped: number
   refused: number
+  /**
+   * CLAIMED achievement ids and marks -- evidence only, validated. Tier,
+   * profile and set-of-others achievements are never stored here; they are
+   * derived on every read (`achievementsOf`). See the header.
+   */
+  ach: string[]
+  /** Lifetime achievement counters, each bounded per post. */
+  achCounters: Counters
+  /** The last accepted sync: the clock the per-post allowance is measured on. */
+  achAt: number
+  /** Recent accepted syncs, newest first, for the pace limiter. */
+  achSyncs: number[]
+  /** Syncs clamped by a bound, refused for pace, and ids dropped as unknown. */
+  achClamped: number
+  achRefused: number
+  achRejected: number
 }
 
 /** What the name index holds. The `at` is for the same future sweep. */
@@ -402,6 +489,45 @@ export function asRecord(raw: unknown): AccountRecord | null {
     awards: awards.sort((a, b) => b.at - a.at).slice(0, AWARD_LOG),
     clamped: Math.max(0, Math.floor(num(r.clamped, 0))),
     refused: Math.max(0, Math.floor(num(r.refused, 0))),
+    /**
+     * THE ACHIEVEMENT FIELDS ARE ADDITIVE, AND THAT IS WHY `v` DID NOT MOVE.
+     *
+     * RECORD_VERSION is "bumped when the SHAPE changes", and a bump makes this
+     * function return null for every record written before it -- which
+     * `handleAccount` reports as `nosuch`, and which the client answers by
+     * minting a NEW account. Bumping here would have deleted every player's
+     * credits, unlocks and claimed name to add a field. These are read with
+     * the default a brand new account has (nothing earned, never synced), so a
+     * record from before this pass is exactly an account that has not synced
+     * yet, which is what it is.
+     *
+     * Untrusted like the rest: claims go through the catalogue's sanitiser,
+     * and a stored id that is no longer claimable (a badge re-classified as
+     * derived) is dropped here rather than being trusted forever.
+     */
+    ...readAchievementFields(r),
+  }
+}
+
+/** The achievement half of `asRecord`. See the note at its call site. */
+function readAchievementFields(r: Record<string, unknown>): Pick<AccountRecord,
+  'ach' | 'achCounters' | 'achAt' | 'achSyncs' | 'achClamped' | 'achRejected' | 'achRefused'> {
+  const { snap } = asSnapshot({ unlocked: r.ach, counters: r.achCounters })
+  const syncs: number[] = []
+  if (Array.isArray(r.achSyncs)) {
+    for (const t of r.achSyncs) {
+      const at = num(t, 0)
+      if (at > 0) syncs.push(at)
+    }
+  }
+  return {
+    ach: snap.unlocked.filter(isClaimable),
+    achCounters: snap.counters,
+    achAt: Math.max(0, num(r.achAt, 0)),
+    achSyncs: syncs.sort((a, b) => b - a).slice(0, AWARD_LOG),
+    achClamped: Math.max(0, Math.floor(num(r.achClamped, 0))),
+    achRejected: Math.max(0, Math.floor(num(r.achRejected, 0))),
+    achRefused: Math.max(0, Math.floor(num(r.achRefused, 0))),
   }
 }
 
@@ -427,6 +553,13 @@ export function toProfile(rec: AccountRecord): PlayerProfile {
   for (const id of rec.owned) unlocked.add(id)
   for (const id of ranksEarned(rec.earned)) unlocked.add(id)
   for (const id of featsFromProfile({ races: rec.races, wins: rec.wins })) unlocked.add(id)
+  // THE FEATS THE ACHIEVEMENTS GRANT, derived here on the same terms as the
+  // ranks: from what this record holds, on every read, never stored. The
+  // counters are folded in so Race Wins bronze (Flag Bearer) follows the
+  // achievement counter as well as `wins`. See the header for what this does
+  // to the trust model -- these are the four portraits that are now claimed.
+  const ach = withDerived({ unlocked: rec.ach, counters: rec.achCounters })
+  for (const id of featsFromUnlocks(ach.unlocked)) unlocked.add(id)
   return {
     id: rec.id,
     name: rec.name,
@@ -437,6 +570,90 @@ export function toProfile(rec: AccountRecord): PlayerProfile {
     races: rec.races,
     wins: rec.wins,
   }
+}
+
+/**
+ * The account's whole achievement wall: what it claimed, what its counters
+ * imply, and what its profile implies (Tycoon from `earned`, Collector from
+ * portraits owned, and `wins`/`races` as floors under the race counters).
+ *
+ * Derived on every read, never stored, for the reason `toProfile` derives
+ * ranks: a derived unlock is a fact about numbers this record already holds,
+ * and storing it would be a second copy that a lost write could disagree with.
+ */
+export function achievementsOf(rec: AccountRecord): AchievementSnapshot {
+  const p = toProfile(rec)
+  return withDerived(
+    { unlocked: [...rec.ach], counters: { ...rec.achCounters } },
+    { unlocked: p.unlocked, earned: p.earned, credits: p.credits, races: p.races, wins: p.wins },
+  )
+}
+
+/**
+ * Races that could physically have been driven since the last accepted sync:
+ * one per AWARD_MIN_GAP_MS of wall clock, at least one and at most
+ * AWARD_PER_HOUR.
+ *
+ * Measured from `achAt`, or from account creation for a first sync. The same
+ * floor `award` uses, and for the same reason: no honest race is shorter than
+ * five of these gaps, so this overstates what an honest player can have done,
+ * and a lobby race of ten laps -- five times as long -- is still inside it.
+ *
+ * A clock that went backwards (a future `achAt`) is one race, not zero and not
+ * an infinity: see `pacedOut` for the same trade on the award ledger.
+ */
+export function achAllowance(rec: AccountRecord, now: number): number {
+  const since = now - (rec.achAt > 0 ? rec.achAt : rec.createdAt)
+  const n = Math.floor(since / AWARD_MIN_GAP_MS)
+  return Math.max(1, Math.min(AWARD_PER_HOUR, Number.isFinite(n) ? n : 1))
+}
+
+/**
+ * Fold one post into a record's achievements, BOUNDED. Pure: the handler
+ * below commits what this returns.
+ *
+ * Counters: union-by-max, but a counter may rise by at most its per-race
+ * ceiling times the allowance. Claims: only claimable ids (evidence and
+ * marks), at most ACH_EVIDENCE_PER_RACE new ones per race of allowance, taken
+ * in catalogue order so the same over-full post always keeps the same ones.
+ * Everything over a bound is left out of THIS post, flagged as a clamp, and
+ * accepted on a later one -- the device posts its whole snapshot every time.
+ */
+export function mergeAchievementPost(
+  rec: AccountRecord, posted: AchievementSnapshot, now: number,
+): { ach: string[]; counters: Counters; clamped: boolean; ignored: number } {
+  const allowance = achAllowance(rec, now)
+  let clamped = false
+  const counters: Counters = { ...rec.achCounters }
+  for (const k of COUNTERS) {
+    const prev = rec.achCounters[k] ?? 0
+    const want = posted.counters[k] ?? 0
+    if (want <= prev) continue
+    const cap = prev + COUNTER_CEILING[k] * allowance
+    counters[k] = Math.min(want, cap)
+    if (want > cap) clamped = true
+  }
+
+  const have = new Set(rec.ach)
+  const fresh = posted.unlocked.filter((id) => isClaimable(id) && !have.has(id))
+  // Derived and tier ids are legitimate and simply not ours to take: counted
+  // as ignored rather than rejected, because a well-behaved client sends them.
+  const ignored = posted.unlocked.filter((id) => !isClaimable(id)).length
+  // Catalogue order, marks last, so a clamp is deterministic.
+  const order = new Map<string, number>(ACHIEVEMENTS.map((a, i) => [a.id, i]))
+  fresh.sort((a, b) => (order.get(a) ?? (isMark(a) ? 1e6 : 2e6)) - (order.get(b) ?? (isMark(b) ? 1e6 : 2e6)))
+  const room = ACH_EVIDENCE_PER_RACE * allowance
+  if (fresh.length > room) clamped = true
+  const ach = [...rec.ach, ...fresh.slice(0, room)].filter(isKnownId)
+  return { ach, counters, clamped, ignored }
+}
+
+/** May this account sync achievements right now? `pacedOut` on its own ledger. */
+function achPacedOut(rec: AccountRecord, now: number): boolean {
+  const recent = rec.achSyncs.filter((t) => now - t < AWARD_WINDOW_MS)
+  const last = recent[0]
+  if (last !== undefined && last <= now && now - last < ACH_MIN_GAP_MS) return true
+  return recent.length >= ACH_PER_HOUR
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +668,8 @@ export type AccountRequest =
   | { op: 'avatar'; id: string; secret: string; avatarId: string }
   | { op: 'buy'; id: string; secret: string; avatarId: string }
   | { op: 'award'; id: string; secret: string; credits: number; won: boolean }
+  /** A device's whole achievement snapshot. Untrusted; see the header. */
+  | { op: 'achieve'; id: string; secret: string; progress: unknown }
 
 /**
  * Everything that can come back other than a profile.
@@ -491,6 +710,7 @@ export type AccountError =
 export type AccountResponse =
   | { ok: true; op: 'mint'; id: string; secret: string; profile: PlayerProfile }
   | { ok: true; op: 'load' | 'name' | 'avatar' | 'buy' | 'award'; profile: PlayerProfile }
+  | { ok: true; op: 'achieve'; profile: PlayerProfile; progress: AchievementSnapshot }
   | { ok: false; error: AccountError | 'rate-limited' | 'server' }
 
 const err = (e: AccountError): AccountResponse => ({ ok: false, error: e })
@@ -772,6 +992,13 @@ export async function handleAccount(
         awards: [],
         clamped: 0,
         refused: 0,
+        ach: [],
+        achCounters: {},
+        achAt: 0,
+        achSyncs: [],
+        achClamped: 0,
+        achRefused: 0,
+        achRejected: 0,
       }
       // `create`, not a plain write. An id collision at 80 bits is not going to
       // happen, but if it ever did, the loser of the race would silently
@@ -966,6 +1193,36 @@ export async function handleAccount(
       // when it was not, and the refusal is on the record either way.
       if (refused) return err('pace')
       return { ok: true, op: 'award', profile: toProfile(out) }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'achieve': {
+      // The sanitiser drops what this build does not know, item by item, and
+      // says how many; the rest of the post is still honoured. A body with no
+      // `progress` at all is an empty post, which is a pure read -- how a new
+      // device fetches the wall another one earned.
+      const { snap: posted, dropped } = asSnapshot(req.progress)
+      // Same shape as `award`'s: a refusal is COMMITTED (counted) and then
+      // reported, so the thing worth detecting is the thing on the record.
+      let refused = false
+      const out = await mutate(store, req.id, req.secret, hash, (rec) => {
+        refused = achPacedOut(rec, now)
+        if (refused) return { ...rec, achRefused: rec.achRefused + 1, seenAt: now }
+        const m = mergeAchievementPost(rec, posted, now)
+        return {
+          ...rec,
+          ach: m.ach,
+          achCounters: m.counters,
+          achAt: now,
+          achSyncs: [now, ...rec.achSyncs].slice(0, AWARD_LOG),
+          achClamped: rec.achClamped + (m.clamped ? 1 : 0),
+          achRejected: rec.achRejected + dropped,
+          seenAt: now,
+        }
+      })
+      if (typeof out === 'string') return err(out)
+      if (refused) return err('pace')
+      return { ok: true, op: 'achieve', profile: toProfile(out), progress: achievementsOf(out) }
     }
   }
 
@@ -1504,6 +1761,33 @@ export class LiveAccountService implements AccountService {
       credits: Math.max(0, Math.floor(Number.isFinite(credits) ? credits : 0)),
       won: finished.won === true,
     })
+  }
+
+  /**
+   * Post the device's whole achievement snapshot and take the merged one back.
+   *
+   * THE PROFILE THAT COMES BACK IS ADOPTED like every other answer, because a
+   * synced achievement can grant a feat portrait and the server is the one
+   * that says so. The PROGRESS is handed to the caller to merge rather than
+   * adopted: unlike a balance, progress merges (union and max), and the
+   * device's copy can legitimately be AHEAD of what one bounded post was
+   * allowed to carry. See score/progress.ts.
+   *
+   * Offline is a value, as everywhere else in this class, and costs nothing:
+   * the device keeps its snapshot and the next sync carries all of it.
+   */
+  async syncAchievements(progress: AchievementSnapshot): Promise<Result<AchievementSync>> {
+    if (!this.profile || !this.id || !this.secret) return { ok: false, error: 'offline' }
+    const res = await this.post({ op: 'achieve', id: this.id, secret: this.secret, progress })
+    if (res.ok && res.op === 'achieve') {
+      const profile = this.commit(res.profile, true)
+      return { ok: true, value: { profile, progress: asSnapshot(res.progress).snap } }
+    }
+    if (!res.ok && LiveAccountService.unreachable(res)) {
+      this.isOffline = true
+      return { ok: false, error: 'offline' }
+    }
+    return { ok: false, error: !res.ok ? res.error : 'server' }
   }
 
   /**

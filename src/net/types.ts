@@ -60,6 +60,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Difficulty } from '../content/difficulty'
+import type { AchievementSnapshot } from '../content/achievements'
 
 /**
  * A player, as the server knows them.
@@ -599,9 +600,34 @@ export interface AccountService {
    * succeeded.
    */
   award(credits: number, finished: { won: boolean }): Promise<Result<PlayerProfile>>
+  /**
+   * Merge this device's achievement progress into the account's, and get the
+   * merged whole back.
+   *
+   * THE WHOLE SNAPSHOT, NOT A DELTA, AND THAT IS WHAT MAKES FAILURE CHEAP.
+   * Unlocks merge by union and counters by max (content/achievements.ts), so
+   * posting everything every time is idempotent: a post that is refused for
+   * pace, clamped, or lost to a dead connection costs nothing, because the
+   * next one carries it all again. `award` is the opposite -- a delta that is
+   * dropped rather than queued -- and the two must not be confused.
+   *
+   * The profile comes back too, because a synced achievement can grant a feat
+   * portrait (Combo King -> Singularity Hand and the rest: see `FEAT_OF`), and
+   * the account DERIVES those from what it holds rather than being told.
+   *
+   * Posting an empty snapshot is a pure read, which is how a new device gets
+   * the wall another one earned.
+   */
+  syncAchievements(progress: AchievementSnapshot): Promise<Result<AchievementSync>>
   /** Fired whenever the profile changes from any cause. */
   onChange: (p: PlayerProfile) => void
   dispose(): void
+}
+
+/** What `syncAchievements` hands back: the account after the merge. */
+export interface AchievementSync {
+  profile: PlayerProfile
+  progress: AchievementSnapshot
 }
 
 /**

@@ -36,13 +36,16 @@
  * The per-ACCOUNT pace limiter is in `handleAccount` and is covered below; the
  * per-IP one is not, and the function's header says so in the same words.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
+  ACH_EVIDENCE_PER_RACE, ACH_MIN_GAP_MS, ACH_PER_HOUR,
   ALPHABET, AWARD_MIN_GAP_MS, AWARD_PER_HOUR, AWARD_WINDOW_MS,
   ID_CHARS, SECRET_CHARS,
-  handleAccount, nameKey, toProfile,
+  achAllowance, handleAccount, mergeAchievementPost, nameKey, toProfile,
   type AccountRecord, type AccountRequest, type AccountResponse, type AccountStore,
 } from '../src/net/account'
+import { COUNTER_CEILING, type AchievementSnapshot } from '../src/content/achievements'
+import { createMockAccountService, createMockWorld } from '../src/net/mock'
 import { LiveAccountService, type StorageLike } from '../src/net/account'
 import { AVATARS, DEFAULT_AVATAR_ID, PRICES, RANKS, STARTER_IDS, artPending } from '../src/content/avatars'
 import { MAX_PER_RACE, REF_SCORE, Wallet } from '../src/score/wallet'
@@ -1289,5 +1292,213 @@ describe('a payout, from the finish line to the balance the shop spends', () => 
     expect(await bankAward(svc, wallet, 0, false)).toBeNull()
     expect(await bankAward(svc, wallet, Number.NaN, false)).toBeNull()
     expect(record(h.store, me.id).awards).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Achievements -- `achieve`
+// ---------------------------------------------------------------------------
+
+describe('achievement sync', () => {
+  const post = (h: ReturnType<typeof harness>, id: string, secret: string, progress: unknown) =>
+    h.call({ op: 'achieve', id, secret, progress })
+
+  const progressOf = (res: AccountResponse): AchievementSnapshot => {
+    if (!res.ok || res.op !== 'achieve') throw new Error(`expected progress, got ${JSON.stringify(res)}`)
+    return res.progress
+  }
+
+  it('takes evidence and counters, and hands back the whole wall', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const res = await post(h, me.id, me.secret, {
+      unlocked: ['track-victory:rustfall', 'comeback', 'mark:win:solaire'],
+      counters: { knockouts: 22, wins: 1 },
+    })
+    const wall = progressOf(res)
+    expect(wall.unlocked).toEqual(expect.arrayContaining([
+      'track-victory:rustfall', 'comeback', 'mark:win:solaire',
+      // Derived here from the counters this server now holds -- not taken.
+      'knockouts:1', 'wins:1',
+    ]))
+    expect(wall.counters).toEqual({ knockouts: 22, wins: 1 })
+    expect(record(h.store, me.id).achSyncs).toEqual([h.now()])
+  })
+
+  it('bounds a counter by what the races since the last sync could have done', async () => {
+    const h = harness()
+    const me = await mint(h)
+    // The first post, straight after minting: one race of allowance.
+    expect(achAllowance(record(h.store, me.id), h.now())).toBe(1)
+    const res = await post(h, me.id, me.secret, { unlocked: [], counters: { singularity: 1000 } })
+    expect(progressOf(res).counters.singularity).toBe(COUNTER_CEILING.singularity)
+    expect(record(h.store, me.id).achClamped).toBe(1)
+    // DEFERRED, NOT REFUSED: five minutes later is ten races' worth more.
+    h.advance(10 * ACH_MIN_GAP_MS)
+    const later = await post(h, me.id, me.secret, { unlocked: [], counters: { singularity: 1000 } })
+    expect(progressOf(later).counters.singularity).toBe(COUNTER_CEILING.singularity * 11)
+    // And never more than an hour's worth, however long the gap.
+    h.advance(24 * 3_600_000)
+    expect(achAllowance(record(h.store, me.id), h.now())).toBe(ACH_PER_HOUR)
+  })
+
+  it('bounds new evidence per post the same way, and takes the rest later', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const lots = ['rustfall', 'cryostatic', 'aetherion', 'hollowchoir', 'emberfall', 'abyssal', 'halcyon', 'neonspire']
+      .flatMap((t) => [`track-victory:${t}`, `track-cleanlap:${t}`, `track-wrecking:${t}`])
+    expect(lots.length).toBeGreaterThan(ACH_EVIDENCE_PER_RACE)
+    const res = await post(h, me.id, me.secret, { unlocked: lots, counters: {} })
+    expect(progressOf(res).unlocked.filter((id) => id.startsWith('track-'))).toHaveLength(ACH_EVIDENCE_PER_RACE)
+    expect(record(h.store, me.id).achClamped).toBe(1)
+    h.advance(ACH_MIN_GAP_MS)
+    const next = await post(h, me.id, me.secret, { unlocked: lots, counters: {} })
+    expect(progressOf(next).unlocked.filter((id) => id.startsWith('track-'))).toHaveLength(lots.length)
+  })
+
+  it('merges by union and max: a post can add and never take away', async () => {
+    const h = harness()
+    const me = await mint(h)
+    await post(h, me.id, me.secret, { unlocked: ['comeback'], counters: { hits: 40 } })
+    h.advance(ACH_MIN_GAP_MS)
+    const res = await post(h, me.id, me.secret, { unlocked: ['iron-will'], counters: { hits: 3 } })
+    const wall = progressOf(res)
+    expect(wall.unlocked).toEqual(expect.arrayContaining(['comeback', 'iron-will']))
+    expect(wall.counters.hits).toBe(40)
+    // An empty post is a pure read -- how a new device fetches the wall.
+    h.advance(ACH_MIN_GAP_MS)
+    const read = progressOf(await post(h, me.id, me.secret, undefined))
+    expect(read.unlocked).toEqual(expect.arrayContaining(['comeback', 'iron-will']))
+  })
+
+  it('drops ids it does not know and counts them, and takes no tier or derived claim', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const res = await post(h, me.id, me.secret, {
+      unlocked: ['not-a-badge', 'track-victory:atlantis', 'knockouts:4', 'tycoon:4', 'world-tour', 'comeback'],
+      counters: { knockouts: 5, bogus: 99 },
+    })
+    const wall = progressOf(res)
+    expect(wall.unlocked).toContain('comeback')
+    for (const id of ['knockouts:4', 'tycoon:4', 'world-tour', 'not-a-badge']) {
+      expect(wall.unlocked, id).not.toContain(id)
+    }
+    const rec = record(h.store, me.id)
+    expect(rec.achRejected).toBe(2)
+    expect(rec.ach).toEqual(['comeback'])
+  })
+
+  it('paces like award, on a ledger of its own, and counts the refusals', async () => {
+    const h = harness()
+    const me = await mint(h)
+    expect((await post(h, me.id, me.secret, { unlocked: [], counters: {} })).ok).toBe(true)
+    expect(errorOf(await post(h, me.id, me.secret, { unlocked: [], counters: {} }))).toBe('pace')
+    expect(record(h.store, me.id).achRefused).toBe(1)
+    // A finished race posts both, a second apart: neither ledger may catch
+    // the other's post.
+    expect((await h.call({ op: 'award', id: me.id, secret: me.secret, credits: 50, won: false })).ok).toBe(true)
+    h.advance(ACH_MIN_GAP_MS)
+    expect((await post(h, me.id, me.secret, { unlocked: [], counters: {} })).ok).toBe(true)
+  })
+
+  it('refuses a wrong secret like every other authenticated op', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const other = await mint(h)
+    expect(errorOf(await post(h, me.id, other.secret, { unlocked: ['comeback'], counters: {} }))).toBe('badsecret')
+    expect(record(h.store, me.id).ach).toEqual([])
+  })
+
+  it('derives the four feat portraits from the synced achievements', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const res = await post(h, me.id, me.secret, {
+      unlocked: ['combo-king', 'high-roller', 'grand-champion', 'mark:ironrun'],
+      counters: {},
+    })
+    const p = profileOf(res)
+    for (const feat of ['singularity', 'halfmillion', 'laurel', 'ironrun']) {
+      expect(p.unlocked, feat).toContain(feat)
+    }
+    // The account's to wear from then on...
+    const worn = await h.call({ op: 'avatar', id: me.id, secret: me.secret, avatarId: 'laurel' })
+    expect(profileOf(worn).avatarId).toBe('laurel')
+    // ...re-derived from the record on every read, never stored as a flag.
+    const again = profileOf(await h.call({ op: 'load', id: me.id, secret: me.secret }))
+    expect(again.unlocked).toContain('singularity')
+    expect(record(h.store, me.id).owned).not.toContain('singularity')
+  })
+
+  it('still loads a record written before achievements existed', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const key = `acct/${me.id}`
+    const raw = JSON.parse(h.store.map.get(key)!) as Record<string, unknown>
+    for (const k of ['ach', 'achCounters', 'achAt', 'achSyncs', 'achClamped', 'achRefused', 'achRejected']) {
+      delete raw[k]
+    }
+    h.store.map.set(key, JSON.stringify(raw))
+    expect(profileOf(await h.call({ op: 'load', id: me.id, secret: me.secret })).id).toBe(me.id)
+    const res = await post(h, me.id, me.secret, { unlocked: ['comeback'], counters: {} })
+    expect(progressOf(res).unlocked).toContain('comeback')
+  })
+
+  it('merges purely: tier claims ignored, evidence kept, nothing clamped under the bound', async () => {
+    const h = harness()
+    const me = await mint(h)
+    const m = mergeAchievementPost(record(h.store, me.id),
+      { unlocked: ['comeback', 'knockouts:2'], counters: { wins: 1 } }, h.now())
+    expect(m.ach).toEqual(['comeback'])
+    expect(m.ignored).toBe(1)
+    expect(m.counters.wins).toBe(1)
+    expect(m.clamped).toBe(false)
+  })
+})
+
+describe('LiveAccountService.syncAchievements', () => {
+  it('posts the snapshot, adopts the profile and hands back the wall', async () => {
+    const h = harness()
+    const svc = new LiveAccountService({ fetchImpl: fakeFetch(h), storage: fakeStorage() })
+    await svc.load()
+    const res = await svc.syncAchievements({ unlocked: ['combo-king'], counters: { wins: 1 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.value.progress.unlocked).toEqual(expect.arrayContaining(['combo-king', 'wins:1']))
+    expect(res.value.profile.unlocked).toContain('singularity')
+  })
+
+  it('is offline, not an error, when there is no account or no server', async () => {
+    const h = harness()
+    const fail = { now: false }
+    const svc = new LiveAccountService({ fetchImpl: fakeFetch(h, fail), storage: fakeStorage() })
+    // Never loaded: nothing to post as.
+    expect(await svc.syncAchievements({ unlocked: [], counters: {} })).toEqual({ ok: false, error: 'offline' })
+    await svc.load()
+    fail.now = true
+    expect(await svc.syncAchievements({ unlocked: [], counters: {} })).toEqual({ ok: false, error: 'offline' })
+  })
+})
+
+describe('the mock account', () => {
+  it('merges achievements and grants the feats the real server would', async () => {
+    vi.useFakeTimers()
+    const world = createMockWorld({ seed: 4242, autoTick: false })
+    const acct = createMockAccountService({ world, failureRate: 0, latencyScale: 0, storage: null })
+    try {
+      const load = acct.load()
+      await vi.advanceTimersByTimeAsync(20)
+      await load
+      const pending = acct.syncAchievements({ unlocked: ['high-roller', 'mark:ironrun'], counters: { knockouts: 30 } })
+      await vi.advanceTimersByTimeAsync(20)
+      const res = await pending
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      expect(res.value.profile.unlocked).toEqual(expect.arrayContaining(['halfmillion', 'ironrun']))
+      expect(res.value.progress.unlocked).toEqual(expect.arrayContaining(['high-roller', 'knockouts:1']))
+    } finally {
+      acct.dispose()
+      world.dispose()
+      vi.useRealTimers()
+    }
   })
 })

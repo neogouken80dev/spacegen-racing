@@ -1,12 +1,19 @@
 /**
  * settings.ts — SpaceGen Racing settings + controls overlay.
  *
- * One full-screen modal, two tabs:
+ * One full-screen modal, three tabs:
  *   Settings  every option the player can change, applied the moment it is
  *             touched. No Apply button, no confirmation, no modal-inside-modal.
  *   Controls  a drawn diagram of whatever the player is actually holding —
  *             a keyboard, or a phone — plus a plain-language table of what
  *             every action does.
+ *   Badges    the achievement wall, mid-race. The SAME view the front end's
+ *             Achievements screen mounts (ui/achievements.ts), built a second
+ *             time rather than moved between hosts, in `panel` mode: no head
+ *             of its own and no scroller of its own, because this dialog has
+ *             both. Its detail card is the one exception to "no
+ *             modal-inside-modal", and it is a card over the wall, not a
+ *             second dialog -- Escape and B close it before they close this.
  *
  * Rules this module follows:
  * - The DOM is built once in the constructor. open()/close() only toggle a
@@ -35,10 +42,14 @@ import {
   STICK_GAIN_RANGE, STICK_THROW_RANGE, stickOvertravel, stickSteerFrom,
   type StickTune,
 } from '../game/touchControls'
+import { createAchievementsView, type AchievementsView } from './achievements'
+
+/** The dialog's pages. Exported so the host can open it on one by name. */
+export type SettingsTab = 'settings' | 'controls' | 'achievements'
 
 export interface SettingsPanel {
   root: HTMLElement
-  open(tab?: 'settings' | 'controls'): void
+  open(tab?: SettingsTab): void
   close(): void
   readonly isOpen: boolean
   /** Host wires these; all default to no-ops. */
@@ -94,7 +105,7 @@ export interface SettingsHost {
 // Types + constants
 // ---------------------------------------------------------------------------
 
-type TabId = 'settings' | 'controls'
+type TabId = SettingsTab
 type DiagramId = 'keyboard' | 'touch'
 type TouchScheme = 'tilt' | 'stick' | 'buttons'
 type Side = 'left' | 'right'
@@ -1222,6 +1233,8 @@ class SettingsPanelImpl implements SettingsPanel {
   private readonly phoneNote: HTMLElement
   private readonly actKeyCells = new Map<string, HTMLElement>()
   private readonly actTouchCells = new Map<string, HTMLElement>()
+  /** The Badges page. See the file header. */
+  private readonly achView: AchievementsView
 
   // --- transient ----------------------------------------------------------
   private camera: CameraSettings = { ...DEFAULT_CAMERA_SETTINGS }
@@ -1251,7 +1264,8 @@ class SettingsPanelImpl implements SettingsPanel {
     this.glareLevel = isFxLevel(this.stored.glare) ? this.stored.glare : null
     this.calloutLevel = isCalloutLevel(this.stored.callouts) ? this.stored.callouts : null
     this.screenLevel = isFxLevel(this.stored.screenFx) ? this.stored.screenFx : null
-    this.tab = this.stored.tab === 'controls' ? 'controls' : 'settings'
+    this.tab = this.stored.tab === 'controls' || this.stored.tab === 'achievements'
+      ? this.stored.tab : 'settings'
     this.diagramMode =
       this.stored.diagram === 'keyboard' || this.stored.diagram === 'touch'
         ? this.stored.diagram
@@ -1313,6 +1327,10 @@ class SettingsPanelImpl implements SettingsPanel {
     }
     mkTab('settings', 'Settings')
     mkTab('controls', 'Controls')
+    // "Badges", not "Achievements": three tabs share one pill in the head and
+    // the long word pushed the pill past a 390px phone. It is the wall's own
+    // word -- the results strip says NEW BADGES and the toast BADGE EARNED.
+    mkTab('achievements', 'Badges')
 
     const closeBtn = btn('sgset__close', head, '✕')
     closeBtn.setAttribute('aria-label', 'Close options')
@@ -1334,6 +1352,15 @@ class SettingsPanelImpl implements SettingsPanel {
     ctlPanel.setAttribute('aria-labelledby', 'sgset-tab-controls')
     ctlPanel.tabIndex = -1
     this.panels.set('controls', ctlPanel)
+
+    const achPanel = el('div', 'sgset__panel', body)
+    achPanel.id = 'sgset-panel-achievements'
+    achPanel.setAttribute('role', 'tabpanel')
+    achPanel.setAttribute('aria-labelledby', 'sgset-tab-achievements')
+    achPanel.tabIndex = -1
+    this.panels.set('achievements', achPanel)
+    this.achView = createAchievementsView({ mode: 'panel' })
+    achPanel.appendChild(this.achView.root)
 
     // =====================================================================
     // SETTINGS TAB
@@ -2141,6 +2168,10 @@ class SettingsPanelImpl implements SettingsPanel {
     this.panels.forEach((p, id) => {
       p.hidden = id !== this.tab
     })
+    // The prism ring turns; the game's own toggle has to be able to stop it
+    // (this dialog's `data-rm` rule already does, and the view carries the
+    // same flag so it is right in the front end's copy as well).
+    this.achView.setReducedMotion(this.reducedMotion)
 
     // --- scheme -----------------------------------------------------------
     this.touchSchemeRow.hidden = !touch
@@ -2385,6 +2416,10 @@ class SettingsPanelImpl implements SettingsPanel {
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
+      // A badge card open on the Badges page is one step deeper than the
+      // dialog: close it and stay. (Its own handler catches Escape while focus
+      // is inside it; this is for when focus has been left somewhere else.)
+      if (this.achView.closeDetail()) return
       this.close()
       return
     }
@@ -2409,7 +2444,7 @@ class SettingsPanelImpl implements SettingsPanel {
 
   private onTabKey = (ev: Event): void => {
     const e = ev as KeyboardEvent
-    const order: TabId[] = ['settings', 'controls']
+    const order: TabId[] = ['settings', 'controls', 'achievements']
     let d = 0
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') d = 1
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') d = -1
@@ -2444,6 +2479,10 @@ class SettingsPanelImpl implements SettingsPanel {
     if (this.tab === id) return
     this.tab = id
     this.endCapture()
+    this.achView.closeDetail()
+    // Repainted on the way in, the rule every screen of the wall keeps: a
+    // race banked since the dialog was built is a race the wall has to show.
+    if (id === 'achievements') this.achView.refresh()
     this.persist()
     this.sync()
   }
@@ -2472,6 +2511,9 @@ class SettingsPanelImpl implements SettingsPanel {
     this.openFlag = true
     this.root.hidden = false
     this.root.classList.add('is-open')
+    // Mid-race the wall has moved since the last look -- a clean lap, a tier
+    // crossed -- so it is re-read on every open, not only on a tab change.
+    this.achView.refresh()
     this.sync()
     // Focus the dialog itself: the label is announced, Tab walks into the
     // content, and no control wears a ring it did not earn.
@@ -2483,6 +2525,7 @@ class SettingsPanelImpl implements SettingsPanel {
     if (!this.openFlag) return
     this.openFlag = false
     this.endCapture()
+    this.achView.closeDetail()
     this.root.classList.remove('is-open')
     this.root.hidden = true
     this.padStop()
@@ -2611,7 +2654,9 @@ class SettingsPanelImpl implements SettingsPanel {
     }
 
     if ((rising & PAD_A) !== 0) this.padActivate()
-    else if ((rising & PAD_B) !== 0) this.close()
+    // B is Escape, including its first step: an open badge card closes
+    // before the dialog does.
+    else if ((rising & PAD_B) !== 0) { if (!this.achView.closeDetail()) this.close() }
   }
 
   /**
@@ -2639,6 +2684,12 @@ class SettingsPanelImpl implements SettingsPanel {
    * horizontal, and it matches what the same presses do on a keyboard.
    */
   private padNudge(dir: number): void {
+    // A badge card open over the Badges page: up and down scroll its ladder,
+    // as the arrow keys do. Tab there only ever lands back on Close.
+    if ((dir === PAD_U || dir === PAD_D) && this.achView.detailOpen) {
+      this.achView.scrollDetail(dir === PAD_U ? -1 : 1)
+      return
+    }
     if (dir === PAD_U) this.padKey('Tab', true)
     else if (dir === PAD_D) this.padKey('Tab', false)
     else if (dir === PAD_L) this.padKey('ArrowLeft')
@@ -2651,6 +2702,7 @@ class SettingsPanelImpl implements SettingsPanel {
     this.endCapture()
     this.padStop()
     this.tryPad.dispose()
+    this.achView.dispose()
     this.offFsChange?.()
     this.offFsChange = null
     this.dialog.removeEventListener('keydown', this.onKeyDown)

@@ -207,6 +207,19 @@ export function accountService(): AccountService {
   return account
 }
 
+/**
+ * The account service IF something has already created it, else null.
+ *
+ * For a caller that should talk to the player's account when there is one and
+ * must never be the reason there is one: the achievement sync after a race
+ * (game/achievementRun.ts). `accountService()` would start the mock world's
+ * clock for a player who only ever pressed PLAY -- the exact cost the note
+ * above exists to refuse.
+ */
+export function existingAccountService(): AccountService | null {
+  return account
+}
+
 export function lobbyService(): LobbyService {
   if (!lobby) {
     const profile = netProfile()

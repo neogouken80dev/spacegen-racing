@@ -100,12 +100,17 @@
    -------------------------------------------------------------------------- */
 
 .sgset__head {
+  /* As properties, so the close button's corner (below) can be placed by the
+     same numbers the padding is. */
+  --hp-y: clamp(8px, 1.4vmin, 16px);
+  --hp-x: clamp(10px, 1.8vmin, 22px);
+  --hgap: clamp(8px, 1.4vmin, 18px);
   flex: none;
   display: flex;
   align-items: center;
-  gap: clamp(8px, 1.4vmin, 18px);
+  gap: var(--hgap);
   flex-wrap: wrap;
-  padding: clamp(8px, 1.4vmin, 16px) clamp(10px, 1.8vmin, 22px);
+  padding: var(--hp-y) var(--hp-x);
   border-bottom: 2px solid var(--sg-line);
   background: rgba(9, 15, 30, 0.72);
 }
@@ -177,6 +182,50 @@
   color: var(--sg-ink);
   border-color: var(--sg-line-hot);
   background: rgba(28, 44, 76, 0.9);
+}
+
+/* THE CLOSE BUTTON KEEPS THE TOP-RIGHT CORNER, WHEREVER THE HEAD WRAPS.
+   With three tabs the one-line head needs about 800px at phone type sizes
+   and 860px at tablet ones, and past that the pill wraps -- which in the
+   flow took the close button with it, to a line of its own at the LEFT
+   (photographed at 820x1180; a 667-800px landscape phone does the same).
+   Taken out of the flow and pinned to the corner it no longer wraps with
+   anything: on one line the head reads exactly as before (the padding keeps
+   its place), and wrapped, the title and the button share the first line and
+   the pill has the second. Phones held upright do it their own way, below. */
+@media (min-width: 561px) {
+  .sgset__head {
+    position: relative;
+    padding-right: calc(var(--hp-x) + var(--sg-tap) + var(--hgap));
+  }
+  .sgset__close {
+    position: absolute;
+    /* Centred on a first line the 48px pill sets the height of. */
+    top: calc(var(--hp-y) + 2px);
+    right: var(--hp-x);
+  }
+}
+
+/* THREE TABS ON A PHONE HELD UPRIGHT. The head wraps, and with two tabs the
+   pill and the close button shared the second line. The third tab (Badges)
+   made the pill too wide for that, and the close button fell to a THIRD line
+   of its own -- 60px of a 844px screen spent on one button, photographed at
+   390x844. So on a narrow phone the close button moves up beside the title,
+   where the title's `margin-right: auto` already leaves it room, and the pill
+   takes the whole second line with its three tabs sharing it equally. */
+@media (max-width: 560px) {
+  .sgset__close {
+    order: 1;
+  }
+  .sgset__tabs {
+    order: 2;
+    flex: 1 1 100%;
+  }
+  .sgset__tab {
+    flex: 1 1 0;
+    padding-inline: 0.4em;
+    letter-spacing: 0.08em;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -1134,7 +1183,8 @@
     gap: 5px;
   }
   .sgset__head {
-    padding: 7px 12px;
+    --hp-y: 7px;
+    --hp-x: 12px;
   }
   .sgset__body {
     padding: 10px 12px;
