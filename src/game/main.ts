@@ -93,6 +93,7 @@ import {
 import { setRoomNotice } from '../ui/lobby'
 import { createPodiumStage, pilotName, type PodiumStage } from '../render/podium'
 import { ChaseCamera } from './camera'
+import { EventCarry } from './eventCarry'
 import { themeFor } from '../render/themes'
 import {
   ATTRACT_TRACK, attractPose, attractRacerCount, makeAttractPose, shotFor,
@@ -429,9 +430,9 @@ export class Game {
   /** True while the document is hidden, so the title race stops burning a phone. */
   private docHidden = false
   private accumulator = 0
-  /** Per-racer one-shot events accumulated across the sub-steps of one render
-   *  frame. See the carry block in loop(). */
-  private eventCarry: RacerEvent[][] = []
+  /** Per-racer one-shot events, delivered once per render frame whatever
+   *  the number of sim steps it ran. See src/game/eventCarry.ts. */
+  private readonly eventCarry = new EventCarry()
   /** Dense per-racer view of `r.events`, reused each frame. See the audio call. */
   private audioEvents: RacerEvent[][] = []
   private lastTime = 0
@@ -1197,7 +1198,7 @@ export class Game {
     this.setTrack(ATTRACT_TRACK)
     this.applyRenderScale()
     this.buildWorld()
-    this.eventCarry.length = 0
+    this.eventCarry.reset()
 
     const n = attractRacerCount(this.tier)
     // A varied grid rather than the player's garage selection: this is a shop
@@ -1635,7 +1636,7 @@ export class Game {
     this.applyRenderScale()
     this.buildWorld()
     // A rematch must not replay the last race's final-frame events.
-    this.eventCarry.length = 0
+    this.eventCarry.reset()
 
     const chassisIds: string[] = []
     const pilotIds: string[] = []
@@ -2656,33 +2657,19 @@ export class Game {
         // so without this the whole field would freeze the moment the last car
         // crossed, which is the bug this work exists to remove.
         if (this.race.state.finishOrder.length > 0) this.race.stepCeremony()
-        // Carry one-shot events across every sub-step of this render frame.
-        // race.step() clears r.events at the top of each step, so whenever more
-        // than one step runs per frame the renderer only ever saw the LAST
-        // one's events: measured delivery was fps/60, meaning at 30fps HALF of
-        // all drift releases produced no boost burst and no vertigo shot, and
-        // at 15fps three quarters of them. Nothing in the sim reads r.events --
-        // it is a pure output channel -- so the accumulated list is written
-        // straight back below for the render pass to consume as usual.
-        for (let i = 0; i < racers.length; i++) {
-          const ev = racers[i].events
-          if (ev.length === 0) continue
-          const carry = this.eventCarry[i] ?? (this.eventCarry[i] = [])
-          for (let e = 0; e < ev.length; e++) carry.push(ev[e])
-        }
+        // Bank this step's one-shot events: race.step() clears r.events at
+        // the top of each step, so with several steps per frame the renderer
+        // would only ever see the LAST one's (see eventCarry.ts).
+        this.eventCarry.collect(racers)
         this.accumulator -= DT
         steps++
       }
-      if (steps > 0) {
-        for (let i = 0; i < racers.length; i++) {
-          const carry = this.eventCarry[i]
-          if (!carry || carry.length === 0) continue
-          const ev = racers[i].events
-          ev.length = 0
-          for (let e = 0; e < carry.length; e++) ev.push(carry[e])
-          carry.length = 0
-        }
-      }
+      // Publish exactly this frame's events -- and none when no step ran. On a
+      // 120Hz or 144Hz display about half the frames run no step, and they
+      // used to leave the previous step's events in place for every consumer
+      // to read again: the scorer paid each award twice and a fast monitor
+      // scored (and earned) half as much again. See eventCarry.ts.
+      this.eventCarry.publish(racers, steps)
       if (steps === this.maxSubSteps) this.accumulator = 0
 
       // --- ceremony state machine -----------------------------------------
@@ -3026,10 +3013,10 @@ export class Game {
       /**
        * THE AUDIO FRAME.
        *
-       * Handed `this.eventCarry` -- the SAME array the VFX read, accumulated
-       * across every sub-step of this render frame. That is what stops audio
-       * from losing events at 30fps, and it comes free: the carry already
-       * existed because the art had the identical problem.
+       * Handed each racer's `events` -- the SAME lists the VFX read, holding
+       * everything this render frame's sub-steps produced and nothing when no
+       * step ran (src/game/eventCarry.ts). That is what stops audio from
+       * losing events at 30fps, or hearing one twice at 144Hz.
        *
        * The listener is the camera, not the car. During the finish ceremony the
        * camera has left the chase rig entirely and is orbiting, and a listener
@@ -3039,15 +3026,15 @@ export class Game {
       const cam = this.chase.camera
       _aFwd.set(0, 0, -1).applyQuaternion(cam.quaternion)
       _aUp.set(0, 1, 0).applyQuaternion(cam.quaternion)
-      // Read `r.events`, which is where the carry above was just written BACK
-      // to and is the same list the VFX pass reads a few lines further down.
-      // Handing over `this.eventCarry` instead was wrong twice over: it is
-      // drained to zero length by the write-back before this line runs, so
-      // audio heard nothing at all; and it is SPARSE, because its slots are
-      // only created for racers that have had an event, so a hole for racer 0
-      // reached the planner's `for (const ev of events[i])` as undefined and
-      // threw every frame. Rebuilt into a reused array rather than mapped, so
-      // this costs no allocation in the render loop.
+      // Read `r.events`, which is where the carry published this frame's
+      // events and is the same list the VFX pass reads a few lines further
+      // down. Handing over the carry's own bank instead was wrong twice over:
+      // it is drained by the publish before this line runs, so audio heard
+      // nothing at all; and it is SPARSE, because its slots are only created
+      // for racers that have had an event, so a hole for racer 0 reached the
+      // planner's `for (const ev of events[i])` as undefined and threw every
+      // frame. Rebuilt into a reused array rather than mapped, so this costs
+      // no allocation in the render loop.
       this.audioEvents.length = st.racers.length
       for (let i = 0; i < st.racers.length; i++) this.audioEvents[i] = st.racers[i].events
       this.audio.race(
